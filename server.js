@@ -10,7 +10,7 @@ const app = express();
 const PORT = 3001;
 
 // CORS
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3002';
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
 app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 
@@ -27,13 +27,22 @@ const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 // GET sedes
 app.get('/api/sedes', async (req, res) => {
   try {
+    console.log('📡 GET /api/sedes - Conectando a Supabase...');
     const { data, error } = await supabase
       .from('sedes')
       .select('*');
     
-    if (error) throw error;
+    console.log('📊 Respuesta Supabase:', { data, error });
+    
+    if (error) {
+      console.error('❌ Error Supabase:', error);
+      throw error;
+    }
+    
+    console.log('✅ Sedes cargadas:', data);
     res.json(data || []);
   } catch (err) {
+    console.error('❌ Error GET /api/sedes:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
