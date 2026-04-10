@@ -203,6 +203,76 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// ===== GENERADORES DE PARTIDOS =====
+
+function generarRoundRobin(equipos, torneoId, sedeId) {
+  const partidos = [];
+  for (let i = 0; i < equipos.length; i++) {
+    for (let j = i + 1; j < equipos.length; j++) {
+      partidos.push({
+        torneo_id: parseInt(torneoId),
+        equipo_a_id: equipos[i].id,
+        equipo_b_id: equipos[j].id,
+        sede_id: sedeId || null,
+        estado: 'pendiente',
+        ronda: 1,
+      });
+    }
+  }
+  return partidos;
+}
+
+function generarKnockout(equipos, torneoId, sedeId) {
+  // Random bracket seeding
+  const shuffled = [...equipos].sort(() => Math.random() - 0.5);
+  const partidos = [];
+  for (let i = 0; i + 1 < shuffled.length; i += 2) {
+    partidos.push({
+      torneo_id: parseInt(torneoId),
+      equipo_a_id: shuffled[i].id,
+      equipo_b_id: shuffled[i + 1].id,
+      sede_id: sedeId || null,
+      estado: 'pendiente',
+      ronda: 1,
+    });
+  }
+  // If odd number of teams, the last one gets a bye (no match generated for it)
+  return partidos;
+}
+
+function generarGruposKnockout(equipos, torneoId, sedeId) {
+  // Aim for ~4 teams per group, minimum 2 groups
+  const numGrupos = Math.max(2, Math.round(equipos.length / 4));
+  const grupos = Array.from({ length: numGrupos }, () => []);
+
+  // Snake-draft distribution across groups
+  equipos.forEach((eq, idx) => {
+    grupos[idx % numGrupos].push(eq);
+  });
+
+  const letras = 'ABCDEFGH';
+  const partidos = [];
+
+  grupos.forEach((grupo, gIdx) => {
+    const letra = letras[gIdx] || `G${gIdx + 1}`;
+    for (let i = 0; i < grupo.length; i++) {
+      for (let j = i + 1; j < grupo.length; j++) {
+        partidos.push({
+          torneo_id: parseInt(torneoId),
+          equipo_a_id: grupo[i].id,
+          equipo_b_id: grupo[j].id,
+          sede_id: sedeId || null,
+          estado: 'pendiente',
+          ronda: 1,
+          grupo: letra,
+        });
+      }
+    }
+  });
+
+  return partidos;
+}
+
 // ===== TORNEOS =====
 app.post('/api/torneos', async (req, res) => {
   try {
@@ -300,6 +370,63 @@ app.delete('/api/torneos/:id', async (req, res) => {
     if (error) throw error;
     res.json({ mensaje: 'Torneo eliminado' });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/torneos/:id/generar-partidos
+// Reads all equipos for the torneo, generates matches based on tipo_torneo,
+// saves them to partidos, and sets the torneo estado to 'en_curso'.
+// Requires 'ronda' (int, nullable) and 'grupo' (text, nullable) columns on partidos table.
+app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: torneo, error: errTorneo } = await supabase
+      .from('torneos')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (errTorneo) throw errTorneo;
+
+    const { data: equipos, error: errEquipos } = await supabase
+      .from('equipos')
+      .select('*')
+      .eq('torneo_id', parseInt(id))
+      .order('created_at', { ascending: true });
+    if (errEquipos) throw errEquipos;
+
+    if (!equipos || equipos.length < 2) {
+      return res.status(400).json({ error: 'Se necesitan al menos 2 equipos para generar partidos' });
+    }
+
+    let partidosData;
+    switch (torneo.tipo_torneo) {
+      case 'round_robin':
+        partidosData = generarRoundRobin(equipos, id, torneo.sede_id);
+        break;
+      case 'knockout':
+        partidosData = generarKnockout(equipos, id, torneo.sede_id);
+        break;
+      case 'grupos_knockout':
+        partidosData = generarGruposKnockout(equipos, id, torneo.sede_id);
+        break;
+      default:
+        partidosData = generarRoundRobin(equipos, id, torneo.sede_id);
+    }
+
+    const { data: partidos, error: errPartidos } = await supabase
+      .from('partidos')
+      .insert(partidosData)
+      .select();
+    if (errPartidos) throw errPartidos;
+
+    await supabase.from('torneos').update({ estado: 'en_curso' }).eq('id', id);
+
+    console.log(`✅ ${partidos.length} partidos generados para torneo ${id} (${torneo.tipo_torneo})`);
+    res.json({ partidos, total: partidos.length, formato: torneo.tipo_torneo });
+  } catch (err) {
+    console.error('❌ Error generar-partidos:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
