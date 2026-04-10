@@ -524,7 +524,7 @@ app.put('/api/jugadores/:id', async (req, res) => {
 app.post('/api/torneos/:torneo_id/jugadores', async (req, res) => {
   try {
     const { torneo_id } = req.params;
-    const { nombre, email, user_id, numero_camiseta, es_capitan } = req.body;
+    const { nombre, email, user_id, numero_camiseta, es_capitan, pais } = req.body;
 
     const { data, error } = await supabase
       .from('jugadores_torneo')
@@ -535,6 +535,7 @@ app.post('/api/torneos/:torneo_id/jugadores', async (req, res) => {
         user_id,
         numero_camiseta,
         es_capitan,
+        pais: pais || null,
       }])
       .select();
 
