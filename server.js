@@ -10,7 +10,7 @@ const app = express();
 const PORT = 3001;
 
 // CORS
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
+const corsOrigin = process.env.CORS_ORIGIN || 'https://padbol-match.netlify.app';
 app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 
