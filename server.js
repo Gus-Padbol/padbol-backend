@@ -431,6 +431,140 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
   }
 });
 
+// ===== FINALIZAR TORNEO =====
+// Required SQL migration:
+// create table tabla_puntos (
+//   id serial primary key,
+//   torneo_id int references torneos(id) on delete cascade,
+//   equipo_id int references equipos(id) on delete cascade,
+//   posicion int not null,
+//   puntos int not null,
+//   created_at timestamp default now(),
+//   unique(torneo_id, equipo_id)
+// );
+
+const BASE_PUNTOS = {
+  club_no_oficial:  10,
+  club_oficial:     30,
+  nacional:        100,
+  internacional:   300,
+  mundial:        1000,
+};
+
+// Index 0 = 1st place, 1 = 2nd, ... 9 = 10th
+const POSICION_MULT = [1.0, 0.6, 0.4, 0.25, 0.15, 0.10, 0.05, 0.05, 0.05, 0.05];
+
+function calcularClasificacion(equipos, partidos) {
+  const stats = {};
+  equipos.forEach(eq => {
+    stats[eq.id] = { jj: 0, g: 0, p: 0, pts: 0, sg: 0, sp: 0, gg: 0, gp: 0 };
+  });
+
+  partidos.forEach(partido => {
+    if (partido.estado !== 'finalizado' || !partido.resultado) return;
+    const res = typeof partido.resultado === 'string'
+      ? JSON.parse(partido.resultado)
+      : partido.resultado;
+    const sets = [res.set1, res.set2, res.set3].filter(Boolean);
+
+    let sgA = 0, sgB = 0, ggA = 0, ggB = 0;
+    sets.forEach(set => {
+      const [a, b] = set.split('-').map(Number);
+      ggA += a; ggB += b;
+      if (a > b) sgA++; else sgB++;
+    });
+
+    const eqA = stats[partido.equipo_a_id];
+    const eqB = stats[partido.equipo_b_id];
+    if (!eqA || !eqB) return;
+
+    eqA.jj++; eqB.jj++;
+    eqA.sg += sgA; eqA.sp += sgB; eqA.gg += ggA; eqA.gp += ggB;
+    eqB.sg += sgB; eqB.sp += sgA; eqB.gg += ggB; eqB.gp += ggA;
+
+    if (sgA > sgB) { eqA.g++; eqB.p++; eqA.pts += 3; }
+    else           { eqB.g++; eqA.p++; eqB.pts += 3; }
+  });
+
+  return equipos
+    .map(eq => ({ ...eq, ...stats[eq.id] }))
+    .sort((a, b) => {
+      if (b.pts !== a.pts) return b.pts - a.pts;
+      const dA = a.sg - a.sp, dB = b.sg - b.sp;
+      if (dB !== dA) return dB - dA;
+      return (b.gg - b.gp) - (a.gg - a.gp);
+    });
+}
+
+app.post('/api/torneos/:id/finalizar', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Load torneo
+    const { data: torneo, error: errTorneo } = await supabase
+      .from('torneos').select('*').eq('id', id).single();
+    if (errTorneo) throw errTorneo;
+
+    // Load equipos & partidos
+    const [{ data: equipos, error: errEq }, { data: partidos, error: errPart }] = await Promise.all([
+      supabase.from('equipos').select('*').eq('torneo_id', parseInt(id)),
+      supabase.from('partidos').select('*').eq('torneo_id', parseInt(id)),
+    ]);
+    if (errEq) throw errEq;
+    if (errPart) throw errPart;
+
+    // Validate all matches finished
+    const pendientes = (partidos || []).filter(p => p.estado !== 'finalizado');
+    if (pendientes.length > 0) {
+      return res.status(400).json({
+        error: `Hay ${pendientes.length} partido(s) sin finalizar. Completa todos los resultados antes de finalizar el torneo.`,
+      });
+    }
+
+    // Calculate final standings
+    const clasificacion = calcularClasificacion(equipos || [], partidos || []);
+
+    // Assign ranking points
+    const base = BASE_PUNTOS[torneo.nivel_torneo] ?? 10;
+    const puntosData = clasificacion.map((eq, idx) => ({
+      torneo_id: parseInt(id),
+      equipo_id: eq.id,
+      posicion: idx + 1,
+      puntos: Math.round(base * (POSICION_MULT[idx] ?? 0.05)),
+    }));
+
+    // Delete previous entries for this torneo (idempotent), then insert
+    await supabase.from('tabla_puntos').delete().eq('torneo_id', parseInt(id));
+    const { error: errPuntos } = await supabase.from('tabla_puntos').insert(puntosData);
+    if (errPuntos) throw errPuntos;
+
+    // Update equipos with their final puntos_ranking
+    await Promise.all(
+      puntosData.map(({ equipo_id, puntos }) =>
+        supabase.from('equipos').update({ puntos_ranking: puntos }).eq('id', equipo_id)
+      )
+    );
+
+    // Mark torneo as finalizado
+    const { data: torneoFinal, error: errFinal } = await supabase
+      .from('torneos')
+      .update({ estado: 'finalizado', updated_at: new Date() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (errFinal) throw errFinal;
+
+    console.log(`🏆 Torneo ${id} finalizado. ${puntosData.length} equipos clasificados.`);
+    res.json({
+      torneo: torneoFinal,
+      clasificacion: puntosData,
+    });
+  } catch (err) {
+    console.error('❌ Error finalizar torneo:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===== JUGADORES =====
 app.post('/api/jugadores', async (req, res) => {
   try {
