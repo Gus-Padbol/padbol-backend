@@ -843,14 +843,23 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
 
-    const { data, error } = await supabase
-      .from('equipos')
-      .select('*')
-      .eq('torneo_id', parseInt(torneo_id))
-      .order('puntos_totales', { ascending: false });
+    const [{ data: equipos, error: errE }, { data: grupoPartidos }] = await Promise.all([
+      supabase.from('equipos').select('*').eq('torneo_id', parseInt(torneo_id)).order('puntos_totales', { ascending: false }),
+      supabase.from('partidos').select('equipo_a_id, equipo_b_id, grupo').eq('torneo_id', parseInt(torneo_id)).not('grupo', 'is', null),
+    ]);
+    if (errE) throw errE;
 
-    if (error) throw error;
-    res.json(data || []);
+    // Derive equipo → grupo from partidos (grupo is stored on partidos, not equipos)
+    const grupoMap = {};
+    (grupoPartidos || []).forEach(p => {
+      if (p.grupo) {
+        if (p.equipo_a_id) grupoMap[p.equipo_a_id] = p.grupo;
+        if (p.equipo_b_id) grupoMap[p.equipo_b_id] = p.grupo;
+      }
+    });
+
+    const result = (equipos || []).map(eq => ({ ...eq, grupo: grupoMap[eq.id] || null }));
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
