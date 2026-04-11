@@ -438,10 +438,18 @@ app.get('/api/rankings', async (req, res) => {
 
   try {
     // 1. Load finalizado torneos filtered by scope
+    const SCOPE_NIVELES = {
+      local:         ['club', 'club_oficial', 'club_no_oficial'],
+      nacional:      ['nacional'],
+      internacional: ['internacional', 'mundial'],
+    };
+    const nivelesPermitidos = SCOPE_NIVELES[scope] || SCOPE_NIVELES.internacional;
+
     let torneosQuery = supabase
       .from('torneos')
       .select('id, sede_id, nivel_torneo, nombre')
-      .eq('estado', 'finalizado');
+      .eq('estado', 'finalizado')
+      .in('nivel_torneo', nivelesPermitidos);
 
     if (scope === 'local' && sede_id) {
       torneosQuery = torneosQuery.eq('sede_id', parseInt(sede_id));
