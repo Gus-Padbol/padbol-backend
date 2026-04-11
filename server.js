@@ -68,7 +68,7 @@ app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
 // POST reserva
 app.post('/api/reservas', async (req, res) => {
   try {
-    const { sede, fecha, hora, cancha, nombre, email, whatsapp, nivel, precio } = req.body;
+    const { sede, fecha, hora, cancha, nombre, email, whatsapp, nivel, precio, estado } = req.body;
 
     // Validar campos
     if (!sede || !fecha || !hora || !cancha || !nombre || !email || !whatsapp) {
@@ -104,7 +104,7 @@ app.post('/api/reservas', async (req, res) => {
         whatsapp,
         nivel: nivel || 'Principiante',
         precio: parseInt(precio),
-        estado: 'confirmada',
+        estado: estado || 'reservada',
       }])
       .select();
 
@@ -166,11 +166,22 @@ app.get('/api/ingresos', async (req, res) => {
 app.put('/api/reservas/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { estado } = req.body;
+    const { sede, fecha, hora, cancha, nombre, email, precio, duracion, estado } = req.body;
+
+    const updates = {};
+    if (sede     !== undefined) updates.sede     = sede;
+    if (fecha    !== undefined) updates.fecha    = fecha;
+    if (hora     !== undefined) updates.hora     = hora;
+    if (cancha   !== undefined) updates.cancha   = cancha !== null ? parseInt(cancha) : null;
+    if (nombre   !== undefined) updates.nombre   = nombre;
+    if (email    !== undefined) updates.email    = email;
+    if (precio   !== undefined) updates.precio   = precio !== null ? parseInt(precio) : null;
+    if (duracion !== undefined) updates.duracion = duracion !== null ? parseInt(duracion) : null;
+    if (estado   !== undefined) updates.estado   = estado;
 
     const { data, error } = await supabase
       .from('reservas')
-      .update({ estado })
+      .update(updates)
       .eq('id', id)
       .select();
 
