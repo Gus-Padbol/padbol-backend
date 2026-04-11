@@ -431,6 +431,109 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
   }
 });
 
+// ===== RANKINGS =====
+// GET /api/rankings?scope=local|nacional|internacional&sede_id=X&categoria=Y
+app.get('/api/rankings', async (req, res) => {
+  const { scope = 'internacional', sede_id, categoria } = req.query;
+
+  try {
+    // 1. Load finalizado torneos filtered by scope
+    let torneosQuery = supabase
+      .from('torneos')
+      .select('id, sede_id, nivel_torneo, nombre')
+      .eq('estado', 'finalizado');
+
+    if (scope === 'local' && sede_id) {
+      torneosQuery = torneosQuery.eq('sede_id', parseInt(sede_id));
+    }
+
+    const { data: torneos, error: errT } = await torneosQuery;
+    if (errT) throw errT;
+    if (!torneos?.length) return res.json([]);
+
+    const torneoIds = torneos.map(t => t.id);
+
+    // 2. Load tabla_puntos for those torneos
+    const { data: puntos, error: errP } = await supabase
+      .from('tabla_puntos')
+      .select('torneo_id, equipo_id, posicion, puntos')
+      .in('torneo_id', torneoIds);
+    if (errP) throw errP;
+    if (!puntos?.length) return res.json([]);
+
+    // 3. Load equipos
+    const equipoIds = [...new Set(puntos.map(p => p.equipo_id))];
+    const { data: equipos, error: errE } = await supabase
+      .from('equipos')
+      .select('id, nombre, jugadores')
+      .in('id', equipoIds);
+    if (errE) throw errE;
+
+    const equipoMap = {};
+    (equipos || []).forEach(e => { equipoMap[e.id] = e; });
+
+    // 4. Aggregate per player (keyed by email when available, else by name)
+    const playerMap = {};
+
+    puntos.forEach(p => {
+      const equipo = equipoMap[p.equipo_id];
+      if (!equipo) return;
+      const jugadores = Array.isArray(equipo.jugadores) ? equipo.jugadores : [];
+
+      if (jugadores.length === 0) {
+        // Fallback: team-level entry when no individual player data
+        const key = `equipo:${equipo.id}`;
+        if (!playerMap[key]) {
+          playerMap[key] = { nombre: equipo.nombre, email: null, pais: null, foto_url: null, nivel: null, sede_id: null, equipo_nombre: equipo.nombre, puntos_total: 0, torneos_count: 0 };
+        }
+        playerMap[key].puntos_total += p.puntos;
+        playerMap[key].torneos_count += 1;
+      } else {
+        jugadores.forEach(j => {
+          const key = j.email || j.nombre;
+          if (!key) return;
+          if (!playerMap[key]) {
+            playerMap[key] = { nombre: j.nombre || key, email: j.email || null, pais: null, foto_url: null, nivel: null, sede_id: null, equipo_nombre: equipo.nombre, puntos_total: 0, torneos_count: 0 };
+          }
+          playerMap[key].puntos_total += p.puntos;
+          playerMap[key].torneos_count += 1;
+        });
+      }
+    });
+
+    // 5. Enrich with jugadores_perfil where emails are known
+    const emails = Object.values(playerMap).map(p => p.email).filter(Boolean);
+    if (emails.length > 0) {
+      const { data: perfiles } = await supabase
+        .from('jugadores_perfil')
+        .select('email, nombre, pais, foto_url, sede_id, nivel')
+        .in('email', emails);
+
+      (perfiles || []).forEach(perfil => {
+        const entry = playerMap[perfil.email];
+        if (!entry) return;
+        entry.foto_url = perfil.foto_url || null;
+        entry.pais     = perfil.pais     || null;
+        entry.nivel    = perfil.nivel    || null;
+        entry.sede_id  = perfil.sede_id  || null;
+        entry.nombre   = perfil.nombre   || entry.nombre;
+      });
+    }
+
+    // 6. Filter by categoria
+    let result = Object.values(playerMap);
+    if (categoria) result = result.filter(p => p.nivel === categoria);
+
+    // 7. Sort by puntos_total desc, then torneos_count desc
+    result.sort((a, b) => b.puntos_total - a.puntos_total || b.torneos_count - a.torneos_count);
+
+    res.json(result);
+  } catch (err) {
+    console.error('❌ Error GET /api/rankings:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===== FINALIZAR TORNEO =====
 // Required SQL migration:
 // create table tabla_puntos (
