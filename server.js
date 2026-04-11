@@ -1130,6 +1130,56 @@ app.put('/api/games/:id', async (req, res) => {
   }
 });
 
+// ===== CONFIG PUNTOS =====
+// Required SQL migration:
+// create table config_puntos (
+//   id serial primary key,
+//   clave text unique not null,
+//   valor jsonb not null,
+//   updated_at timestamp default now()
+// );
+// insert into config_puntos (clave, valor) values
+//   ('niveles', '{"club_no_oficial":10,"club_oficial":30,"nacional":100,"internacional":300,"mundial":1000}'),
+//   ('posiciones', '{"1":100,"2":60,"3":40,"4":25,"5":15,"6":10,"7":5,"8":5,"9":5,"10":5}');
+
+const CONFIG_DEFAULTS = {
+  niveles:    { club_no_oficial: 10, club_oficial: 30, nacional: 100, internacional: 300, mundial: 1000 },
+  posiciones: { 1: 100, 2: 60, 3: 40, 4: 25, 5: 15, 6: 10, 7: 5, 8: 5, 9: 5, 10: 5 },
+};
+
+app.get('/api/config/puntos', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('config_puntos').select('clave, valor');
+    if (error) throw error;
+    if (!data?.length) return res.json(CONFIG_DEFAULTS);
+    const result = { ...CONFIG_DEFAULTS };
+    data.forEach(row => { result[row.clave] = row.valor; });
+    res.json(result);
+  } catch (err) {
+    console.error('❌ Error GET /api/config/puntos:', err.message);
+    res.json(CONFIG_DEFAULTS); // always return usable defaults
+  }
+});
+
+app.put('/api/config/puntos', async (req, res) => {
+  try {
+    const { niveles, posiciones } = req.body;
+    const rows = [];
+    if (niveles)    rows.push({ clave: 'niveles',    valor: niveles,    updated_at: new Date() });
+    if (posiciones) rows.push({ clave: 'posiciones', valor: posiciones, updated_at: new Date() });
+    if (!rows.length) return res.status(400).json({ error: 'No data provided' });
+
+    const { error } = await supabase
+      .from('config_puntos')
+      .upsert(rows, { onConflict: 'clave' });
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('❌ Error PUT /api/config/puntos:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Padbol Match API running on port ${PORT}`);
   console.log(`📊 Supabase: ${SUPABASE_URL}`);
