@@ -1162,8 +1162,9 @@ app.put('/api/games/:id', async (req, res) => {
 //   ('posiciones', '{"1":100,"2":60,"3":40,"4":25,"5":15,"6":10,"7":5,"8":5,"9":5,"10":5}');
 
 const CONFIG_DEFAULTS = {
-  niveles:    { club_no_oficial: 10, club_oficial: 30, nacional: 100, internacional: 300, mundial: 1000 },
-  posiciones: { 1: 100, 2: 60, 3: 40, 4: 25, 5: 15, 6: 10, 7: 5, 8: 5, 9: 5, 10: 5 },
+  niveles:      { club_no_oficial: 10, club_oficial: 30, nacional: 100, internacional: 300, mundial: 1000 },
+  posiciones:   { 1: 100, 2: 60, 3: 40, 4: 25, 5: 15, 6: 10, 7: 5, 8: 5, 9: 5, 10: 5 },
+  tipos_custom: [],
 };
 
 app.get('/api/config/puntos', async (req, res) => {
@@ -1182,10 +1183,11 @@ app.get('/api/config/puntos', async (req, res) => {
 
 app.put('/api/config/puntos', async (req, res) => {
   try {
-    const { niveles, posiciones } = req.body;
+    const { niveles, posiciones, tipos_custom } = req.body;
     const rows = [];
-    if (niveles)    rows.push({ clave: 'niveles',    valor: niveles,    updated_at: new Date() });
-    if (posiciones) rows.push({ clave: 'posiciones', valor: posiciones, updated_at: new Date() });
+    if (niveles)                    rows.push({ clave: 'niveles',      valor: niveles,      updated_at: new Date() });
+    if (posiciones)                 rows.push({ clave: 'posiciones',   valor: posiciones,   updated_at: new Date() });
+    if (tipos_custom !== undefined) rows.push({ clave: 'tipos_custom', valor: tipos_custom, updated_at: new Date() });
     if (!rows.length) return res.status(400).json({ error: 'No data provided' });
 
     const { error } = await supabase
