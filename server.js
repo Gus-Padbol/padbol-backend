@@ -1210,10 +1210,14 @@ app.put('/api/config/puntos', async (req, res) => {
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', async (req, res) => {
   try {
-    const { titulo, precio, moneda, reservaId, sedeNombre } = req.body;
+    const { titulo, precio, moneda, sedeNombre, reservaData } = req.body;
     if (!titulo || !precio) {
       return res.status(400).json({ error: 'Faltan campos requeridos: titulo, precio' });
     }
+
+    // Embed full reservation data as JSON in external_reference so
+    // PagoExitoso can create the reservation after payment is approved.
+    const externalReference = reservaData ? JSON.stringify(reservaData) : '';
 
     const preference = new Preference(mpClient);
     const response = await preference.create({
@@ -1230,7 +1234,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
           pending: 'https://padbol-match.netlify.app/pago-fallido',
         },
         auto_return: 'approved',
-        external_reference: String(reservaId || ''),
+        external_reference: externalReference,
         statement_descriptor: sedeNombre || 'Padbol Match',
       },
     });
