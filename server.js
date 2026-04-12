@@ -1272,16 +1272,29 @@ app.post('/api/test-whatsapp', async (req, res) => {
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', async (req, res) => {
   try {
-    const { titulo, precio, moneda, sedeNombre, reservaData } = req.body;
+    const { titulo, precio, moneda, sedeNombre, reservaData, sedeId } = req.body;
     if (!titulo || !precio) {
       return res.status(400).json({ error: 'Faltan campos requeridos: titulo, precio' });
+    }
+
+    // Use sede-specific MP token if configured, otherwise fall back to env var
+    let client = mpClient;
+    if (sedeId) {
+      const { data: sedeRow } = await supabase
+        .from('sedes')
+        .select('mp_access_token')
+        .eq('id', sedeId)
+        .maybeSingle();
+      if (sedeRow?.mp_access_token) {
+        client = new MercadoPagoConfig({ accessToken: sedeRow.mp_access_token });
+      }
     }
 
     // Embed full reservation data as JSON in external_reference so
     // PagoExitoso can create the reservation after payment is approved.
     const externalReference = reservaData ? JSON.stringify(reservaData) : '';
 
-    const preference = new Preference(mpClient);
+    const preference = new Preference(client);
     const response = await preference.create({
       body: {
         items: [{
