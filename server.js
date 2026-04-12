@@ -26,9 +26,32 @@ const mpClient = new MercadoPagoConfig({
 });
 
 // Twilio (desde .env)
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_ACCOUNT_SID   = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN    = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+
+// WhatsApp confirmation helper
+async function sendWhatsAppConfirmation(phone, { sede, fecha, hora, cancha }) {
+  // Normalise number → E.164 without leading +, then prepend whatsapp:+
+  const digits = String(phone).replace(/\D/g, '');
+  const e164   = digits.startsWith('+') ? digits : `+${digits}`;
+  const to     = `whatsapp:${e164}`;
+
+  const body =
+`✅ *Reserva confirmada en ${sede}*
+
+📅 Fecha: ${fecha}
+⏰ Hora: ${hora}
+🎾 Cancha: ${cancha}
+
+¡Te esperamos! Ante cualquier consulta escribinos por WhatsApp.
+
+_PADBOL Match_`;
+
+  await twilioClient.messages.create({ from: TWILIO_WHATSAPP_FROM, to, body });
+  console.log(`✓ WhatsApp enviado a ${to}`);
+}
 
 // GET sedes
 app.get('/api/sedes', async (req, res) => {
@@ -118,16 +141,9 @@ app.post('/api/reservas', async (req, res) => {
 
     console.log('✓ Reserva creada:', data);
 
-    // Enviar WhatsApp (sandbox)
-    try {
-      await twilioClient.messages.create({
-        from: 'whatsapp:+14155238886',
-        to: `whatsapp:+${whatsapp}`,
-        body: `✅ Reserva confirmada en ${sede}\nFecha: ${fecha}\nHora: ${hora}\nCancha: ${cancha}\nPrecio: $${precio}`,
-      });
-    } catch (twilio_err) {
-      console.log('⚠️ WhatsApp sandbox (no envía reales):', twilio_err.message);
-    }
+    // Enviar confirmación por WhatsApp (no bloquea la respuesta si falla)
+    sendWhatsAppConfirmation(whatsapp, { sede, fecha, hora, cancha })
+      .catch(err => console.warn('⚠️ WhatsApp no enviado:', err.message));
 
     res.json(data);
   } catch (err) {
