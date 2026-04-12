@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import twilio from 'twilio';
 import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
+import cron from 'node-cron';
 
 dotenv.config();
 
@@ -1307,6 +1308,74 @@ app.post('/api/crear-preferencia', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── Cron: WhatsApp reminder 1 hour before reservation ──────────────────────
+cron.schedule('*/5 * * * *', async () => {
+  try {
+    // Current time in Argentina (UTC-3)
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+
+    // Target: exactly 1 hour from now
+    const target = new Date(now.getTime() + 60 * 60 * 1000);
+    const targetFecha = target.toISOString().slice(0, 10); // YYYY-MM-DD
+    const targetHora  = target.toTimeString().slice(0, 5);  // HH:MM
+
+    const { data: reservas, error } = await supabase
+      .from('reservas')
+      .select('*')
+      .eq('fecha', targetFecha)
+      .eq('hora', targetHora)
+      .eq('estado', 'confirmada')
+      .eq('recordatorio_enviado', false);
+
+    if (error) {
+      console.error('❌ Cron recordatorio - error Supabase:', error.message);
+      return;
+    }
+
+    if (!reservas || reservas.length === 0) return;
+
+    console.log(`⏰ Cron: ${reservas.length} recordatorio(s) para ${targetFecha} ${targetHora}`);
+
+    for (const r of reservas) {
+      try {
+        // Fetch sede address
+        const { data: sedeRow } = await supabase
+          .from('sedes')
+          .select('direccion')
+          .eq('nombre', r.sede)
+          .maybeSingle();
+
+        const body =
+`🎾 *¡Te esperamos en ${r.sede}!*
+
+Tu reserva es en 1 hora:
+⏰ ${r.hora}hs${sedeRow?.direccion ? `\n📍 ${sedeRow.direccion}` : ''}
+
+Recordá llegar 10 minutos antes.
+💬 Ante cualquier consulta escribinos por WhatsApp.
+
+*PADBOL MATCH*`;
+
+        const digits = String(r.whatsapp).replace(/\D/g, '');
+        const to     = `whatsapp:+${digits}`;
+        await twilioClient.messages.create({ from: TWILIO_WHATSAPP_FROM, to, body });
+        console.log(`✓ Recordatorio enviado a ${to} (reserva ${r.id})`);
+
+        // Mark as sent
+        await supabase
+          .from('reservas')
+          .update({ recordatorio_enviado: true })
+          .eq('id', r.id);
+
+      } catch (err) {
+        console.warn(`⚠️ Recordatorio reserva ${r.id} fallido:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('❌ Cron recordatorio - error inesperado:', err.message);
+  }
+}, { timezone: 'America/Argentina/Buenos_Aires' });
 
 app.listen(PORT, () => {
   console.log(`🚀 Padbol Match API running on port ${PORT}`);
