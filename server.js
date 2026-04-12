@@ -3,6 +3,7 @@ import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
 import twilio from 'twilio';
 import dotenv from 'dotenv';
+import { MercadoPagoConfig, Preference } from 'mercadopago';
 
 dotenv.config();
 
@@ -18,6 +19,11 @@ app.use(express.json());
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Mercado Pago
+const mpClient = new MercadoPagoConfig({
+  accessToken: process.env.MP_ACCESS_TOKEN || 'APP_USR-814707102520557-041213-24bea05e0b39e2a21c06707657bf9b34-3330256271',
+});
 
 // Twilio (desde .env)
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -1197,6 +1203,42 @@ app.put('/api/config/puntos', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('❌ Error PUT /api/config/puntos:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/crear-preferencia — Mercado Pago Checkout Pro
+app.post('/api/crear-preferencia', async (req, res) => {
+  try {
+    const { titulo, precio, moneda, reservaId, sedeNombre } = req.body;
+    if (!titulo || !precio) {
+      return res.status(400).json({ error: 'Faltan campos requeridos: titulo, precio' });
+    }
+
+    const preference = new Preference(mpClient);
+    const response = await preference.create({
+      body: {
+        items: [{
+          title: titulo,
+          unit_price: Number(precio),
+          quantity: 1,
+          currency_id: moneda || 'ARS',
+        }],
+        back_urls: {
+          success: 'https://padbol-match.netlify.app/pago-exitoso',
+          failure: 'https://padbol-match.netlify.app/pago-fallido',
+          pending: 'https://padbol-match.netlify.app/pago-fallido',
+        },
+        auto_return: 'approved',
+        external_reference: String(reservaId || ''),
+        statement_descriptor: sedeNombre || 'Padbol Match',
+      },
+    });
+
+    console.log('✓ MP preferencia creada:', response.id);
+    res.json({ init_point: response.init_point, preference_id: response.id });
+  } catch (err) {
+    console.error('❌ Error POST /api/crear-preferencia:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
