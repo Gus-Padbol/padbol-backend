@@ -32,7 +32,7 @@ const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+1415
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
 // WhatsApp confirmation helper
-async function sendWhatsAppConfirmation(phone, { sede, fecha, hora, cancha }) {
+async function sendWhatsAppConfirmation(phone, { sede, fecha, hora, cancha, direccion }) {
   // Normalise number → E.164 without leading +, then prepend whatsapp:+
   const digits = String(phone).replace(/\D/g, '');
   const e164   = digits.startsWith('+') ? digits : `+${digits}`;
@@ -43,11 +43,12 @@ async function sendWhatsAppConfirmation(phone, { sede, fecha, hora, cancha }) {
 
 📅 Fecha: ${fecha}
 ⏰ Hora: ${hora}
-🎾 Cancha: ${cancha}
+🎾 Cancha: ${cancha}${direccion ? `\n📍 ${direccion}` : ''}
 
-¡Te esperamos! Ante cualquier consulta escribinos por WhatsApp.
+⏱ Te esperamos 10 minutos antes.
+💬 Ante cualquier consulta escribinos por WhatsApp.
 
-_PADBOL Match_`;
+*PADBOL MATCH*`;
 
   await twilioClient.messages.create({ from: TWILIO_WHATSAPP_FROM, to, body });
   console.log(`✓ WhatsApp enviado a ${to}`);
@@ -141,8 +142,15 @@ app.post('/api/reservas', async (req, res) => {
 
     console.log('✓ Reserva creada:', data);
 
+    // Fetch sede address for WhatsApp message (best-effort)
+    const { data: sedeRow } = await supabase
+      .from('sedes')
+      .select('direccion')
+      .eq('nombre', sede)
+      .maybeSingle();
+
     // Enviar confirmación por WhatsApp (no bloquea la respuesta si falla)
-    sendWhatsAppConfirmation(whatsapp, { sede, fecha, hora, cancha })
+    sendWhatsAppConfirmation(whatsapp, { sede, fecha, hora, cancha, direccion: sedeRow?.direccion })
       .catch(err => console.warn('⚠️ WhatsApp no enviado:', err.message));
 
     res.json(data);
@@ -1248,7 +1256,10 @@ app.post('/api/test-whatsapp', async (req, res) => {
 
     if (error) throw error;
 
-    await sendWhatsAppConfirmation(whatsapp, { sede, fecha, hora, cancha });
+    const { data: sedeRow } = await supabase
+      .from('sedes').select('direccion').eq('nombre', sede).maybeSingle();
+
+    await sendWhatsAppConfirmation(whatsapp, { sede, fecha, hora, cancha, direccion: sedeRow?.direccion });
 
     res.json({ success: true, reserva: Array.isArray(data) ? data[0] : data });
   } catch (err) {
