@@ -1223,6 +1223,40 @@ app.put('/api/config/puntos', async (req, res) => {
   }
 });
 
+// POST /api/test-whatsapp — Test Twilio integration (no payment required)
+app.post('/api/test-whatsapp', async (req, res) => {
+  try {
+    const { nombre, whatsapp, sede, fecha, hora, cancha } = req.body;
+    if (!nombre || !whatsapp || !sede || !fecha || !hora || !cancha) {
+      return res.status(400).json({ error: 'Faltan campos: nombre, whatsapp, sede, fecha, hora, cancha' });
+    }
+
+    const { data, error } = await supabase
+      .from('reservas')
+      .insert([{
+        sede, fecha, hora,
+        cancha: parseInt(cancha),
+        nombre,
+        email: 'test@padbol.com',
+        telefono: whatsapp,
+        whatsapp,
+        nivel: 'Test',
+        precio: 0,
+        estado: 'test',
+      }])
+      .select();
+
+    if (error) throw error;
+
+    await sendWhatsAppConfirmation(whatsapp, { sede, fecha, hora, cancha });
+
+    res.json({ success: true, reserva: Array.isArray(data) ? data[0] : data });
+  } catch (err) {
+    console.error('❌ Error POST /api/test-whatsapp:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', async (req, res) => {
   try {
