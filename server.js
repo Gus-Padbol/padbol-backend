@@ -1335,6 +1335,32 @@ Si necesitás ayuda, escribinos por WhatsApp.
   }
 });
 
+// GET /api/creditos/:email — active (unused, non-expired) credit balance
+app.get('/api/creditos/:email', async (req, res) => {
+  try {
+    const email = decodeURIComponent(req.params.email);
+    const now   = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('creditos')
+      .select('id, monto, sede_id, created_at, vence_at')
+      .eq('email', email)
+      .eq('usado', false)
+      .gt('vence_at', now)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    if (error) throw error;
+
+    const total = (data || []).reduce((sum, c) => sum + Number(c.monto), 0);
+    console.log(`✓ GET creditos ${email} — total: ${total} (${(data || []).length} registros)`);
+    res.json({ total, creditos: data || [] });
+  } catch (err) {
+    console.error('❌ Error GET /api/creditos:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', async (req, res) => {
   try {
