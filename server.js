@@ -22,9 +22,18 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Mercado Pago
+if (!process.env.MP_ACCESS_TOKEN) {
+  console.warn('⚠️  MP_ACCESS_TOKEN no está configurado — los pagos fallarán en producción');
+}
 const mpClient = new MercadoPagoConfig({
-  accessToken: process.env.MP_ACCESS_TOKEN || 'APP_USR-814707102520557-041213-24bea05e0b39e2a21c06707657bf9b34-3330256271',
+  accessToken: process.env.MP_ACCESS_TOKEN || '',
 });
+
+// Frontend URL for MP redirect callbacks
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://padbol-match.netlify.app';
+if (!process.env.FRONTEND_URL) {
+  console.warn(`⚠️  FRONTEND_URL no está configurado — usando fallback: ${FRONTEND_URL}`);
+}
 
 // Twilio (desde .env)
 const TWILIO_ACCOUNT_SID   = process.env.TWILIO_ACCOUNT_SID;
@@ -1361,9 +1370,9 @@ app.post('/api/crear-preferencia', async (req, res) => {
           currency_id: moneda || 'ARS',
         }],
         back_urls: {
-          success: 'https://padbol-match.netlify.app/pago-exitoso',
-          failure: 'https://padbol-match.netlify.app/pago-fallido',
-          pending: 'https://padbol-match.netlify.app/pago-fallido',
+          success: `${FRONTEND_URL}/pago-exitoso`,
+          failure: `${FRONTEND_URL}/pago-fallido`,
+          pending: `${FRONTEND_URL}/pago-fallido`,
         },
         auto_return: 'approved',
         external_reference: externalReference,
@@ -1371,7 +1380,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
       },
     });
 
-    console.log('✓ MP preferencia creada:', response.id);
+    console.log(`✓ MP preferencia creada: ${response.id} | success→ ${FRONTEND_URL}/pago-exitoso | sede: ${sedeNombre || '—'}`);
     res.json({ init_point: response.init_point, preference_id: response.id });
   } catch (err) {
     console.error('❌ Error POST /api/crear-preferencia:', err.message);
