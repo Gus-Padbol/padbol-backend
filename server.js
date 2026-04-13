@@ -47,6 +47,7 @@ async function sendWhatsAppConfirmation(phone, { sede, fecha, hora, cancha, dire
 🎾 Cancha: ${cancha}${direccion ? `\n📍 ${direccion}` : ''}
 
 ⏱ Te esperamos 10 minutos antes.
+❌ Podés cancelar hasta 24hs antes desde tu perfil en PADBOL MATCH.
 💬 Ante cualquier consulta escribinos por WhatsApp.
 
 *PADBOL MATCH*`;
@@ -1232,39 +1233,94 @@ app.put('/api/config/puntos', async (req, res) => {
   }
 });
 
-// POST /api/test-whatsapp — Test Twilio integration (no payment required)
-app.post('/api/test-whatsapp', async (req, res) => {
+// POST /api/cancelar-reserva — Cancellation with optional credit
+app.post('/api/cancelar-reserva', async (req, res) => {
   try {
-    const { nombre, whatsapp, sede, fecha, hora, cancha } = req.body;
-    if (!nombre || !whatsapp || !sede || !fecha || !hora || !cancha) {
-      return res.status(400).json({ error: 'Faltan campos: nombre, whatsapp, sede, fecha, hora, cancha' });
+    const { reservaId, email } = req.body;
+    if (!reservaId || !email) {
+      return res.status(400).json({ error: 'Faltan campos: reservaId, email' });
     }
 
-    const { data, error } = await supabase
+    // Fetch the reservation and verify ownership
+    const { data: reserva, error: fetchErr } = await supabase
       .from('reservas')
-      .insert([{
-        sede, fecha, hora,
-        cancha: parseInt(cancha),
-        nombre,
-        email: 'test@padbol.com',
-        telefono: whatsapp,
-        whatsapp,
-        nivel: 'Test',
-        precio: 0,
-        estado: 'test',
-      }])
-      .select();
+      .select('*')
+      .eq('id', reservaId)
+      .eq('email', email)
+      .maybeSingle();
 
-    if (error) throw error;
+    if (fetchErr) throw fetchErr;
+    if (!reserva) return res.status(404).json({ error: 'Reserva no encontrada o no pertenece a este usuario' });
+    if (reserva.estado === 'cancelada') return res.status(409).json({ error: 'La reserva ya está cancelada' });
 
-    const { data: sedeRow } = await supabase
-      .from('sedes').select('direccion').eq('nombre', sede).maybeSingle();
+    // Check if reservation is more than 24h away (Argentina UTC-3)
+    const reservaDt = new Date(`${reserva.fecha}T${reserva.hora}:00-03:00`);
+    const nowAR     = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+    const horasHasta = (reservaDt - nowAR) / (1000 * 60 * 60);
+    const eligibleForCredit = horasHasta > 24;
 
-    await sendWhatsAppConfirmation(whatsapp, { sede, fecha, hora, cancha, direccion: sedeRow?.direccion });
+    // Mark as cancelled
+    const { error: updateErr } = await supabase
+      .from('reservas')
+      .update({ estado: 'cancelada' })
+      .eq('id', reservaId);
+    if (updateErr) throw updateErr;
 
-    res.json({ success: true, reserva: Array.isArray(data) ? data[0] : data });
+    // Credit if eligible
+    let credito = null;
+    if (eligibleForCredit && reserva.precio > 0) {
+      // Look up sede_id by name
+      const { data: sedeRow } = await supabase
+        .from('sedes')
+        .select('id')
+        .eq('nombre', reserva.sede)
+        .maybeSingle();
+
+      const venceAt = new Date();
+      venceAt.setDate(venceAt.getDate() + 30);
+
+      const { data: creditData, error: creditErr } = await supabase
+        .from('creditos')
+        .insert([{
+          email,
+          monto: reserva.precio,
+          sede_id: sedeRow?.id || null,
+          vence_at: venceAt.toISOString(),
+          usado: false,
+        }])
+        .select()
+        .maybeSingle();
+
+      if (!creditErr) credito = creditData;
+    }
+
+    // WhatsApp notification (fire-and-forget)
+    if (reserva.whatsapp) {
+      const digits = String(reserva.whatsapp).replace(/\D/g, '');
+      const to     = `whatsapp:+${digits}`;
+      const creditLine = eligibleForCredit && reserva.precio > 0
+        ? `\n💳 Se acreditaron $${Number(reserva.precio).toLocaleString('es-AR')} en tu cuenta (válido 30 días).`
+        : '\n⏱ La cancelación fue realizada con menos de 24hs de anticipación — no genera crédito.';
+
+      const body =
+`❌ *Reserva cancelada*
+
+📅 ${reserva.fecha} ⏰ ${reserva.hora}
+🏟️ ${reserva.sede} — Cancha ${reserva.cancha}
+${creditLine}
+
+Si necesitás ayuda, escribinos por WhatsApp.
+
+*PADBOL MATCH*`;
+
+      twilioClient.messages.create({ from: TWILIO_WHATSAPP_FROM, to, body })
+        .catch(err => console.warn('⚠️ WhatsApp cancelación no enviado:', err.message));
+    }
+
+    console.log(`✓ Reserva ${reservaId} cancelada — crédito: ${credito ? credito.id : 'no'}`);;
+    res.json({ success: true, eligibleForCredit, credito });
   } catch (err) {
-    console.error('❌ Error POST /api/test-whatsapp:', err.message);
+    console.error('❌ Error POST /api/cancelar-reserva:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
