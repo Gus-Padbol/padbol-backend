@@ -1292,14 +1292,15 @@ app.post('/api/cancelar-reserva', async (req, res) => {
         .maybeSingle();
 
       if (!creditErr) credito = creditData;
+      else console.error('❌ Error al insertar crédito:', creditErr.message);
     }
 
     // WhatsApp notification (fire-and-forget)
     if (reserva.whatsapp) {
       const digits = String(reserva.whatsapp).replace(/\D/g, '');
       const to     = `whatsapp:+${digits}`;
-      const creditLine = eligibleForCredit && reserva.precio > 0
-        ? `\n💳 Se acreditaron $${Number(reserva.precio).toLocaleString('es-AR')} en tu cuenta (válido 30 días).`
+      const creditLine = credito !== null
+        ? `\n💳 Se acreditaron $${Number(credito.monto).toLocaleString('es-AR')} en tu cuenta (válido 30 días).`
         : '\n⏱ La cancelación fue realizada con menos de 24hs de anticipación — no genera crédito.';
 
       const body =
@@ -1318,7 +1319,7 @@ Si necesitás ayuda, escribinos por WhatsApp.
     }
 
     console.log(`✓ Reserva ${reservaId} cancelada — crédito: ${credito ? credito.id : 'no'}`);;
-    res.json({ success: true, eligibleForCredit, credito });
+    res.json({ success: true, eligibleForCredit: credito !== null, credito });
   } catch (err) {
     console.error('❌ Error POST /api/cancelar-reserva:', err.message);
     res.status(500).json({ error: err.message });
