@@ -86,7 +86,7 @@ app.get('/api/sedes', async (req, res) => {
       throw error;
     }
     
-    console.log('✅ Sedes cargadas:', data);
+    console.log('SEDES RESPONSE:', data);
     res.json(data || []);
   } catch (err) {
     console.error('❌ Error GET /api/sedes:', err.message);
