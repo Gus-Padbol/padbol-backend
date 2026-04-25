@@ -15,7 +15,8 @@ const PORT = 3001;
 app.use(cors({
   origin: [
     'http://localhost:3000',
-    'https://padbol-match.netlify.app'
+    'https://padbol-match.netlify.app',
+    'https://padbol-match-9abn.vercel.app'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
@@ -386,6 +387,45 @@ app.get('/api/torneos/:id', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/torneos/confirmar-inscripcion — marca inscripción del equipo como confirmada (tras pago MP)
+app.post('/api/torneos/confirmar-inscripcion', async (req, res) => {
+  try {
+    const { equipo_id, torneo_id } = req.body || {};
+    const eid = parseInt(String(equipo_id), 10);
+    const tid = parseInt(String(torneo_id), 10);
+    if (!eid || !tid) {
+      return res.status(400).json({ error: 'equipo_id y torneo_id son requeridos' });
+    }
+
+    const { data: eq, error: errEq } = await supabase
+      .from('equipos')
+      .select('id, torneo_id, inscripcion_estado')
+      .eq('id', eid)
+      .maybeSingle();
+
+    if (errEq) throw errEq;
+    if (!eq) return res.status(404).json({ error: 'Equipo no encontrado' });
+    if (Number(eq.torneo_id) !== tid) {
+      return res.status(400).json({ error: 'El equipo no pertenece a ese torneo' });
+    }
+
+    if (String(eq.inscripcion_estado || '').toLowerCase() === 'confirmado') {
+      return res.json({ ok: true, already: true });
+    }
+
+    const { error: errUp } = await supabase
+      .from('equipos')
+      .update({ inscripcion_estado: 'confirmado' })
+      .eq('id', eid);
+
+    if (errUp) throw errUp;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('❌ POST /api/torneos/confirmar-inscripcion:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
