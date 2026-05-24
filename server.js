@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
 import Stripe from 'stripe';
 import cron from 'node-cron';
-import { createPartidosRouter } from './routes/partidos.js';
+import { createPartidosAbiertosRouter, createPartidosRouter } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
 
 dotenv.config();
@@ -1376,6 +1376,7 @@ app.delete('/api/equipos/:id', async (req, res) => {
 
 // ===== PARTIDOS ABIERTOS =====
 app.use('/api/partidos', createPartidosRouter({ supabase, supabaseAdmin, getAuthenticatedUser }));
+app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 
 // ===== PARTIDOS (torneos — rutas legacy) =====
