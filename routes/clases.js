@@ -8,13 +8,13 @@ function getTodayArgentinaDate() {
   return `${year}-${month}-${day}`;
 }
 
-function formatHora(hora) {
-  if (!hora) return null;
-  return String(hora).slice(0, 5);
+function formatHora(value) {
+  if (!value) return null;
+  return String(value).slice(0, 5);
 }
 
 function parseClaseId(id) {
-  const claseId = parseInt(id, 10);
+  const claseId = Number.parseInt(String(id), 10);
   if (Number.isNaN(claseId)) return null;
   return claseId;
 }
@@ -25,24 +25,48 @@ function normalizeCertificaciones(value) {
   return [];
 }
 
-function mapClaseRow(clase, reservasCount = 0) {
+function dateFromCreatedAt(createdAt) {
+  if (!createdAt) return null;
+  return String(createdAt).slice(0, 10);
+}
+
+function horaFromCreatedAt(createdAt) {
+  if (!createdAt) return null;
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return null;
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function mapClaseRow(clase, { reservasCount = 0, fecha = null, hora = null, horarioId = null } = {}) {
   const profesor = clase.profesores ?? null;
   const sede = clase.sedes ?? null;
-  const cupoMax = clase.cupo_max ?? 4;
+  const cupoMax = clase.cupo_maximo ?? 4;
   const spotsDisponibles = Math.max(cupoMax - reservasCount, 0);
+  const fallbackFecha = fecha ?? dateFromCreatedAt(clase.created_at);
+  const fallbackHora = hora ?? horaFromCreatedAt(clase.created_at);
 
   return {
     id: clase.id,
+    horario_id: horarioId,
+    titulo: clase.titulo ?? null,
+    descripcion: clase.descripcion ?? '',
     deporte: clase.deporte,
-    nivel: clase.nivel,
+    tipo: clase.tipo ?? null,
+    nivel: clase.tipo ?? null,
     sede_id: clase.sede_id,
+    cancha_id: clase.cancha_id ?? null,
     sede_nombre: sede?.nombre ?? null,
-    fecha: clase.fecha,
-    hora: formatHora(clase.hora),
+    fecha: fallbackFecha,
+    hora: formatHora(fallbackHora),
     duracion_minutos: clase.duracion_minutos ?? 60,
     precio: clase.precio,
-    moneda: clase.moneda ?? 'ARS',
+    moneda: sede?.moneda ?? 'ARS',
     cupo_max: cupoMax,
+    cupo_maximo: cupoMax,
+    horas_cancelacion: clase.horas_cancelacion ?? null,
+    activo: clase.activo ?? true,
     reservas_count: reservasCount,
     spots_disponibles: spotsDisponibles,
     profesor_id: clase.profesor_id,
@@ -53,10 +77,103 @@ function mapClaseRow(clase, reservasCount = 0) {
   };
 }
 
+let cachedHorariosTable = undefined;
+
+async function resolveHorariosTable(supabaseAdmin) {
+  if (cachedHorariosTable !== undefined) {
+    return cachedHorariosTable;
+  }
+
+  for (const table of ['clases_horarios', 'clases_disponibilidad']) {
+    const { error } = await supabaseAdmin.from(table).select('id').limit(1);
+    if (!error) {
+      cachedHorariosTable = table;
+      return table;
+    }
+  }
+
+  cachedHorariosTable = null;
+  return null;
+}
+
+async function fetchHorariosByClaseIds(supabaseAdmin, table, claseIds, today) {
+  if (!table || claseIds.length === 0) return {};
+
+  const { data, error } = await supabaseAdmin
+    .from(table)
+    .select('*')
+    .in('clase_id', claseIds)
+    .gte('fecha', today)
+    .order('fecha', { ascending: true })
+    .order('hora', { ascending: true });
+
+  if (error) {
+    console.warn(`⚠️ No se pudieron cargar horarios desde ${table}:`, error.message);
+    return {};
+  }
+
+  const grouped = {};
+  (data || []).forEach((row) => {
+    const key = String(row.clase_id);
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(row);
+  });
+
+  return grouped;
+}
+
+function expandClasesWithHorarios(clases, horariosByClaseId, today) {
+  const expanded = [];
+
+  clases.forEach((clase) => {
+    const reservasCount = clase.clases_reservas?.length ?? 0;
+    const horarios = horariosByClaseId[String(clase.id)] ?? [];
+
+    if (horarios.length === 0) {
+      const mapped = mapClaseRow(clase, { reservasCount });
+      if (!mapped.fecha || mapped.fecha >= today) {
+        expanded.push(mapped);
+      }
+      return;
+    }
+
+    horarios.forEach((horario) => {
+      expanded.push(mapClaseRow(clase, {
+        reservasCount,
+        fecha: horario.fecha ?? dateFromCreatedAt(horario.created_at),
+        hora: horario.hora ?? horaFromCreatedAt(horario.created_at),
+        horarioId: horario.id ?? null,
+      }));
+    });
+  });
+
+  return expanded;
+}
+
+const CLASE_SELECT = `
+  id,
+  sede_id,
+  profesor_id,
+  cancha_id,
+  deporte,
+  titulo,
+  descripcion,
+  tipo,
+  cupo_maximo,
+  duracion_minutos,
+  precio,
+  activo,
+  created_at,
+  horas_cancelacion,
+  profesores ( id, nombre, bio, foto_url, certificaciones ),
+  sedes ( id, nombre, moneda ),
+  clases_reservas ( id )
+`;
+
 export function createClasesRouter({ supabaseAdmin, getAuthenticatedUser }) {
   const router = express.Router();
 
-  // GET /api/clases/disponibles — upcoming classes with available spots
+  // GET /api/clases/disponibles — active classes with available spots
   router.get('/disponibles', async (req, res) => {
     try {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
@@ -68,35 +185,22 @@ export function createClasesRouter({ supabaseAdmin, getAuthenticatedUser }) {
 
       const { data: clases, error } = await supabaseAdmin
         .from('clases')
-        .select(`
-          id,
-          profesor_id,
-          sede_id,
-          deporte,
-          nivel,
-          fecha,
-          hora,
-          duracion_minutos,
-          precio,
-          moneda,
-          cupo_max,
-          estado,
-          profesores ( id, nombre, bio, foto_url, certificaciones ),
-          sedes ( id, nombre ),
-          clases_reservas ( id )
-        `)
-        .eq('estado', 'disponible')
-        .gte('fecha', today)
-        .order('fecha', { ascending: true })
-        .order('hora', { ascending: true });
+        .select(CLASE_SELECT)
+        .eq('activo', true)
+        .order('created_at', { ascending: true });
 
       if (error) throw error;
 
-      const result = (clases || [])
-        .map((clase) => {
-          const reservasCount = clase.clases_reservas?.length ?? 0;
-          return mapClaseRow(clase, reservasCount);
-        })
+      const horariosTable = await resolveHorariosTable(supabaseAdmin);
+      const claseIds = (clases || []).map((clase) => clase.id);
+      const horariosByClaseId = await fetchHorariosByClaseIds(
+        supabaseAdmin,
+        horariosTable,
+        claseIds,
+        today,
+      );
+
+      const result = expandClasesWithHorarios(clases || [], horariosByClaseId, today)
         .filter((clase) => clase.spots_disponibles > 0);
 
       res.json(result);
@@ -122,9 +226,22 @@ export function createClasesRouter({ supabaseAdmin, getAuthenticatedUser }) {
       const { data: clase, error: fetchErr } = await supabaseAdmin
         .from('clases')
         .select(`
-          *,
+          id,
+          sede_id,
+          profesor_id,
+          cancha_id,
+          deporte,
+          titulo,
+          descripcion,
+          tipo,
+          cupo_maximo,
+          duracion_minutos,
+          precio,
+          activo,
+          created_at,
+          horas_cancelacion,
           profesores ( id, nombre, bio, foto_url, certificaciones ),
-          sedes ( id, nombre )
+          sedes ( id, nombre, moneda )
         `)
         .eq('id', claseId)
         .maybeSingle();
@@ -133,7 +250,7 @@ export function createClasesRouter({ supabaseAdmin, getAuthenticatedUser }) {
       if (!clase) {
         return res.status(404).json({ error: 'Clase no encontrada' });
       }
-      if (clase.estado !== 'disponible') {
+      if (!clase.activo) {
         return res.status(400).json({ error: 'Esta clase ya no acepta reservas' });
       }
 
@@ -156,7 +273,7 @@ export function createClasesRouter({ supabaseAdmin, getAuthenticatedUser }) {
 
       if (countErr) throw countErr;
 
-      const cupoMax = clase.cupo_max ?? 4;
+      const cupoMax = clase.cupo_maximo ?? 4;
       if ((count ?? 0) >= cupoMax) {
         return res.status(409).json({ error: 'La clase ya está completa' });
       }
@@ -174,14 +291,7 @@ export function createClasesRouter({ supabaseAdmin, getAuthenticatedUser }) {
       if (insertErr) throw insertErr;
 
       const newCount = (count ?? 0) + 1;
-      if (newCount >= cupoMax) {
-        await supabaseAdmin
-          .from('clases')
-          .update({ estado: 'completa' })
-          .eq('id', claseId);
-      }
-
-      const claseMapped = mapClaseRow(clase, newCount);
+      const claseMapped = mapClaseRow(clase, { reservasCount: newCount });
 
       console.log(`✓ POST /api/clases/${claseId}/reservar — ${user.email ?? user.id}`);
       res.status(201).json({
