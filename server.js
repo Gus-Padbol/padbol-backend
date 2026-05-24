@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import twilio from 'twilio';
 import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
+import Stripe from 'stripe';
 import cron from 'node-cron';
 import { createPartidosRouter } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
@@ -44,6 +45,95 @@ if (!process.env.MP_ACCESS_TOKEN) {
 const mpClient = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN || '',
 });
+
+const stripeClient = process.env.STRIPE_SECRET_KEY
+  ? new Stripe(process.env.STRIPE_SECRET_KEY)
+  : null;
+
+function normalizePaymentExtras(extras) {
+  if (!Array.isArray(extras)) return [];
+
+  return extras
+    .map((extra) => ({
+      id: extra.id,
+      nombre: extra.nombre,
+      precio: Number(extra.precio ?? 0),
+      moneda: extra.moneda,
+      categoria: extra.categoria,
+      cantidad: Math.max(0, Number(extra.cantidad ?? extra.quantity ?? 0)),
+    }))
+    .filter((extra) => extra.cantidad > 0 && Number.isFinite(extra.precio));
+}
+
+function buildMercadoPagoItems({ titulo, moneda, pricing, extras = [] }) {
+  const currency = moneda || 'ARS';
+  const items = [{
+    title: titulo,
+    unit_price: Number(pricing?.base ?? 0),
+    quantity: 1,
+    currency_id: currency,
+  }];
+
+  for (const extra of normalizePaymentExtras(extras)) {
+    items.push({
+      title: extra.nombre,
+      unit_price: extra.precio,
+      quantity: extra.cantidad,
+      currency_id: extra.moneda || currency,
+    });
+  }
+
+  const fee = Number(pricing?.fee ?? 0);
+  if (fee > 0) {
+    items.push({
+      title: 'Comisión plataforma (3%)',
+      unit_price: fee,
+      quantity: 1,
+      currency_id: currency,
+    });
+  }
+
+  return items;
+}
+
+function buildStripeLineItems({ titulo, moneda, pricing, extras = [] }) {
+  const currency = String(moneda || 'USD').toLowerCase();
+  const toCents = (amount) => Math.round(Number(amount) * 100);
+
+  const line_items = [{
+    price_data: {
+      currency,
+      product_data: { name: titulo },
+      unit_amount: toCents(pricing?.base ?? 0),
+    },
+    quantity: 1,
+  }];
+
+  for (const extra of normalizePaymentExtras(extras)) {
+    line_items.push({
+      price_data: {
+        currency: String(extra.moneda || moneda || 'USD').toLowerCase(),
+        product_data: { name: extra.nombre },
+        unit_amount: toCents(extra.precio),
+      },
+      quantity: extra.cantidad,
+    });
+  }
+
+  const fee = Number(pricing?.fee ?? 0);
+  if (fee > 0) {
+    line_items.push({
+      price_data: {
+        currency,
+        product_data: { name: 'Comisión plataforma (3%)' },
+        unit_amount: toCents(fee),
+      },
+      quantity: 1,
+    });
+  }
+
+  return line_items;
+}
 
 // Frontend URL for MP redirect callbacks
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://padbol-match.netlify.app';
@@ -262,6 +352,36 @@ app.get('/api/sedes/:id', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('❌ Error GET /api/sedes/:id:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/sedes/:id/extras — extras activos de la sede (JWT required)
+app.get('/api/sedes/:id/extras', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const sedeId = parseInt(req.params.id, 10);
+    if (Number.isNaN(sedeId)) {
+      return res.status(400).json({ error: 'ID de sede inválido' });
+    }
+
+    const { data, error } = await supabase
+      .from('extras')
+      .select('id, nombre, precio, moneda, categoria, imagen_url, stock')
+      .eq('sede_id', sedeId)
+      .eq('activo', true)
+      .order('categoria', { ascending: true })
+      .order('nombre', { ascending: true });
+
+    if (error) throw error;
+
+    res.json(data || []);
+  } catch (err) {
+    console.error('❌ Error GET /api/sedes/:id/extras:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1634,8 +1754,17 @@ app.get('/api/creditos/:email', async (req, res) => {
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', async (req, res) => {
   try {
-    const { titulo, precio, moneda, sedeNombre, reservaData, sedeId } = req.body;
-    if (!titulo || !precio) {
+    const {
+      titulo,
+      precio,
+      moneda,
+      sedeNombre,
+      reservaData,
+      sedeId,
+      extras,
+      pricing,
+    } = req.body;
+    if (!titulo || precio == null) {
       return res.status(400).json({ error: 'Faltan campos requeridos: titulo, precio' });
     }
 
@@ -1652,6 +1781,20 @@ app.post('/api/crear-preferencia', async (req, res) => {
       }
     }
 
+    const paymentExtras = extras ?? reservaData?.extras ?? [];
+    const paymentPricing = pricing ?? {
+      base: reservaData?.precio_base ?? precio,
+      fee: reservaData?.platform_fee ?? 0,
+      extrasSubtotal: reservaData?.extras_subtotal ?? 0,
+      total: precio,
+    };
+    const items = buildMercadoPagoItems({
+      titulo,
+      moneda,
+      pricing: paymentPricing,
+      extras: paymentExtras,
+    });
+
     // Embed full reservation data as JSON in external_reference so
     // PagoExitoso can create the reservation after payment is approved.
     const externalReference = reservaData ? JSON.stringify(reservaData) : '';
@@ -1659,12 +1802,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
     const preference = new Preference(client);
     const response = await preference.create({
       body: {
-        items: [{
-          title: titulo,
-          unit_price: Number(precio),
-          quantity: 1,
-          currency_id: moneda || 'ARS',
-        }],
+        items,
         back_urls: {
           success: 'padbolmatch://pago-exitoso',
           failure: 'padbolmatch://pago-error',
@@ -1676,10 +1814,73 @@ app.post('/api/crear-preferencia', async (req, res) => {
       },
     });
 
-    console.log(`✓ MP preferencia creada: ${response.id} | success→ padbolmatch://pago-exitoso | sede: ${sedeNombre || '—'}`);
+    console.log(`✓ MP preferencia creada: ${response.id} | items: ${items.length} | sede: ${sedeNombre || '—'}`);
     res.json({ init_point: response.init_point, preference_id: response.id });
   } catch (err) {
     console.error('❌ Error POST /api/crear-preferencia:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/crear-pago-stripe — Stripe Checkout Session
+app.post('/api/crear-pago-stripe', async (req, res) => {
+  try {
+    if (!stripeClient) {
+      return res.status(503).json({ error: 'Stripe no configurado en el servidor' });
+    }
+
+    const {
+      titulo,
+      precio,
+      moneda,
+      sedeNombre,
+      reservaData,
+      sedeId,
+      extras,
+      pricing,
+      return_url: returnUrl,
+      cancel_url: cancelUrl,
+    } = req.body;
+
+    if (!titulo || precio == null) {
+      return res.status(400).json({ error: 'Faltan campos requeridos: titulo, precio' });
+    }
+
+    const paymentExtras = extras ?? reservaData?.extras ?? [];
+    const paymentPricing = pricing ?? {
+      base: reservaData?.precio_base ?? precio,
+      fee: reservaData?.platform_fee ?? 0,
+      extrasSubtotal: reservaData?.extras_subtotal ?? 0,
+      total: precio,
+    };
+    const line_items = buildStripeLineItems({
+      titulo,
+      moneda,
+      pricing: paymentPricing,
+      extras: paymentExtras,
+    });
+
+    const session = await stripeClient.checkout.sessions.create({
+      mode: 'payment',
+      line_items,
+      success_url: returnUrl || 'padbolmatch://pago-exitoso',
+      cancel_url: cancelUrl || 'padbolmatch://pago-error',
+      metadata: {
+        sede_id: String(sedeId || ''),
+        sede_nombre: sedeNombre || '',
+        external_reference: reservaData ? JSON.stringify(reservaData).slice(0, 500) : '',
+      },
+    });
+
+    console.log(`✓ Stripe session creada: ${session.id} | items: ${line_items.length} | sede: ${sedeNombre || '—'}`);
+    res.json({
+      url: session.url,
+      session_url: session.url,
+      checkout_url: session.url,
+      session_id: session.id,
+    });
+  } catch (err) {
+    console.error('❌ Error POST /api/crear-pago-stripe:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
