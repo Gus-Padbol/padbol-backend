@@ -28,6 +28,13 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_KEY;
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn('⚠️  SUPABASE_SERVICE_ROLE_KEY no está configurado — supabaseAdmin usa SUPABASE_KEY');
+}
+
 // Mercado Pago
 if (!process.env.MP_ACCESS_TOKEN) {
   console.warn('⚠️  MP_ACCESS_TOKEN no está configurado — los pagos fallarán en producción');
@@ -70,6 +77,21 @@ async function sendWhatsAppConfirmation(phone, { sede, fecha, hora, cancha, dire
 
   await twilioClient.messages.create({ from: TWILIO_WHATSAPP_FROM, to, body });
   console.log(`✓ WhatsApp enviado a ${to}`);
+}
+
+async function getAuthenticatedUser(req) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return { user: null, status: 401, error: 'Se requiere Authorization Bearer token' };
+  }
+
+  const token = authHeader.slice(7);
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user) {
+    return { user: null, status: 401, error: 'Token inválido o expirado' };
+  }
+
+  return { user: data.user, status: null, error: null };
 }
 
 // GET sedes
@@ -1527,6 +1549,61 @@ Recordá llegar 10 minutos antes.
     console.error('❌ Cron recordatorio - error inesperado:', err.message);
   }
 }, { timezone: 'America/Argentina/Buenos_Aires' });
+
+// ===== USUARIOS =====
+const usuariosRouter = express.Router();
+
+// POST /api/usuarios/push-token — Save Expo push token on jugadores_perfil
+usuariosRouter.post('/push-token', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const { expo_push_token, email: bodyEmail, supabase_user_id: bodyUserId } = req.body;
+    if (!expo_push_token) {
+      return res.status(400).json({ error: 'expo_push_token es requerido' });
+    }
+
+    const email = bodyEmail ?? user.email ?? null;
+    const supabase_user_id = bodyUserId ?? user.id ?? null;
+
+    if (bodyEmail && bodyEmail !== user.email) {
+      return res.status(403).json({ error: 'El email no coincide con el usuario autenticado' });
+    }
+    if (bodyUserId && bodyUserId !== user.id) {
+      return res.status(403).json({ error: 'supabase_user_id no coincide con el usuario autenticado' });
+    }
+
+    const filters = [];
+    if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
+    if (supabase_user_id) filters.push(`supabase_user_id.eq.${supabase_user_id}`);
+
+    if (filters.length === 0) {
+      return res.status(400).json({ error: 'Se requiere email o supabase_user_id' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .update({ expo_push_token })
+      .or(filters.join(','))
+      .select('id');
+
+    if (error) throw error;
+    if (!data?.length) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+    }
+
+    console.log(`✓ POST /api/usuarios/push-token — token guardado para ${email ?? supabase_user_id}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Error POST /api/usuarios/push-token:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.use('/api/usuarios', usuariosRouter);
 
 app.listen(PORT, () => {
   console.log(`🚀 Padbol Match API running on port ${PORT}`);
