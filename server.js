@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
 import Stripe from 'stripe';
 import cron from 'node-cron';
+import { createEquiposUsuarioRouter } from './routes/equipos.js';
 import { createMembresiasRouter } from './routes/membresias.js';
 import { createPartidosAbiertosRouter, createPartidosRouter } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
@@ -1380,6 +1381,7 @@ app.use('/api/partidos', createPartidosRouter({ supabase, supabaseAdmin, getAuth
 app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
+app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser }));
 
 // ===== PARTIDOS (torneos — rutas legacy) =====
 app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
