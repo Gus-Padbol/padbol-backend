@@ -5,6 +5,7 @@ import twilio from 'twilio';
 import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
 import cron from 'node-cron';
+import { createPartidosRouter } from './routes/partidos.js';
 
 dotenv.config();
 
@@ -1094,31 +1095,10 @@ app.delete('/api/equipos/:id', async (req, res) => {
   }
 });
 
-// ===== PARTIDOS =====
-app.post('/api/partidos', async (req, res) => {
-  try {
-    const { torneo_id, equipo_a_id, equipo_b_id, fecha_hora, cancha_id, sede_id } = req.body;
+// ===== PARTIDOS ABIERTOS =====
+app.use('/api/partidos', createPartidosRouter({ supabase, supabaseAdmin, getAuthenticatedUser }));
 
-    const { data, error } = await supabase
-      .from('partidos')
-      .insert([{
-        torneo_id,
-        equipo_a_id,
-        equipo_b_id,
-        fecha_hora,
-        cancha_id,
-        sede_id,
-        estado: 'pendiente',
-      }])
-      .select();
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
+// ===== PARTIDOS (torneos — rutas legacy) =====
 app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
