@@ -94,6 +94,68 @@ async function getAuthenticatedUser(req) {
   return { user: data.user, status: null, error: null };
 }
 
+function getTodayArgentinaDate() {
+  const nowAR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+  const year = nowAR.getFullYear();
+  const month = String(nowAR.getMonth() + 1).padStart(2, '0');
+  const day = String(nowAR.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseCheckinQrCode(qrCode) {
+  try {
+    const parsed = typeof qrCode === 'string' ? JSON.parse(qrCode) : qrCode;
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    return {
+      reserva_id: parsed.reserva_id ?? parsed.reservaId ?? null,
+      user_id: parsed.user_id ?? parsed.userId ?? null,
+      sede_id: parsed.sede_id ?? parsed.sedeId ?? null,
+      fecha: parsed.fecha ?? null,
+      hora: parsed.hora ?? null,
+      ts: parsed.ts ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function reservaMatchesSedeId(reserva, sedeId) {
+  if (reserva.sede_id != null) {
+    return Number(reserva.sede_id) === Number(sedeId);
+  }
+
+  const { data: sedeRow } = await supabaseAdmin
+    .from('sedes')
+    .select('id, nombre')
+    .eq('id', sedeId)
+    .maybeSingle();
+
+  if (!sedeRow) return false;
+  return reserva.sede === sedeRow.nombre || String(reserva.sede) === String(sedeId);
+}
+
+async function getSedeNombre(reserva, sedeId) {
+  if (reserva.sede_nombre) return reserva.sede_nombre;
+  if (reserva.sede) return reserva.sede;
+
+  const { data: sedeRow } = await supabaseAdmin
+    .from('sedes')
+    .select('nombre')
+    .eq('id', sedeId)
+    .maybeSingle();
+
+  return sedeRow?.nombre ?? null;
+}
+
+function reservaBelongsToUser(reserva, user, qrUserId) {
+  if (user.email && reserva.email && reserva.email === user.email) return true;
+  if (reserva.user_id && reserva.user_id === user.id) return true;
+  if (reserva.supabase_user_id && reserva.supabase_user_id === user.id) return true;
+  if (qrUserId && qrUserId === user.id) return true;
+  return false;
+}
+
 // GET sedes
 app.get('/api/sedes', async (req, res) => {
   try {
@@ -1604,6 +1666,107 @@ usuariosRouter.post('/push-token', async (req, res) => {
 });
 
 app.use('/api/usuarios', usuariosRouter);
+
+// ===== CHECKIN =====
+const checkinRouter = express.Router();
+
+// POST /api/checkin/verificar — Verify QR and mark reservation check-in
+checkinRouter.post('/verificar', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const { qr_code, sede_id } = req.body;
+    if (!qr_code || sede_id == null) {
+      return res.status(400).json({ error: 'qr_code y sede_id son requeridos' });
+    }
+
+    const qrData = parseCheckinQrCode(qr_code);
+    if (!qrData) {
+      return res.status(400).json({ error: 'QR inválido: no se pudo interpretar el código' });
+    }
+
+    const { reserva_id, user_id: qrUserId, sede_id: qrSedeId, fecha: qrFecha } = qrData;
+
+    if (!reserva_id) {
+      return res.status(400).json({ error: 'QR inválido: falta reserva_id' });
+    }
+
+    if (qrSedeId != null && Number(qrSedeId) !== Number(sede_id)) {
+      return res.status(400).json({ error: 'El QR no corresponde a la sede indicada' });
+    }
+
+    const { data: reserva, error: fetchErr } = await supabaseAdmin
+      .from('reservas')
+      .select('*')
+      .eq('id', reserva_id)
+      .maybeSingle();
+
+    if (fetchErr) throw fetchErr;
+    if (!reserva) {
+      return res.status(404).json({ error: 'Reserva no encontrada' });
+    }
+
+    const sedeMatches = await reservaMatchesSedeId(reserva, sede_id);
+    if (!sedeMatches) {
+      return res.status(400).json({ error: 'La reserva no pertenece a esta sede' });
+    }
+
+    if (!reservaBelongsToUser(reserva, user, qrUserId)) {
+      return res.status(403).json({ error: 'La reserva no pertenece al usuario autenticado' });
+    }
+
+    const today = getTodayArgentinaDate();
+    const reservaFecha = String(reserva.fecha).slice(0, 10);
+    if (reservaFecha !== today) {
+      return res.status(400).json({ error: 'El check-in solo está disponible el día de la reserva' });
+    }
+
+    if (qrFecha && String(qrFecha).slice(0, 10) !== reservaFecha) {
+      return res.status(400).json({ error: 'La fecha del QR no coincide con la reserva' });
+    }
+
+    const allowedStates = ['confirmada', 'pendiente'];
+    if (!allowedStates.includes(reserva.estado)) {
+      return res.status(400).json({
+        error: `Estado de reserva no válido para check-in: ${reserva.estado ?? 'desconocido'}`,
+      });
+    }
+
+    if (reserva.checkin_realizado) {
+      return res.status(409).json({ error: 'El check-in ya fue realizado para esta reserva' });
+    }
+
+    const checkinAt = new Date().toISOString();
+    const { error: updateErr } = await supabaseAdmin
+      .from('reservas')
+      .update({
+        checkin_realizado: true,
+        checkin_at: checkinAt,
+      })
+      .eq('id', reserva_id);
+
+    if (updateErr) throw updateErr;
+
+    const sedeNombre = await getSedeNombre(reserva, sede_id);
+
+    console.log(`✓ POST /api/checkin/verificar — reserva ${reserva_id} check-in OK`);
+    res.json({
+      success: true,
+      cancha: reserva.cancha,
+      cancha_asignada: reserva.cancha,
+      hora: reserva.hora,
+      sede: sedeNombre,
+    });
+  } catch (err) {
+    console.error('❌ Error POST /api/checkin/verificar:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.use('/api/checkin', checkinRouter);
 
 app.listen(PORT, () => {
   console.log(`🚀 Padbol Match API running on port ${PORT}`);
