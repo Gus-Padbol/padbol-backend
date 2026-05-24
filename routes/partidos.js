@@ -13,6 +13,12 @@ function formatHora(hora) {
   return String(hora).slice(0, 5);
 }
 
+function parsePartidoId(id) {
+  const partidoId = parseInt(id, 10);
+  if (Number.isNaN(partidoId)) return null;
+  return partidoId;
+}
+
 async function resolveHostName(partido, supabaseAdmin) {
   const filters = [];
   if (partido.host_user_id) {
@@ -45,7 +51,7 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
       const today = getTodayArgentinaDate();
 
       const { data: partidos, error } = await supabaseAdmin
-        .from('partidos')
+        .from('partidos_abiertos')
         .select(`
           id,
           sede_id,
@@ -54,14 +60,12 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
           fecha,
           hora,
           nivel,
-          tipo,
           estado,
           max_jugadores,
           created_at,
           sedes ( nombre ),
-          partidos_jugadores ( id )
+          partidos_abiertos_jugadores ( id )
         `)
-        .eq('tipo', 'abierto')
         .eq('estado', 'abierto')
         .gte('fecha', today)
         .order('fecha', { ascending: true })
@@ -72,7 +76,7 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
       const result = await Promise.all(
         (partidos || []).map(async (partido) => {
           const hostNombre = await resolveHostName(partido, supabaseAdmin);
-          const jugadoresActuales = partido.partidos_jugadores?.length ?? 0;
+          const jugadoresActuales = partido.partidos_abiertos_jugadores?.length ?? 0;
 
           return {
             id: partido.id,
@@ -105,29 +109,29 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
         return res.status(status).json({ error: authError });
       }
 
-      const { id } = req.params;
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
 
       const { data: partido, error: fetchErr } = await supabaseAdmin
-        .from('partidos')
+        .from('partidos_abiertos')
         .select('*')
-        .eq('id', id)
+        .eq('id', partidoId)
         .maybeSingle();
 
       if (fetchErr) throw fetchErr;
       if (!partido) {
         return res.status(404).json({ error: 'Partido no encontrado' });
       }
-      if (partido.tipo !== 'abierto') {
-        return res.status(400).json({ error: 'Este partido no es un partido abierto' });
-      }
       if (partido.estado !== 'abierto') {
         return res.status(400).json({ error: 'Este partido ya no acepta jugadores' });
       }
 
       const { data: existingJoin, error: existingErr } = await supabaseAdmin
-        .from('partidos_jugadores')
+        .from('partidos_abiertos_jugadores')
         .select('id')
-        .eq('partido_id', id)
+        .eq('partido_id', partidoId)
         .eq('user_id', user.id)
         .maybeSingle();
 
@@ -137,9 +141,9 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
       }
 
       const { count, error: countErr } = await supabaseAdmin
-        .from('partidos_jugadores')
+        .from('partidos_abiertos_jugadores')
         .select('*', { count: 'exact', head: true })
-        .eq('partido_id', id);
+        .eq('partido_id', partidoId);
 
       if (countErr) throw countErr;
 
@@ -149,9 +153,9 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
       }
 
       const { error: insertErr } = await supabaseAdmin
-        .from('partidos_jugadores')
+        .from('partidos_abiertos_jugadores')
         .insert([{
-          partido_id: id,
+          partido_id: partidoId,
           user_id: user.id,
           email: user.email ?? null,
         }]);
@@ -161,12 +165,12 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
       const newCount = (count ?? 0) + 1;
       if (newCount >= maxJugadores) {
         await supabaseAdmin
-          .from('partidos')
+          .from('partidos_abiertos')
           .update({ estado: 'completo' })
-          .eq('id', id);
+          .eq('id', partidoId);
       }
 
-      console.log(`✓ POST /api/partidos/${id}/unirse — ${user.email ?? user.id}`);
+      console.log(`✓ POST /api/partidos/${partidoId}/unirse — ${user.email ?? user.id}`);
       res.json({ success: true });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/unirse:', err.message);
@@ -177,7 +181,7 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
   // POST /api/partidos — create open match (or legacy tournament match)
   router.post('/', async (req, res) => {
     try {
-      const { torneo_id, equipo_a_id, equipo_b_id, fecha_hora, cancha_id, sede_id, fecha, hora, nivel, tipo } = req.body;
+      const { torneo_id, equipo_a_id, equipo_b_id, fecha_hora, cancha_id, sede_id, fecha, hora, nivel } = req.body;
 
       if (torneo_id) {
         const { data, error } = await supabase
@@ -207,7 +211,7 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
       }
 
       const { data: partido, error: insertErr } = await supabaseAdmin
-        .from('partidos')
+        .from('partidos_abiertos')
         .insert([{
           sede_id: parseInt(sede_id, 10),
           host_user_id: user.id,
@@ -215,7 +219,6 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
           fecha,
           hora,
           nivel,
-          tipo: tipo ?? 'abierto',
           estado: 'abierto',
           max_jugadores: 4,
         }])
@@ -225,7 +228,7 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
       if (insertErr) throw insertErr;
 
       const { error: hostJoinErr } = await supabaseAdmin
-        .from('partidos_jugadores')
+        .from('partidos_abiertos_jugadores')
         .insert([{
           partido_id: partido.id,
           user_id: user.id,
