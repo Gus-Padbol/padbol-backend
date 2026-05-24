@@ -96,6 +96,60 @@ async function getAuthenticatedUser(req) {
   return { user: data.user, status: null, error: null };
 }
 
+function buildUserEmailOrIdFilters(user, { emailField = 'email', userIdFields = ['user_id'] } = {}) {
+  const filters = [];
+
+  if (user.email) {
+    filters.push(`${emailField}.eq."${String(user.email).replace(/"/g, '\\"')}"`);
+  }
+
+  for (const field of userIdFields) {
+    filters.push(`${field}.eq.${user.id}`);
+  }
+
+  return filters;
+}
+
+function mapMisReservaRow(row) {
+  const sedeNombre = row.sedes?.nombre ?? row.sede ?? null;
+
+  return {
+    id: row.id,
+    sede_nombre: sedeNombre,
+    sede: sedeNombre,
+    sede_id: row.sede_id ?? null,
+    fecha: row.fecha,
+    hora: row.hora,
+    duracion_minutos: row.duracion_minutos ?? null,
+    cancha: row.cancha ?? null,
+    estado: row.estado ?? null,
+    monto: row.monto ?? row.precio ?? null,
+    precio: row.precio ?? row.monto ?? null,
+    moneda: row.moneda ?? 'ARS',
+    checkin_realizado: row.checkin_realizado ?? false,
+    created_at: row.created_at ?? null,
+  };
+}
+
+function mapMisInscripcionRow(row) {
+  const torneo = row.torneos ?? {};
+
+  return {
+    torneo_id: row.torneo_id ?? torneo.id ?? null,
+    id: torneo.id ?? row.torneo_id ?? null,
+    nombre: torneo.nombre ?? null,
+    sede_nombre: torneo.sedes?.nombre ?? null,
+    sede_id: torneo.sede_id ?? null,
+    fecha_inicio: torneo.fecha_inicio ?? null,
+    fecha_fin: torneo.fecha_fin ?? null,
+    formato: torneo.tipo_torneo ?? null,
+    tipo_torneo: torneo.tipo_torneo ?? null,
+    categoria: torneo.categoria ?? torneo.nivel_torneo ?? null,
+    estado: torneo.estado ?? null,
+    created_at: row.created_at ?? null,
+  };
+}
+
 function getTodayArgentinaDate() {
   const nowAR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
   const year = nowAR.getFullYear();
@@ -310,6 +364,37 @@ app.get('/api/reservas', async (req, res) => {
   }
 });
 
+// GET /api/reservas/mis-reservas — authenticated user's reservations (JWT required)
+app.get('/api/reservas/mis-reservas', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const filters = buildUserEmailOrIdFilters(user, {
+      userIdFields: ['user_id', 'supabase_user_id'],
+    });
+
+    const { data, error } = await supabaseAdmin
+      .from('reservas')
+      .select(`
+        *,
+        sedes ( nombre )
+      `)
+      .or(filters.join(','))
+      .order('fecha', { ascending: false })
+      .order('hora', { ascending: false });
+
+    if (error) throw error;
+
+    res.json((data || []).map(mapMisReservaRow));
+  } catch (err) {
+    console.error('❌ Error GET /api/reservas/mis-reservas:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET ingresos
 app.get('/api/ingresos', async (req, res) => {
   try {
@@ -487,6 +572,48 @@ app.get('/api/torneos', async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/torneos/mis-inscripciones — authenticated user's tournament enrollments (JWT required)
+app.get('/api/torneos/mis-inscripciones', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const filters = buildUserEmailOrIdFilters(user, {
+      userIdFields: ['user_id'],
+    });
+
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_torneo')
+      .select(`
+        torneo_id,
+        created_at,
+        torneos (
+          id,
+          nombre,
+          sede_id,
+          fecha_inicio,
+          fecha_fin,
+          tipo_torneo,
+          categoria,
+          nivel_torneo,
+          estado,
+          sedes ( nombre )
+        )
+      `)
+      .or(filters.join(','))
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json((data || []).map(mapMisInscripcionRow));
+  } catch (err) {
+    console.error('❌ Error GET /api/torneos/mis-inscripciones:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
