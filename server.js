@@ -1593,6 +1593,206 @@ Recordá llegar 10 minutos antes.
 }, { timezone: 'America/Argentina/Buenos_Aires' });
 
 // ===== USUARIOS =====
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function countPartidosJugados({ email, supabaseUserId }) {
+  const filters = [];
+  if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
+  if (supabaseUserId) filters.push(`user_id.eq.${supabaseUserId}`);
+
+  if (filters.length === 0) return 0;
+
+  const { count, error } = await supabaseAdmin
+    .from('partidos_abiertos_jugadores')
+    .select('*', { count: 'exact', head: true })
+    .or(filters.join(','));
+
+  if (error) throw error;
+  return count ?? 0;
+}
+
+async function getRankingEntryForEmail(email) {
+  if (!email) return null;
+
+  const SCOPE_NIVELES = {
+    internacional: ['internacional', 'mundial'],
+  };
+  const nivelesPermitidos = SCOPE_NIVELES.internacional;
+
+  const { data: torneos, error: errT } = await supabase
+    .from('torneos')
+    .select('id, sede_id, nivel_torneo, nombre')
+    .eq('estado', 'finalizado')
+    .in('nivel_torneo', nivelesPermitidos);
+
+  if (errT) throw errT;
+  if (!torneos?.length) return null;
+
+  const torneoIds = torneos.map((t) => t.id);
+
+  const { data: puntos, error: errP } = await supabase
+    .from('tabla_puntos')
+    .select('torneo_id, equipo_id, posicion, puntos')
+    .in('torneo_id', torneoIds);
+
+  if (errP) throw errP;
+  if (!puntos?.length) return null;
+
+  const equipoIds = [...new Set(puntos.map((p) => p.equipo_id))];
+  const { data: equipos, error: errE } = await supabase
+    .from('equipos')
+    .select('id, nombre, jugadores')
+    .in('id', equipoIds);
+
+  if (errE) throw errE;
+
+  const equipoMap = {};
+  (equipos || []).forEach((e) => { equipoMap[e.id] = e; });
+
+  const playerMap = {};
+  puntos.forEach((p) => {
+    const equipo = equipoMap[p.equipo_id];
+    if (!equipo) return;
+    const jugadores = Array.isArray(equipo.jugadores) ? equipo.jugadores : [];
+
+    if (jugadores.length === 0) {
+      const key = `equipo:${equipo.id}`;
+      if (!playerMap[key]) {
+        playerMap[key] = {
+          nombre: equipo.nombre,
+          email: null,
+          nivel: null,
+          puntos_total: 0,
+          torneos_count: 0,
+        };
+      }
+      playerMap[key].puntos_total += p.puntos;
+      playerMap[key].torneos_count += 1;
+      return;
+    }
+
+    jugadores.forEach((j) => {
+      const key = j.email || j.nombre;
+      if (!key) return;
+      if (!playerMap[key]) {
+        playerMap[key] = {
+          nombre: j.nombre || key,
+          email: j.email || null,
+          nivel: null,
+          puntos_total: 0,
+          torneos_count: 0,
+        };
+      }
+      playerMap[key].puntos_total += p.puntos;
+      playerMap[key].torneos_count += 1;
+    });
+  });
+
+  const emails = Object.values(playerMap).map((p) => p.email).filter(Boolean);
+  if (emails.length > 0) {
+    const { data: perfiles } = await supabase
+      .from('jugadores_perfil')
+      .select('email, nombre, nivel')
+      .in('email', emails);
+
+    (perfiles || []).forEach((perfil) => {
+      const entry = playerMap[perfil.email];
+      if (!entry) return;
+      entry.nombre = perfil.nombre || entry.nombre;
+      entry.nivel = perfil.nivel || entry.nivel;
+    });
+  }
+
+  const result = Object.values(playerMap)
+    .sort((a, b) => b.puntos_total - a.puntos_total || b.torneos_count - a.torneos_count);
+
+  const normalizedEmail = email.toLowerCase();
+  const index = result.findIndex(
+    (entry) => entry.email?.toLowerCase() === normalizedEmail,
+  );
+
+  if (index === -1) return null;
+
+  return {
+    ranking_position: index + 1,
+    torneos: result[index].torneos_count ?? 0,
+    categoria_ranking: result[index].nivel ?? null,
+    puntos_total: result[index].puntos_total ?? 0,
+  };
+}
+
+async function getSedesHabituales({ email, supabaseUserId, primarySedeId }) {
+  const sedeCounts = {};
+
+  function addSede(sedeId, weight = 1) {
+    if (sedeId == null) return;
+    const key = String(sedeId);
+    sedeCounts[key] = (sedeCounts[key] || 0) + weight;
+  }
+
+  if (primarySedeId != null) {
+    addSede(primarySedeId, 3);
+  }
+
+  if (email) {
+    const { data: reservas } = await supabaseAdmin
+      .from('reservas')
+      .select('sede_id, sede')
+      .eq('email', email);
+
+    for (const reserva of reservas || []) {
+      if (reserva.sede_id != null) {
+        addSede(reserva.sede_id);
+        continue;
+      }
+
+      if (reserva.sede) {
+        const { data: sedeRow } = await supabaseAdmin
+          .from('sedes')
+          .select('id')
+          .eq('nombre', reserva.sede)
+          .maybeSingle();
+        addSede(sedeRow?.id);
+      }
+    }
+  }
+
+  const joinFilters = [];
+  if (email) joinFilters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
+  if (supabaseUserId) joinFilters.push(`user_id.eq.${supabaseUserId}`);
+
+  if (joinFilters.length > 0) {
+    const { data: joins } = await supabaseAdmin
+      .from('partidos_abiertos_jugadores')
+      .select('partido_id, partidos_abiertos ( sede_id )')
+      .or(joinFilters.join(','));
+
+    (joins || []).forEach((join) => {
+      addSede(join.partidos_abiertos?.sede_id);
+    });
+  }
+
+  const topSedeIds = Object.entries(sedeCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([sedeId]) => parseInt(sedeId, 10))
+    .filter((id) => !Number.isNaN(id));
+
+  if (topSedeIds.length === 0) return [];
+
+  const { data: sedes, error } = await supabaseAdmin
+    .from('sedes')
+    .select('id, nombre, ciudad, provincia, pais')
+    .in('id', topSedeIds);
+
+  if (error) throw error;
+
+  const sedeMap = Object.fromEntries((sedes || []).map((sede) => [sede.id, sede]));
+  return topSedeIds
+    .map((id) => sedeMap[id])
+    .filter(Boolean);
+}
+
 const usuariosRouter = express.Router();
 
 // POST /api/usuarios/push-token — Save Expo push token on jugadores_perfil
@@ -1731,6 +1931,105 @@ usuariosRouter.put('/perfil', async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Error PUT /api/usuarios/perfil:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/usuarios/perfil-publico/:identifier — Public player profile (JWT required)
+usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const identifier = decodeURIComponent(req.params.identifier ?? '').trim();
+    if (!identifier) {
+      return res.status(400).json({ error: 'Identificador de jugador requerido' });
+    }
+
+    let perfilQuery = supabaseAdmin
+      .from('jugadores_perfil')
+      .select('id, email, supabase_user_id, nombre, pais, ciudad, nivel, sede_id, foto_url');
+
+    if (identifier.includes('@')) {
+      perfilQuery = perfilQuery.eq('email', identifier);
+    } else if (UUID_REGEX.test(identifier)) {
+      perfilQuery = perfilQuery.eq('supabase_user_id', identifier);
+    } else {
+      const numericId = parseInt(identifier, 10);
+      if (Number.isNaN(numericId)) {
+        return res.status(400).json({ error: 'Identificador de jugador inválido' });
+      }
+      perfilQuery = perfilQuery.eq('id', numericId);
+    }
+
+    const { data: perfil, error: perfilErr } = await perfilQuery.maybeSingle();
+    if (perfilErr) throw perfilErr;
+    if (!perfil) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+    }
+
+    const [partidosJugados, rankingStats, sedesHabituales] = await Promise.all([
+      countPartidosJugados({
+        email: perfil.email,
+        supabaseUserId: perfil.supabase_user_id,
+      }),
+      getRankingEntryForEmail(perfil.email),
+      getSedesHabituales({
+        email: perfil.email,
+        supabaseUserId: perfil.supabase_user_id,
+        primarySedeId: perfil.sede_id,
+      }),
+    ]);
+
+    let ciudad = perfil.ciudad ?? '';
+    let pais = perfil.pais ?? '';
+
+    if (perfil.sede_id != null) {
+      const { data: sedePrincipal } = await supabaseAdmin
+        .from('sedes')
+        .select('ciudad, provincia, pais')
+        .eq('id', perfil.sede_id)
+        .maybeSingle();
+
+      if (sedePrincipal) {
+        ciudad = ciudad || sedePrincipal.ciudad || sedePrincipal.provincia || '';
+        pais = pais || sedePrincipal.pais || '';
+      }
+    }
+
+    if (!ciudad && sedesHabituales.length > 0) {
+      ciudad = sedesHabituales[0].ciudad || sedesHabituales[0].provincia || '';
+      pais = pais || sedesHabituales[0].pais || '';
+    }
+
+    res.json({
+      id: perfil.id,
+      email: perfil.email ?? null,
+      supabase_user_id: perfil.supabase_user_id ?? null,
+      nombre: perfil.nombre ?? '',
+      pais,
+      ciudad,
+      nivel: perfil.nivel ?? '',
+      categoria_ranking: rankingStats?.categoria_ranking ?? perfil.nivel ?? null,
+      foto_url: perfil.foto_url ?? null,
+      estadisticas: {
+        partidos_jugados: partidosJugados,
+        torneos: rankingStats?.torneos ?? 0,
+        ranking_position: rankingStats?.ranking_position ?? null,
+        puntos_total: rankingStats?.puntos_total ?? 0,
+      },
+      sedes_habituales: sedesHabituales.map((sede) => ({
+        id: sede.id,
+        nombre: sede.nombre,
+        ciudad: sede.ciudad ?? null,
+        provincia: sede.provincia ?? null,
+        pais: sede.pais ?? null,
+      })),
+    });
+  } catch (err) {
+    console.error('❌ Error GET /api/usuarios/perfil-publico/:identifier:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

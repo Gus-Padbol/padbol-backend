@@ -89,6 +89,8 @@ export function createPartidosRouter({ supabase, supabaseAdmin, getAuthenticated
             jugadores_count: jugadoresActuales,
             max_jugadores: partido.max_jugadores ?? 4,
             host_nombre: hostNombre,
+            host_email: partido.host_email ?? null,
+            host_user_id: partido.host_user_id ?? null,
             created_at: partido.created_at,
           };
         }),

@@ -2,4 +2,5 @@
 
 ALTER TABLE jugadores_perfil
   ADD COLUMN IF NOT EXISTS telefono TEXT,
-  ADD COLUMN IF NOT EXISTS lateralidad TEXT;
+  ADD COLUMN IF NOT EXISTS lateralidad TEXT,
+  ADD COLUMN IF NOT EXISTS ciudad TEXT;
