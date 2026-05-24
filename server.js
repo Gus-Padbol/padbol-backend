@@ -1645,6 +1645,96 @@ usuariosRouter.post('/push-token', async (req, res) => {
   }
 });
 
+// GET /api/usuarios/perfil — Current user profile from jugadores_perfil
+usuariosRouter.get('/perfil', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const email = user.email;
+    if (!email) {
+      return res.status(400).json({ error: 'Usuario sin email' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+    }
+
+    res.json({
+      nombre: data.nombre ?? '',
+      telefono: data.telefono ?? '',
+      nivel: data.nivel ?? '',
+      lateralidad: data.lateralidad ?? data.pierna_habil ?? '',
+      pais: data.pais ?? '',
+      email: data.email ?? email,
+      foto_url: data.foto_url ?? null,
+    });
+  } catch (err) {
+    console.error('❌ Error GET /api/usuarios/perfil:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/usuarios/perfil — Update jugadores_perfil for authenticated user
+usuariosRouter.put('/perfil', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const email = user.email;
+    if (!email) {
+      return res.status(400).json({ error: 'Usuario sin email' });
+    }
+
+    const { nombre, telefono, nivel, lateralidad, pais } = req.body;
+
+    const updatePayload = {
+      nombre: nombre ?? null,
+      telefono: telefono ?? null,
+      nivel: nivel ?? null,
+      lateralidad: lateralidad ?? null,
+      pais: pais ?? null,
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .update(updatePayload)
+      .eq('email', email)
+      .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url');
+
+    if (error) throw error;
+    if (!data?.length) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+    }
+
+    const perfil = data[0];
+    console.log(`✓ PUT /api/usuarios/perfil — perfil actualizado para ${email}`);
+    res.json({
+      nombre: perfil.nombre ?? '',
+      telefono: perfil.telefono ?? '',
+      nivel: perfil.nivel ?? '',
+      lateralidad: perfil.lateralidad ?? perfil.pierna_habil ?? '',
+      pais: perfil.pais ?? '',
+      email: perfil.email ?? email,
+      foto_url: perfil.foto_url ?? null,
+    });
+  } catch (err) {
+    console.error('❌ Error PUT /api/usuarios/perfil:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.use('/api/usuarios', usuariosRouter);
 
 // ===== CHECKIN =====
