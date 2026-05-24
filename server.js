@@ -1506,9 +1506,9 @@ app.post('/api/crear-preferencia', async (req, res) => {
           currency_id: moneda || 'ARS',
         }],
         back_urls: {
-          success: `${FRONTEND_URL}/pago-exitoso`,
-          failure: `${FRONTEND_URL}/pago-fallido`,
-          pending: `${FRONTEND_URL}/pago-fallido`,
+          success: 'padbolmatch://pago-exitoso',
+          failure: 'padbolmatch://pago-error',
+          pending: 'padbolmatch://pago-exitoso',
         },
         auto_return: 'approved',
         external_reference: externalReference,
@@ -1516,7 +1516,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
       },
     });
 
-    console.log(`✓ MP preferencia creada: ${response.id} | success→ ${FRONTEND_URL}/pago-exitoso | sede: ${sedeNombre || '—'}`);
+    console.log(`✓ MP preferencia creada: ${response.id} | success→ padbolmatch://pago-exitoso | sede: ${sedeNombre || '—'}`);
     res.json({ init_point: response.init_point, preference_id: response.id });
   } catch (err) {
     console.error('❌ Error POST /api/crear-preferencia:', err.message);
