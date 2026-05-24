@@ -1935,6 +1935,77 @@ usuariosRouter.put('/perfil', async (req, res) => {
   }
 });
 
+// POST /api/usuarios/foto-perfil — Upload profile photo to Supabase Storage
+usuariosRouter.post('/foto-perfil', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const email = user.email;
+    if (!email) {
+      return res.status(400).json({ error: 'Usuario sin email' });
+    }
+
+    const { foto_base64, mime_type } = req.body;
+    if (!foto_base64) {
+      return res.status(400).json({ error: 'foto_base64 es requerido' });
+    }
+
+    const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const normalizedMime = (mime_type || 'image/jpeg').toLowerCase();
+    if (!allowedMimeTypes.includes(normalizedMime)) {
+      return res.status(400).json({ error: 'mime_type de imagen no soportado' });
+    }
+
+    const base64Data = String(foto_base64).replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    if (!buffer.length) {
+      return res.status(400).json({ error: 'Imagen inválida' });
+    }
+
+    const maxBytes = 5 * 1024 * 1024;
+    if (buffer.length > maxBytes) {
+      return res.status(400).json({ error: 'La imagen supera el tamaño máximo permitido (5 MB)' });
+    }
+
+    const filePath = `${user.id}.jpg`;
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from('fotos-perfil')
+      .upload(filePath, buffer, {
+        contentType: 'image/jpeg',
+        upsert: true,
+      });
+
+    if (uploadError) throw uploadError;
+
+    const { data: publicUrlData } = supabaseAdmin.storage
+      .from('fotos-perfil')
+      .getPublicUrl(filePath);
+
+    const foto_url = publicUrlData.publicUrl;
+
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .update({ foto_url })
+      .eq('email', email)
+      .select('foto_url');
+
+    if (error) throw error;
+    if (!data?.length) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+    }
+
+    console.log(`✓ POST /api/usuarios/foto-perfil — foto guardada para ${email}`);
+    res.json({ foto_url });
+  } catch (err) {
+    console.error('❌ Error POST /api/usuarios/foto-perfil:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/usuarios/perfil-publico/:identifier — Public player profile (JWT required)
 usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
   try {
