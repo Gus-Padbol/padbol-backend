@@ -180,6 +180,37 @@ app.get('/api/sedes', async (req, res) => {
   }
 });
 
+// GET /api/sedes/:id — Single sede with full details (JWT required)
+app.get('/api/sedes/:id', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const sedeId = parseInt(req.params.id, 10);
+    if (Number.isNaN(sedeId)) {
+      return res.status(400).json({ error: 'ID de sede inválido' });
+    }
+
+    const { data, error } = await supabase
+      .from('sedes')
+      .select('*')
+      .eq('id', sedeId)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: 'Sede no encontrada' });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('❌ Error GET /api/sedes/:id:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET disponibilidad
 app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
   try {
