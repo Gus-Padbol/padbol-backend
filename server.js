@@ -9,7 +9,7 @@ import cron from 'node-cron';
 import { createEquiposUsuarioRouter } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
 import { createMembresiasRouter } from './routes/membresias.js';
-import { createPartidosAbiertosRouter, createPartidosRouter, cancelExpiredPartidos } from './routes/partidos.js';
+import { createPartidosAbiertosRouter, createPartidosRouter } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
 
 dotenv.config();
@@ -213,7 +213,19 @@ async function createMercadoPagoPreferenceInternal({
 }
 
 async function triggerPartidoCreatorPayment({ reserva, partido, sedeNombre, sedeId }) {
-  const titulo = `Partido ${sedeNombre} - ${reserva.fecha} ${String(reserva.hora).slice(0, 5)}`;
+  let resolvedSedeNombre = sedeNombre ?? reserva.sede ?? null;
+  const resolvedSedeId = sedeId ?? reserva.sede_id ?? null;
+
+  if (!resolvedSedeNombre && resolvedSedeId) {
+    const { data: sedeRow } = await supabaseAdmin
+      .from('sedes')
+      .select('nombre')
+      .eq('id', resolvedSedeId)
+      .maybeSingle();
+    resolvedSedeNombre = sedeRow?.nombre ?? 'Sede';
+  }
+
+  const titulo = `Partido ${resolvedSedeNombre} - ${reserva.fecha} ${String(reserva.hora).slice(0, 5)}`;
   const reservaData = {
     action: 'confirmar_prereserva',
     reserva_id: reserva.id,
@@ -231,8 +243,8 @@ async function triggerPartidoCreatorPayment({ reserva, partido, sedeNombre, sede
     titulo,
     precio: reserva.precio,
     moneda: reserva.moneda ?? 'ARS',
-    sedeNombre,
-    sedeId: sedeId ?? reserva.sede_id,
+    sedeNombre: resolvedSedeNombre,
+    sedeId: resolvedSedeId,
     reservaData,
     pricing: {
       base: reserva.precio_base ?? reserva.precio,
@@ -639,11 +651,16 @@ app.post('/api/reservas', async (req, res) => {
       whatsapp: contactWhatsapp,
       nivel: nivel_partido ?? nivel ?? 'Principiante',
       precio: precio != null ? parseInt(precio, 10) : 0,
-      estado: estado || 'confirmada',
+      estado: modoPartido ? 'prereserva' : (estado || 'confirmada'),
+      pago_estado: modoPartido ? 'pendiente' : undefined,
       duracion_minutos: duracion_minutos != null ? parseInt(duracion_minutos, 10) : null,
       user_id: authUser?.id ?? userIdBody ?? null,
       monto: precio != null ? parseInt(precio, 10) : null,
     };
+
+    if (!modoPartido) {
+      delete insertRow.pago_estado;
+    }
 
     const { data: reservaRows, error: insertErr } = await supabaseAdmin
       .from('reservas')
@@ -660,6 +677,7 @@ app.post('/api/reservas', async (req, res) => {
     console.log('✓ Reserva creada:', reserva.id);
 
     let partidoId = null;
+    let deadlineCancel = null;
     if (modoPartido) {
       if (!authUser) {
         return res.status(401).json({ error: 'Autenticación requerida para crear partido' });
@@ -669,18 +687,24 @@ app.post('/api/reservas', async (req, res) => {
       }
 
       const nivelPartido = nivel_partido ?? nivel ?? 'Intermedio';
+      deadlineCancel = computePartidoDeadlineCancel(fecha, hora);
 
       const { data: partido, error: partidoErr } = await supabaseAdmin
         .from('partidos_abiertos')
         .insert([{
+          reserva_id: reserva.id,
           sede_id: sedeId,
+          cancha_id: canchaNum,
           host_user_id: authUser.id,
           host_email: authUser.email ?? contactEmail,
           fecha,
           hora,
           nivel: nivelPartido,
-          estado: 'abierto',
+          estado: 'esperando_jugadores',
+          jugadores_actuales: 1,
+          jugadores_necesarios: 4,
           max_jugadores: 4,
+          deadline_cancel: deadlineCancel,
         }])
         .select('*')
         .single();
@@ -698,32 +722,35 @@ app.post('/api/reservas', async (req, res) => {
       if (hostJoinErr) throw hostJoinErr;
 
       partidoId = partido.id;
-      console.log(`✓ Partido abierto ${partidoId} creado con reserva ${reserva.id}`);
+      console.log(`✓ Partido prereserva ${partidoId} creado (sin pago) — reserva ${reserva.id}`);
     }
 
-    const { data: sedeRow } = await supabase
-      .from('sedes')
-      .select('direccion')
-      .eq('nombre', sedeNombre)
-      .maybeSingle();
+    if (!modoPartido) {
+      const { data: sedeRow } = await supabase
+        .from('sedes')
+        .select('direccion')
+        .eq('nombre', sedeNombre)
+        .maybeSingle();
 
-    if (contactWhatsapp) {
-      sendWhatsAppConfirmation(contactWhatsapp, {
-        sede: sedeNombre,
-        fecha,
-        hora,
-        cancha: canchaNum,
-        direccion: sedeRow?.direccion,
-      }).catch((err) => console.warn('⚠️ WhatsApp no enviado:', err.message));
+      if (contactWhatsapp) {
+        sendWhatsAppConfirmation(contactWhatsapp, {
+          sede: sedeNombre,
+          fecha,
+          hora,
+          cancha: canchaNum,
+          direccion: sedeRow?.direccion,
+        }).catch((err) => console.warn('⚠️ WhatsApp no enviado:', err.message));
+      }
     }
 
     const mappedReserva = mapMisReservaRow({ ...reserva, sedes: { nombre: sedeNombre } });
 
     if (modoPartido && partidoId) {
       return res.status(201).json({
-        reserva: mappedReserva,
         partido_id: partidoId,
         partido_link: `padbolmatch://partido/${partidoId}`,
+        deadline_cancel: deadlineCancel,
+        reserva_id: reserva.id,
       });
     }
 
@@ -796,8 +823,8 @@ app.post('/api/reservas/:id/confirmar', async (req, res) => {
       }).catch((err) => console.warn('⚠️ WhatsApp no enviado:', err.message));
     }
 
-    console.log(`✓ POST /api/reservas/${reservaId}/confirmar — confirmada`);
-    res.json({ reserva: mappedReserva });
+    console.log(`✓ POST /api/reservas/${reservaId}/confirmar — confirmada, pago_estado=pagado`);
+    res.json({ reserva: mappedReserva, success: true });
   } catch (err) {
     console.error('❌ Error POST /api/reservas/:id/confirmar:', err.message);
     res.status(500).json({ error: err.message });
@@ -2301,17 +2328,47 @@ Recordá llegar 10 minutos antes.
   }
 }, { timezone: 'America/Argentina/Buenos_Aires' });
 
-// ─── Cron: auto-cancel incomplete partidos past deadline ────────────────────
-cron.schedule('*/15 * * * *', async () => {
+// ─── Auto-cancel incomplete partidos past deadline (every 15 min) ───────────
+const PARTIDO_AUTO_CANCEL_MS = 15 * 60 * 1000;
+
+async function runPartidoAutoCancelCron() {
   try {
-    const cancelled = await cancelExpiredPartidos(supabaseAdmin);
-    if (cancelled > 0) {
-      console.log(`⏰ Cron partidos: ${cancelled} cancelado(s) por deadline`);
+    const now = new Date().toISOString();
+    const { data: partidos, error } = await supabaseAdmin
+      .from('partidos_abiertos')
+      .select('id, reserva_id, jugadores_actuales, jugadores_necesarios, max_jugadores')
+      .eq('estado', 'esperando_jugadores')
+      .lte('deadline_cancel', now);
+
+    if (error) throw error;
+    if (!partidos?.length) return;
+
+    for (const partido of partidos) {
+      const needed = partido.jugadores_necesarios ?? partido.max_jugadores ?? 4;
+      const current = partido.jugadores_actuales ?? 0;
+      if (current >= needed) continue;
+
+      if (partido.reserva_id) {
+        await supabaseAdmin
+          .from('reservas')
+          .update({ estado: 'cancelada', pago_estado: 'no_aplica' })
+          .eq('id', partido.reserva_id);
+      }
+
+      await supabaseAdmin
+        .from('partidos_abiertos')
+        .update({ estado: 'cancelado_por_tiempo' })
+        .eq('id', partido.id);
+
+      console.log(`[CRON] Partido ${partido.id} auto-cancelado por tiempo`);
     }
   } catch (err) {
-    console.error('❌ Cron partidos deadline - error:', err.message);
+    console.error('❌ [CRON] partidos auto-cancel error:', err.message);
   }
-}, { timezone: 'America/Argentina/Buenos_Aires' });
+}
+
+setInterval(runPartidoAutoCancelCron, PARTIDO_AUTO_CANCEL_MS);
+runPartidoAutoCancelCron();
 
 // ===== USUARIOS =====
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

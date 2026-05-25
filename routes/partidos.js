@@ -586,6 +586,7 @@ export function createPartidosRouter({
 
       let partidoCompleto = false;
       let requierePagoCreador = false;
+      let pagoUrl = null;
 
       if (newCount >= maxJugadores) {
         partidoCompleto = true;
@@ -594,22 +595,42 @@ export function createPartidosRouter({
           .update({ estado: 'completo', jugadores_actuales: newCount })
           .eq('id', partidoId);
 
-        if (partido.reserva_id && triggerPartidoCreatorPayment) {
+        let reservaId = partido.reserva_id;
+        if (!reservaId && partido.host_user_id) {
+          const { data: linkedReserva } = await supabaseAdmin
+            .from('reservas')
+            .select('*')
+            .eq('user_id', partido.host_user_id)
+            .eq('fecha', partido.fecha)
+            .eq('hora', partido.hora)
+            .in('estado', ['prereserva', 'confirmada'])
+            .maybeSingle();
+          if (linkedReserva) {
+            reservaId = linkedReserva.id;
+            await supabaseAdmin
+              .from('partidos_abiertos')
+              .update({ reserva_id: reservaId })
+              .eq('id', partidoId);
+          }
+        }
+
+        if (reservaId && triggerPartidoCreatorPayment) {
           const { data: reserva, error: reservaErr } = await supabaseAdmin
             .from('reservas')
             .select('*')
-            .eq('id', partido.reserva_id)
+            .eq('id', reservaId)
             .maybeSingle();
 
           if (!reservaErr && reserva) {
             try {
-              await triggerPartidoCreatorPayment({
+              const payment = await triggerPartidoCreatorPayment({
                 reserva,
                 partido: { ...partido, id: partidoId },
-                sedeNombre: null,
                 sedeId: partido.sede_id,
               });
               requierePagoCreador = true;
+              pagoUrl = payment.init_point ?? null;
+              console.log(`✓ Partido ${partidoId} completo — MP preference para creador ${partido.host_user_id}`);
             } catch (paymentErr) {
               console.warn(`⚠️ Pago creador partido ${partidoId}:`, paymentErr.message);
             }
@@ -624,6 +645,7 @@ export function createPartidosRouter({
         success: true,
         partido_completo: partidoCompleto,
         requiere_pago_creador: requierePagoCreador,
+        pago_url: pagoUrl,
         host_nombre: hostNombre,
         jugadores_actuales: newCount,
       });
