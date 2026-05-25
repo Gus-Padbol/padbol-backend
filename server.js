@@ -13,6 +13,8 @@ import {
   buildPartidoAbiertoInsertRow,
   createPartidosAbiertosRouter,
   createPartidosRouter,
+  filterBlockingReservas,
+  isCourtBlocked,
   logPartidoCanchaBody,
   parsePositiveInt,
   resolvePartidoCanchaId,
@@ -553,7 +555,7 @@ app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
       .eq('fecha', fecha);
     
     if (error) throw error;
-    res.json(data || []);
+    res.json(filterBlockingReservas(data || []));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -649,19 +651,14 @@ app.post('/api/reservas', async (req, res) => {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
     }
 
-    const conflictQuery = supabaseAdmin
-      .from('reservas')
-      .select('id')
-      .eq('sede', sedeNombre)
-      .eq('fecha', fecha)
-      .eq('hora', hora)
-      .eq('cancha', canchaValue)
-      .in('estado', ['prereserva', 'confirmada', 'reservada', 'pendiente']);
+    const blocked = await isCourtBlocked(supabaseAdmin, {
+      sedeNombre,
+      fecha,
+      hora,
+      cancha: canchaNum,
+    });
 
-    const { data: existentes, error: errCheck } = await conflictQuery;
-    if (errCheck) throw errCheck;
-
-    if (existentes && existentes.length > 0) {
+    if (blocked) {
       return res.status(409).json({ error: 'Este horario ya está reservado' });
     }
 

@@ -234,22 +234,41 @@ async function cancelPartidoWithReserva(supabaseAdmin, partidoId, reservaId, par
     .eq('id', partidoId);
 }
 
+const PRERESERVA_BLOCK_MS = 30 * 60 * 1000;
+
+export function isBlockingReserva(reserva, nowMs = Date.now()) {
+  if (!reserva?.estado) return false;
+  if (reserva.estado === 'confirmada') return true;
+  if (reserva.estado === 'prereserva') {
+    const createdAt = new Date(reserva.created_at).getTime();
+    if (Number.isNaN(createdAt)) return false;
+    return createdAt > nowMs - PRERESERVA_BLOCK_MS;
+  }
+  return false;
+}
+
+export function filterBlockingReservas(reservas, nowMs = Date.now()) {
+  return (reservas ?? []).filter((reserva) => isBlockingReserva(reserva, nowMs));
+}
+
 async function isCourtBlocked(supabaseAdmin, { sedeNombre, fecha, hora, cancha }) {
   if (!sedeNombre) return false;
 
   const canchaValue = normalizeReservaCancha(cancha);
   const { data, error } = await supabaseAdmin
     .from('reservas')
-    .select('id')
+    .select('id, estado, created_at')
     .eq('sede', sedeNombre)
     .eq('fecha', fecha)
     .eq('hora', hora)
     .eq('cancha', canchaValue)
-    .in('estado', ['prereserva', 'confirmada', 'reservada', 'pendiente']);
+    .in('estado', ['confirmada', 'prereserva']);
 
   if (error) throw error;
-  return (data ?? []).length > 0;
+  return filterBlockingReservas(data).length > 0;
 }
+
+export { isCourtBlocked };
 
 export async function cancelExpiredPartidos(supabaseAdmin) {
   const now = new Date().toISOString();
