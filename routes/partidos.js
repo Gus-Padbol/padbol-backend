@@ -96,34 +96,128 @@ function normalizeReservaCancha(cancha) {
   return String(cancha);
 }
 
+export function parsePositiveInt(value) {
+  if (value == null || value === '') return null;
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 export function logPartidoCanchaBody(body = {}, label = 'partido') {
   console.log(`[${label}] cancha body:`, {
     cancha: body.cancha ?? null,
     cancha_id: body.cancha_id ?? null,
     cancha_nombre: body.cancha_nombre ?? null,
     canchaSeleccionada: body.canchaSeleccionada ?? null,
+    sede_id: body.sede_id ?? null,
+    sede: body.sede ?? null,
   });
 }
 
+export function resolvePartidoCanchaId(body = {}) {
+  const fromId = parsePositiveInt(body.cancha_id);
+  if (fromId != null) return fromId;
+
+  const textRaw = body.cancha ?? body.cancha_nombre ?? body.canchaSeleccionada;
+  if (textRaw == null || String(textRaw).trim() === '') return null;
+
+  const str = String(textRaw).trim();
+  const labeled = str.match(/^cancha\s*(\d+)$/i);
+  if (labeled) return parsePositiveInt(labeled[1]);
+  if (/^\d+$/.test(str)) return parsePositiveInt(str);
+  return null;
+}
+
 export function resolvePartidoCanchaNombre(body = {}) {
-  const raw = body.cancha ?? body.cancha_nombre ?? body.canchaSeleccionada ?? body.cancha_id;
-  if (raw != null && String(raw).trim() !== '') {
-    const str = String(raw).trim();
+  const textRaw = body.cancha ?? body.cancha_nombre ?? body.canchaSeleccionada;
+  if (textRaw != null && String(textRaw).trim() !== '') {
+    const str = String(textRaw).trim();
     if (/^\d+$/.test(str)) return `Cancha ${str}`;
     return str;
   }
+
+  const canchaId = resolvePartidoCanchaId(body);
+  if (canchaId != null) return `Cancha ${canchaId}`;
   return 'Cancha 1';
 }
 
-function extractCanchaNumeric(body = {}) {
-  const raw = body.cancha_id ?? body.cancha ?? body.cancha_nombre ?? body.canchaSeleccionada;
-  if (raw == null || String(raw).trim() === '') return 1;
-  const str = String(raw).trim();
-  const labeled = str.match(/^cancha\s*(\d+)$/i);
-  if (labeled) return parseInt(labeled[1], 10);
-  const num = parseInt(str, 10);
-  if (!Number.isNaN(num)) return num;
-  return 1;
+export async function resolveSedeRow(supabaseAdmin, { sede_id, sede, sede_nombre }) {
+  const byId = parsePositiveInt(sede_id);
+  if (byId != null) {
+    const { data, error } = await supabaseAdmin
+      .from('sedes')
+      .select('id, nombre')
+      .eq('id', byId)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return data;
+  }
+
+  const nombre = [sede, sede_nombre].find((value) => value != null && String(value).trim() !== '');
+  if (nombre) {
+    const { data, error } = await supabaseAdmin
+      .from('sedes')
+      .select('id, nombre')
+      .eq('nombre', String(nombre).trim())
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return data;
+  }
+
+  return null;
+}
+
+export function buildPartidoAbiertoInsertRow({
+  sedeRow,
+  body = {},
+  reservaId = null,
+  canchaNombre,
+  capitanFields = {},
+  fecha,
+  hora,
+  nivel,
+  estado,
+  jugadoresConfirmados = 1,
+  jugadoresRequeridos = 4,
+  deadlineCancel = null,
+  duracionMinutos = null,
+}) {
+  const sedeId = parsePositiveInt(sedeRow?.id);
+  if (sedeId == null) {
+    throw new Error('sede_id inválido para partido abierto');
+  }
+
+  const row = {
+    sede_id: sedeId,
+    sede_nombre: sedeRow?.nombre ?? null,
+    cancha: canchaNombre,
+    ...capitanFields,
+    fecha,
+    hora,
+    nivel,
+    estado,
+    jugadores_confirmados: parsePositiveInt(jugadoresConfirmados) ?? 1,
+    jugadores_requeridos: parsePositiveInt(jugadoresRequeridos) ?? 4,
+  };
+
+  if (reservaId != null) {
+    row.reserva_id = reservaId;
+  }
+
+  const canchaId = resolvePartidoCanchaId(body);
+  if (canchaId != null) {
+    row.cancha_id = canchaId;
+  }
+
+  const parsedDuration = parsePositiveInt(duracionMinutos ?? body.duracion_minutos ?? body.duracion);
+  if (parsedDuration != null) {
+    row.duracion_minutos = parsedDuration;
+  }
+
+  if (deadlineCancel) {
+    row.deadline_cancel = deadlineCancel;
+  }
+
+  return row;
 }
 
 async function cancelPartidoWithReserva(supabaseAdmin, partidoId, reservaId, partidoEstado) {
@@ -396,6 +490,8 @@ export function createPartidosRouter({
 
       const {
         sede_id,
+        sede,
+        sede_nombre,
         cancha_id,
         cancha,
         cancha_nombre,
@@ -415,22 +511,15 @@ export function createPartidosRouter({
 
       logPartidoCanchaBody(req.body, 'POST /api/partidos/crear-con-prereserva');
 
-      const sedeId = parseInt(sede_id, 10);
       const canchaNombre = resolvePartidoCanchaNombre(req.body);
-      const canchaNum = extractCanchaNumeric(req.body);
-      const durationMinutes = parseInt(duracion_minutos ?? duracion, 10);
+      const canchaNum = resolvePartidoCanchaId(req.body) ?? 1;
+      const durationMinutes = parsePositiveInt(duracion_minutos ?? duracion);
 
-      if (!sedeId || !fecha || !hora || !nivel) {
+      if (!fecha || !hora || !nivel) {
         return res.status(400).json({ error: 'Faltan campos: sede_id, cancha, fecha, hora, nivel' });
       }
 
-      const { data: sedeRow, error: sedeErr } = await supabaseAdmin
-        .from('sedes')
-        .select('id, nombre')
-        .eq('id', sedeId)
-        .maybeSingle();
-
-      if (sedeErr) throw sedeErr;
+      const sedeRow = await resolveSedeRow(supabaseAdmin, { sede_id, sede, sede_nombre });
       if (!sedeRow) {
         return res.status(404).json({ error: 'Sede no encontrada' });
       }
@@ -458,7 +547,7 @@ export function createPartidosRouter({
         ?? metadata.whatsapp
         ?? metadata.telefono
         ?? '';
-      const totalPrecio = precio != null ? parseInt(precio, 10) : 0;
+      const totalPrecio = precio != null ? parsePositiveInt(precio) ?? 0 : 0;
       const canchaValue = normalizeReservaCancha(canchaNum);
       const deadlineCancel = resolveDeadline(fecha, hora);
 
@@ -477,7 +566,7 @@ export function createPartidosRouter({
           precio: totalPrecio,
           estado: 'prereserva',
           pago_estado: 'pendiente',
-          duracion_minutos: Number.isNaN(durationMinutes) ? null : durationMinutes,
+          duracion_minutos: durationMinutes,
           user_id: user.id,
         }])
         .select('*');
@@ -491,20 +580,19 @@ export function createPartidosRouter({
 
       const { data: partido, error: partidoErr } = await supabaseAdmin
         .from('partidos_abiertos')
-        .insert([{
-          reserva_id: reserva.id,
-          sede_id: sedeId,
-          sede_nombre: sedeRow.nombre,
-          cancha: canchaNombre,
-          ...buildCapitanFields(user, { nombre: contactNombre, email: contactEmail }),
+        .insert([buildPartidoAbiertoInsertRow({
+          sedeRow,
+          body: req.body,
+          reservaId: reserva.id,
+          canchaNombre,
+          capitanFields: buildCapitanFields(user, { nombre: contactNombre, email: contactEmail }),
           fecha,
           hora,
           nivel,
           estado: 'esperando_jugadores',
-          jugadores_confirmados: 1,
-          jugadores_requeridos: 4,
-          deadline_cancel: deadlineCancel,
-        }])
+          deadlineCancel,
+          duracionMinutos: durationMinutes,
+        })])
         .select('*')
         .single();
 
@@ -867,29 +955,27 @@ export function createPartidosRouter({
         return res.status(status).json({ error: authError });
       }
 
-      if (!sede_id || !fecha || !hora || !nivel) {
+      if (!fecha || !hora || !nivel) {
         return res.status(400).json({ error: 'Faltan campos: sede_id, fecha, hora, nivel' });
       }
 
-      const { data: sedeRow } = await supabaseAdmin
-        .from('sedes')
-        .select('id, nombre')
-        .eq('id', parseInt(sede_id, 10))
-        .maybeSingle();
+      const sedeRow = await resolveSedeRow(supabaseAdmin, { sede_id, sede: req.body.sede, sede_nombre: req.body.sede_nombre });
+      if (!sedeRow) {
+        return res.status(404).json({ error: 'Sede no encontrada' });
+      }
 
       const { data: partido, error: insertErr } = await supabaseAdmin
         .from('partidos_abiertos')
-        .insert([{
-          sede_id: parseInt(sede_id, 10),
-          sede_nombre: sedeRow?.nombre ?? null,
-          ...buildCapitanFields(user),
+        .insert([buildPartidoAbiertoInsertRow({
+          sedeRow,
+          body: req.body,
+          canchaNombre: resolvePartidoCanchaNombre(req.body),
+          capitanFields: buildCapitanFields(user),
           fecha,
           hora,
           nivel,
           estado: 'abierto',
-          jugadores_confirmados: 1,
-          jugadores_requeridos: 4,
-        }])
+        })])
         .select('*')
         .single();
 

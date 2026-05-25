@@ -9,7 +9,15 @@ import cron from 'node-cron';
 import { createEquiposUsuarioRouter } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
 import { createMembresiasRouter } from './routes/membresias.js';
-import { createPartidosAbiertosRouter, createPartidosRouter, logPartidoCanchaBody, resolvePartidoCanchaNombre } from './routes/partidos.js';
+import {
+  buildPartidoAbiertoInsertRow,
+  createPartidosAbiertosRouter,
+  createPartidosRouter,
+  logPartidoCanchaBody,
+  parsePositiveInt,
+  resolvePartidoCanchaId,
+  resolvePartidoCanchaNombre,
+} from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
 
 dotenv.config();
@@ -608,9 +616,9 @@ app.post('/api/reservas', async (req, res) => {
     }
 
     let sedeNombre = sede;
-    let sedeId = sedeIdBody != null ? parseInt(sedeIdBody, 10) : null;
+    let sedeId = parsePositiveInt(sedeIdBody);
 
-    if (sedeId && !sedeNombre) {
+    if (sedeId != null && !sedeNombre) {
       const { data: sedeRow } = await supabaseAdmin
         .from('sedes')
         .select('nombre')
@@ -619,27 +627,23 @@ app.post('/api/reservas', async (req, res) => {
       sedeNombre = sedeRow?.nombre ?? null;
     }
 
-    if (!sedeId && sedeNombre) {
+    if (sedeId == null && sedeNombre) {
       const { data: sedeRow } = await supabaseAdmin
         .from('sedes')
         .select('id')
         .eq('nombre', sedeNombre)
         .maybeSingle();
-      sedeId = sedeRow?.id ?? null;
+      sedeId = parsePositiveInt(sedeRow?.id);
     }
 
     if (!sedeNombre) {
       return res.status(400).json({ error: 'Sede no encontrada' });
     }
 
-    const canchaRaw = cancha ?? cancha_id ?? cancha_nombre ?? canchaSeleccionada;
-    let canchaNum = canchaRaw != null ? parseInt(canchaRaw, 10) : null;
-    if (canchaNum == null || Number.isNaN(canchaNum)) {
-      const labeled = canchaRaw != null ? String(canchaRaw).trim().match(/^cancha\s*(\d+)$/i) : null;
-      canchaNum = labeled ? parseInt(labeled[1], 10) : 1;
-    }
+    const canchaNum = resolvePartidoCanchaId(req.body) ?? 1;
     const canchaValue = normalizeReservaCancha(canchaNum);
     const partidoCanchaNombre = resolvePartidoCanchaNombre(req.body);
+    const durationMinutes = parsePositiveInt(duracion_minutos);
 
     if (!modoPartido && !userIdBody && !contactWhatsapp) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -671,10 +675,10 @@ app.post('/api/reservas', async (req, res) => {
       telefono: contactWhatsapp,
       whatsapp: contactWhatsapp,
       nivel: nivel_partido ?? nivel ?? 'Principiante',
-      precio: precio != null ? parseInt(precio, 10) : 0,
+      precio: precio != null ? parsePositiveInt(precio) ?? 0 : 0,
       estado: modoPartido ? 'prereserva' : (estado || 'confirmada'),
       pago_estado: modoPartido ? 'pendiente' : undefined,
-      duracion_minutos: duracion_minutos != null ? parseInt(duracion_minutos, 10) : null,
+      duracion_minutos: durationMinutes,
       user_id: authUser?.id ?? userIdBody ?? null,
     };
 
@@ -702,7 +706,7 @@ app.post('/api/reservas', async (req, res) => {
       if (!authUser) {
         return res.status(401).json({ error: 'Autenticación requerida para crear partido' });
       }
-      if (!sedeId) {
+      if (sedeId == null) {
         return res.status(400).json({ error: 'sede_id requerido para partido abierto' });
       }
 
@@ -711,25 +715,26 @@ app.post('/api/reservas', async (req, res) => {
 
       const { data: partido, error: partidoErr } = await supabaseAdmin
         .from('partidos_abiertos')
-        .insert([{
-          reserva_id: reserva.id,
-          sede_id: sedeId,
-          sede_nombre: sedeNombre,
-          cancha: partidoCanchaNombre,
-          capitan_user_id: authUser.id,
-          capitan_email: authUser.email ?? contactEmail,
-          capitan_nombre: contactNombre,
-          capitan_foto_url: authUser.user_metadata?.avatar_url
-            ?? authUser.user_metadata?.picture
-            ?? null,
+        .insert([buildPartidoAbiertoInsertRow({
+          sedeRow: { id: sedeId, nombre: sedeNombre },
+          body: req.body,
+          reservaId: reserva.id,
+          canchaNombre: partidoCanchaNombre,
+          capitanFields: {
+            capitan_user_id: authUser.id,
+            capitan_email: authUser.email ?? contactEmail,
+            capitan_nombre: contactNombre,
+            capitan_foto_url: authUser.user_metadata?.avatar_url
+              ?? authUser.user_metadata?.picture
+              ?? null,
+          },
           fecha,
           hora,
           nivel: nivelPartido,
           estado: 'esperando_jugadores',
-          jugadores_confirmados: 1,
-          jugadores_requeridos: 4,
-          deadline_cancel: deadlineCancel,
-        }])
+          deadlineCancel,
+          duracionMinutos: durationMinutes,
+        })])
         .select('*')
         .single();
 
