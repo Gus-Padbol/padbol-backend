@@ -203,11 +203,6 @@ export function buildPartidoAbiertoInsertRow({
     row.reserva_id = reservaId;
   }
 
-  const canchaId = resolvePartidoCanchaId(body);
-  if (canchaId != null) {
-    row.cancha_id = canchaId;
-  }
-
   const parsedDuration = parsePositiveInt(duracionMinutos ?? body.duracion_minutos ?? body.duracion);
   if (parsedDuration != null) {
     row.duracion_minutos = parsedDuration;
