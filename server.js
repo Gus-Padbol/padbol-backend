@@ -212,9 +212,30 @@ async function createMercadoPagoPreferenceInternal({
   };
 }
 
+async function resolveSedeIdByNombre(sedeNombre) {
+  if (!sedeNombre) return null;
+
+  const { data: sedeRow } = await supabaseAdmin
+    .from('sedes')
+    .select('id')
+    .eq('nombre', sedeNombre)
+    .maybeSingle();
+
+  return sedeRow?.id ?? null;
+}
+
+function normalizeReservaCancha(cancha) {
+  if (cancha == null || cancha === '') return null;
+  return String(cancha);
+}
+
 async function triggerPartidoCreatorPayment({ reserva, partido, sedeNombre, sedeId }) {
   let resolvedSedeNombre = sedeNombre ?? reserva.sede ?? null;
-  const resolvedSedeId = sedeId ?? reserva.sede_id ?? null;
+  let resolvedSedeId = sedeId ?? null;
+
+  if (!resolvedSedeId && resolvedSedeNombre) {
+    resolvedSedeId = await resolveSedeIdByNombre(resolvedSedeNombre);
+  }
 
   if (!resolvedSedeNombre && resolvedSedeId) {
     const { data: sedeRow } = await supabaseAdmin
@@ -230,8 +251,8 @@ async function triggerPartidoCreatorPayment({ reserva, partido, sedeNombre, sede
     action: 'confirmar_prereserva',
     reserva_id: reserva.id,
     partido_id: partido.id,
-    sede_id: sedeId ?? reserva.sede_id,
-    sede: sedeNombre ?? reserva.sede,
+    sede_id: resolvedSedeId,
+    sede: resolvedSedeNombre ?? reserva.sede,
     fecha: reserva.fecha,
     hora: reserva.hora,
     cancha: reserva.cancha,
@@ -338,7 +359,7 @@ function mapMisReservaRow(row) {
     id: row.id,
     sede_nombre: sedeNombre,
     sede: sedeNombre,
-    sede_id: row.sede_id ?? null,
+    sede_id: null,
     fecha: row.fecha,
     hora: row.hora,
     duracion_minutos: row.duracion_minutos ?? null,
@@ -398,10 +419,6 @@ function parseCheckinQrCode(qrCode) {
 }
 
 async function reservaMatchesSedeId(reserva, sedeId) {
-  if (reserva.sede_id != null) {
-    return Number(reserva.sede_id) === Number(sedeId);
-  }
-
   const { data: sedeRow } = await supabaseAdmin
     .from('sedes')
     .select('id, nombre')
@@ -613,24 +630,20 @@ app.post('/api/reservas', async (req, res) => {
     if (canchaNum == null || Number.isNaN(canchaNum)) {
       return res.status(400).json({ error: 'Falta cancha válida' });
     }
+    const canchaValue = normalizeReservaCancha(canchaNum);
 
     if (!modoPartido && !userIdBody && !contactWhatsapp) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
     }
 
-    let conflictQuery = supabaseAdmin
+    const conflictQuery = supabaseAdmin
       .from('reservas')
       .select('id')
+      .eq('sede', sedeNombre)
       .eq('fecha', fecha)
       .eq('hora', hora)
-      .eq('cancha', canchaNum)
+      .eq('cancha', canchaValue)
       .in('estado', ['prereserva', 'confirmada', 'reservada', 'pendiente']);
-
-    if (sedeId) {
-      conflictQuery = conflictQuery.eq('sede_id', sedeId);
-    } else {
-      conflictQuery = conflictQuery.eq('sede', sedeNombre);
-    }
 
     const { data: existentes, error: errCheck } = await conflictQuery;
     if (errCheck) throw errCheck;
@@ -641,10 +654,9 @@ app.post('/api/reservas', async (req, res) => {
 
     const insertRow = {
       sede: sedeNombre,
-      sede_id: sedeId,
       fecha,
       hora,
-      cancha: canchaNum,
+      cancha: canchaValue,
       nombre: contactNombre,
       email: contactEmail,
       telefono: contactWhatsapp,
@@ -694,7 +706,6 @@ app.post('/api/reservas', async (req, res) => {
         .insert([{
           reserva_id: reserva.id,
           sede_id: sedeId,
-          cancha_id: canchaNum,
           host_user_id: authUser.id,
           host_email: authUser.email ?? contactEmail,
           fecha,
@@ -860,10 +871,7 @@ app.get('/api/reservas/mis-reservas', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('reservas')
-      .select(`
-        *,
-        sedes ( nombre )
-      `)
+      .select('*')
       .or(filters.join(','))
       .order('fecha', { ascending: false })
       .order('hora', { ascending: false });
@@ -904,7 +912,7 @@ app.put('/api/reservas/:id', async (req, res) => {
     if (sede     !== undefined) updates.sede     = sede;
     if (fecha    !== undefined) updates.fecha    = fecha;
     if (hora     !== undefined) updates.hora     = hora;
-    if (cancha   !== undefined) updates.cancha   = cancha !== null ? parseInt(cancha) : null;
+    if (cancha   !== undefined) updates.cancha   = cancha !== null ? normalizeReservaCancha(cancha) : null;
     if (nombre   !== undefined) updates.nombre   = nombre;
     if (email    !== undefined) updates.email    = email;
     if (precio   !== undefined) updates.precio   = precio !== null ? parseInt(precio) : null;
@@ -2515,15 +2523,10 @@ async function getSedesHabituales({ email, supabaseUserId, primarySedeId }) {
   if (email) {
     const { data: reservas } = await supabaseAdmin
       .from('reservas')
-      .select('sede_id, sede')
+      .select('sede')
       .eq('email', email);
 
     for (const reserva of reservas || []) {
-      if (reserva.sede_id != null) {
-        addSede(reserva.sede_id);
-        continue;
-      }
-
       if (reserva.sede) {
         const { data: sedeRow } = await supabaseAdmin
           .from('sedes')

@@ -32,7 +32,6 @@ const PARTIDO_SELECT = `
   id,
   sede_id,
   reserva_id,
-  cancha_id,
   host_user_id,
   host_email,
   fecha,
@@ -60,6 +59,11 @@ function computeDeadlineCancel(fecha, hora) {
   return new Date(matchDate.getTime() - 8 * 60 * 60 * 1000).toISOString();
 }
 
+function normalizeReservaCancha(cancha) {
+  if (cancha == null || cancha === '') return null;
+  return String(cancha);
+}
+
 async function cancelPartidoWithReserva(supabaseAdmin, partidoId, reservaId, partidoEstado) {
   if (reservaId) {
     await supabaseAdmin
@@ -74,22 +78,19 @@ async function cancelPartidoWithReserva(supabaseAdmin, partidoId, reservaId, par
     .eq('id', partidoId);
 }
 
-async function isCourtBlocked(supabaseAdmin, { sedeId, sedeNombre, fecha, hora, cancha }) {
-  let query = supabaseAdmin
+async function isCourtBlocked(supabaseAdmin, { sedeNombre, fecha, hora, cancha }) {
+  if (!sedeNombre) return false;
+
+  const canchaValue = normalizeReservaCancha(cancha);
+  const { data, error } = await supabaseAdmin
     .from('reservas')
     .select('id')
+    .eq('sede', sedeNombre)
     .eq('fecha', fecha)
     .eq('hora', hora)
-    .eq('cancha', cancha)
+    .eq('cancha', canchaValue)
     .in('estado', ['prereserva', 'confirmada', 'reservada', 'pendiente']);
 
-  if (sedeId) {
-    query = query.eq('sede_id', sedeId);
-  } else if (sedeNombre) {
-    query = query.eq('sede', sedeNombre);
-  }
-
-  const { data, error } = await query;
   if (error) throw error;
   return (data ?? []).length > 0;
 }
@@ -204,7 +205,6 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     id: partido.id,
     sede_id: partido.sede_id,
     reserva_id: partido.reserva_id ?? null,
-    cancha_id: partido.cancha_id ?? null,
     sede_nombre: partido.sedes?.nombre ?? null,
     fecha: partido.fecha,
     hora: formatHora(partido.hora),
@@ -348,7 +348,7 @@ export function createPartidosRouter({
       const durationMinutes = parseInt(duracion_minutos ?? duracion, 10);
 
       if (!sedeId || !fecha || !hora || !nivel || Number.isNaN(canchaNum)) {
-        return res.status(400).json({ error: 'Faltan campos: sede_id, cancha_id, fecha, hora, nivel' });
+        return res.status(400).json({ error: 'Faltan campos: sede_id, cancha, fecha, hora, nivel' });
       }
 
       const { data: sedeRow, error: sedeErr } = await supabaseAdmin
@@ -363,7 +363,6 @@ export function createPartidosRouter({
       }
 
       const blocked = await isCourtBlocked(supabaseAdmin, {
-        sedeId,
         sedeNombre: sedeRow.nombre,
         fecha,
         hora,
@@ -387,16 +386,16 @@ export function createPartidosRouter({
         ?? metadata.telefono
         ?? '';
       const totalPrecio = precio != null ? parseInt(precio, 10) : 0;
+      const canchaValue = normalizeReservaCancha(canchaNum);
       const deadlineCancel = resolveDeadline(fecha, hora);
 
       const { data: reservaRows, error: reservaErr } = await supabaseAdmin
         .from('reservas')
         .insert([{
           sede: sedeRow.nombre,
-          sede_id: sedeId,
           fecha,
           hora,
-          cancha: canchaNum,
+          cancha: canchaValue,
           nombre: contactNombre,
           email: contactEmail,
           telefono: contactWhatsapp,
@@ -423,7 +422,6 @@ export function createPartidosRouter({
         .insert([{
           reserva_id: reserva.id,
           sede_id: sedeId,
-          cancha_id: canchaNum,
           host_user_id: user.id,
           host_email: contactEmail,
           fecha,
