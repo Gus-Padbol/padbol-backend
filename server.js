@@ -732,7 +732,7 @@ app.post('/api/reservas', async (req, res) => {
         deadlineCancel,
         duracionMinutos: durationMinutes,
       });
-      console.log('[DEBUG INSERT partidos_abiertos]', partidoInsert);
+      console.log('[DEBUG partidos_abiertos INSERT]', JSON.stringify(partidoInsert));
 
       const { data: partido, error: partidoErr } = await supabaseAdmin
         .from('partidos_abiertos')

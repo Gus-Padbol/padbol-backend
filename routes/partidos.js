@@ -240,6 +240,14 @@ export async function resolveSedeRow(supabaseAdmin, { sede_id, sede, sede_nombre
   return null;
 }
 
+function requirePositiveInt(value, fieldName) {
+  const parsed = parsePositiveInt(value);
+  if (parsed == null) {
+    throw new Error(`${fieldName} inválido para partido abierto: ${JSON.stringify(value)}`);
+  }
+  return parsed;
+}
+
 export function buildPartidoAbiertoInsertRow({
   sedeRow,
   body = {},
@@ -255,26 +263,23 @@ export function buildPartidoAbiertoInsertRow({
   deadlineCancel = null,
   duracionMinutos = null,
 }) {
-  const sedeId = parsePositiveInt(sedeRow?.id);
-  if (sedeId == null) {
-    throw new Error('sede_id inválido para partido abierto');
-  }
+  const sedeId = requirePositiveInt(sedeRow?.id, 'sede_id');
 
   const row = {
+    ...capitanFields,
     sede_id: sedeId,
     sede_nombre: asText(sedeRow?.nombre),
     cancha: asText(canchaNombre),
-    ...capitanFields,
     fecha: asText(fecha),
     hora: asText(hora),
     nivel: asText(nivel),
     estado: asText(estado),
-    jugadores_confirmados: parsePositiveInt(jugadoresConfirmados) ?? 1,
-    jugadores_requeridos: parsePositiveInt(jugadoresRequeridos) ?? 4,
+    jugadores_confirmados: requirePositiveInt(jugadoresConfirmados ?? 1, 'jugadores_confirmados'),
+    jugadores_requeridos: requirePositiveInt(jugadoresRequeridos ?? 4, 'jugadores_requeridos'),
   };
 
   if (reservaId != null) {
-    row.reserva_id = parsePositiveInt(reservaId) ?? reservaId;
+    row.reserva_id = requirePositiveInt(reservaId, 'reserva_id');
   }
 
   const parsedDuration = parsePositiveInt(duracionMinutos ?? body.duracion_minutos ?? body.duracion);
@@ -689,7 +694,7 @@ export function createPartidosRouter({
         deadlineCancel,
         duracionMinutos: durationMinutes,
       });
-      console.log('[DEBUG INSERT partidos_abiertos]', partidoInsert);
+      console.log('[DEBUG partidos_abiertos INSERT]', JSON.stringify(partidoInsert));
 
       const { data: partido, error: partidoErr } = await supabaseAdmin
         .from('partidos_abiertos')
@@ -1075,7 +1080,7 @@ export function createPartidosRouter({
         nivel,
         estado: 'abierto',
       });
-      console.log('[DEBUG INSERT partidos_abiertos]', partidoInsert);
+      console.log('[DEBUG partidos_abiertos INSERT]', JSON.stringify(partidoInsert));
 
       const { data: partido, error: insertErr } = await supabaseAdmin
         .from('partidos_abiertos')
