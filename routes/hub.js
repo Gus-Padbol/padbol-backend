@@ -85,16 +85,11 @@ function buildResponseFromRows(rows, deporte) {
   }, {});
 }
 
-export function createHubRouter({ supabaseAdmin, getAuthenticatedUser }) {
+export function createHubRouter({ supabaseAdmin }) {
   const router = express.Router();
 
   router.get('/imagenes', async (req, res) => {
     try {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) {
-        return res.status(status).json({ error: authError });
-      }
-
       const deporte = String(req.query.deporte ?? 'padbol').trim().toLowerCase();
       if (!VALID_DEPORTES.has(deporte)) {
         return res.status(400).json({ error: 'deporte inválido' });

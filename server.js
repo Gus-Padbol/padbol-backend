@@ -1383,7 +1383,7 @@ app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, 
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser }));
-app.use('/api/hub', createHubRouter({ supabaseAdmin, getAuthenticatedUser }));
+app.use('/api/hub', createHubRouter({ supabaseAdmin }));
 
 // ===== PARTIDOS (torneos — rutas legacy) =====
 app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
