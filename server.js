@@ -2229,7 +2229,7 @@ usuariosRouter.get('/perfil', async (req, res) => {
 
     const filters = buildUserEmailOrIdFilters(user, {
       emailField: 'email',
-      userIdFields: ['supabase_user_id'],
+      userIdFields: ['user_id'],
     });
 
     if (filters.length === 0) {
