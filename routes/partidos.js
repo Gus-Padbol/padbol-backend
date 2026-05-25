@@ -402,7 +402,6 @@ export function createPartidosRouter({
           whatsapp: contactWhatsapp,
           nivel,
           precio: totalPrecio,
-          monto: totalPrecio,
           estado: 'prereserva',
           pago_estado: 'pendiente',
           duracion_minutos: Number.isNaN(durationMinutes) ? null : durationMinutes,

@@ -268,8 +268,8 @@ async function triggerPartidoCreatorPayment({ reserva, partido, sedeNombre, sede
     sedeId: resolvedSedeId,
     reservaData,
     pricing: {
-      base: reserva.precio_base ?? reserva.precio,
-      fee: reserva.platform_fee ?? 0,
+      base: reserva.precio,
+      fee: 0,
       total: reserva.precio,
     },
   });
@@ -365,8 +365,8 @@ function mapMisReservaRow(row) {
     duracion_minutos: row.duracion_minutos ?? null,
     cancha: row.cancha ?? null,
     estado: row.estado ?? null,
-    monto: row.monto ?? row.precio ?? null,
-    precio: row.precio ?? row.monto ?? null,
+    precio: row.precio ?? null,
+    monto_pagado: row.monto_pagado ?? null,
     moneda: row.moneda ?? 'ARS',
     checkin_realizado: row.checkin_realizado ?? false,
     created_at: row.created_at ?? null,
@@ -445,7 +445,6 @@ async function getSedeNombre(reserva, sedeId) {
 function reservaBelongsToUser(reserva, user, qrUserId) {
   if (user.email && reserva.email && reserva.email === user.email) return true;
   if (reserva.user_id && reserva.user_id === user.id) return true;
-  if (reserva.supabase_user_id && reserva.supabase_user_id === user.id) return true;
   if (qrUserId && qrUserId === user.id) return true;
   return false;
 }
@@ -667,7 +666,6 @@ app.post('/api/reservas', async (req, res) => {
       pago_estado: modoPartido ? 'pendiente' : undefined,
       duracion_minutos: duracion_minutos != null ? parseInt(duracion_minutos, 10) : null,
       user_id: authUser?.id ?? userIdBody ?? null,
-      monto: precio != null ? parseInt(precio, 10) : null,
     };
 
     if (!modoPartido) {
@@ -809,6 +807,7 @@ app.post('/api/reservas/:id/confirmar', async (req, res) => {
       .update({
         estado: 'confirmada',
         pago_estado: 'pagado',
+        monto_pagado: reserva.precio ?? null,
       })
       .eq('id', reservaId)
       .select('*');
@@ -866,7 +865,7 @@ app.get('/api/reservas/mis-reservas', async (req, res) => {
     }
 
     const filters = buildUserEmailOrIdFilters(user, {
-      userIdFields: ['user_id', 'supabase_user_id'],
+      userIdFields: ['user_id'],
     });
 
     const { data, error } = await supabaseAdmin
@@ -906,7 +905,7 @@ app.get('/api/ingresos', async (req, res) => {
 app.put('/api/reservas/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { sede, fecha, hora, cancha, nombre, email, precio, duracion, estado } = req.body;
+    const { sede, fecha, hora, cancha, nombre, email, precio, duracion, duracion_minutos, estado } = req.body;
 
     const updates = {};
     if (sede     !== undefined) updates.sede     = sede;
@@ -916,7 +915,10 @@ app.put('/api/reservas/:id', async (req, res) => {
     if (nombre   !== undefined) updates.nombre   = nombre;
     if (email    !== undefined) updates.email    = email;
     if (precio   !== undefined) updates.precio   = precio !== null ? parseInt(precio) : null;
-    if (duracion !== undefined) updates.duracion = duracion !== null ? parseInt(duracion) : null;
+    const durationValue = duracion_minutos ?? duracion;
+    if (durationValue !== undefined) {
+      updates.duracion_minutos = durationValue !== null ? parseInt(durationValue, 10) : null;
+    }
     if (estado   !== undefined) updates.estado   = estado;
 
     const { data, error } = await supabase
