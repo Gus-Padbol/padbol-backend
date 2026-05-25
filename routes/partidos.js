@@ -32,6 +32,7 @@ const PARTIDO_SELECT = `
   id,
   sede_id,
   sede_nombre,
+  cancha,
   reserva_id,
   capitan_user_id,
   capitan_email,
@@ -212,6 +213,9 @@ export function buildPartidoAbiertoInsertRow({
     row.deadline_cancel = deadlineCancel;
   }
 
+  // partidos_abiertos uses text cancha only — never persist cancha_id
+  delete row.cancha_id;
+
   return row;
 }
 
@@ -382,6 +386,7 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     sede_id: partido.sede_id,
     reserva_id: partido.reserva_id ?? null,
     sede_nombre: partido.sede_nombre ?? partido.sedes?.nombre ?? null,
+    cancha: partido.cancha ?? null,
     fecha: partido.fecha,
     hora: formatHora(partido.hora),
     nivel: partido.nivel,
