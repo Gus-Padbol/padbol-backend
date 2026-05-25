@@ -1383,6 +1383,8 @@ app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, 
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser }));
+
+// ===== HUB (action card images — public GET /api/hub/imagenes) =====
 app.use('/api/hub', createHubRouter({ supabaseAdmin }));
 
 // ===== PARTIDOS (torneos — rutas legacy) =====
@@ -2580,4 +2582,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Padbol Match API running on port ${PORT}`);
   console.log(`📊 Supabase: ${SUPABASE_URL}`);
   console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
+  console.log('🖼️ Hub router mounted at GET /api/hub/imagenes');
 });
