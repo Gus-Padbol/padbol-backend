@@ -26,7 +26,7 @@ function isMatchPast(fecha, hora) {
   return !Number.isNaN(matchDate.getTime()) && matchDate.getTime() <= Date.now();
 }
 
-const OPEN_JOIN_STATES = ['esperando_jugadores', 'abierto'];
+const OPEN_JOIN_STATES = ['abierto'];
 
 const PARTIDO_SELECT = `
   id,
@@ -257,7 +257,7 @@ export function buildPartidoAbiertoInsertRow({
   fecha,
   hora,
   nivel,
-  estado,
+  estado = 'abierto',
   jugadoresConfirmados = 1,
   jugadoresRequeridos = 4,
   deadlineCancel = null,
@@ -357,7 +357,7 @@ export async function cancelExpiredPartidos(supabaseAdmin) {
   const { data: partidos, error } = await supabaseAdmin
     .from('partidos_abiertos')
     .select('id, reserva_id, jugadores_confirmados, jugadores_requeridos')
-    .eq('estado', 'esperando_jugadores')
+    .eq('estado', 'abierto')
     .lte('deadline_cancel', now);
 
   if (error) throw error;
@@ -373,7 +373,7 @@ export async function cancelExpiredPartidos(supabaseAdmin) {
       supabaseAdmin,
       partido.id,
       partido.reserva_id,
-      'cancelado_por_tiempo',
+      'cancelado',
     );
     cancelled += 1;
     console.log(`✓ Partido ${partido.id} cancelado por deadline`);
@@ -691,7 +691,7 @@ export function createPartidosRouter({
         fecha,
         hora,
         nivel,
-        estado: 'esperando_jugadores',
+        estado: 'abierto',
         deadlineCancel,
         duracionMinutos: durationMinutes,
       });
@@ -806,7 +806,7 @@ export function createPartidosRouter({
       if (!partido) {
         return res.status(404).json({ error: 'Partido no encontrado' });
       }
-      if (partido.estado !== 'abierto' && partido.estado !== 'esperando_jugadores') {
+      if (partido.estado !== 'abierto') {
         return res.status(400).json({ error: 'Este partido ya no acepta jugadores' });
       }
 
@@ -949,7 +949,7 @@ export function createPartidosRouter({
         return res.status(403).json({ error: 'Solo el creador puede cancelar el partido' });
       }
 
-      if (!['esperando_jugadores', 'abierto'].includes(partido.estado)) {
+      if (partido.estado !== 'abierto') {
         return res.status(400).json({ error: 'Este partido ya no se puede cancelar' });
       }
 

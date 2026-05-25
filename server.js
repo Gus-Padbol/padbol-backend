@@ -728,7 +728,7 @@ app.post('/api/reservas', async (req, res) => {
         fecha,
         hora,
         nivel: nivelPartido,
-        estado: 'esperando_jugadores',
+        estado: 'abierto',
         deadlineCancel,
         duracionMinutos: durationMinutes,
       });
@@ -2369,7 +2369,7 @@ async function runPartidoAutoCancelCron() {
     const { data: partidos, error } = await supabaseAdmin
       .from('partidos_abiertos')
       .select('id, reserva_id, jugadores_confirmados, jugadores_requeridos')
-      .eq('estado', 'esperando_jugadores')
+      .eq('estado', 'abierto')
       .lte('deadline_cancel', now);
 
     if (error) throw error;
@@ -2389,7 +2389,7 @@ async function runPartidoAutoCancelCron() {
 
       await supabaseAdmin
         .from('partidos_abiertos')
-        .update({ estado: 'cancelado_por_tiempo' })
+        .update({ estado: 'cancelado' })
         .eq('id', partido.id);
 
       console.log(`[CRON] Partido ${partido.id} auto-cancelado por tiempo`);
