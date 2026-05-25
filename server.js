@@ -2415,6 +2415,22 @@ async function countPartidosJugados({ email, supabaseUserId }) {
   return count ?? 0;
 }
 
+async function countReservasForUser({ email, supabaseUserId }) {
+  const filters = [];
+  if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
+  if (supabaseUserId) filters.push(`user_id.eq.${supabaseUserId}`);
+
+  if (filters.length === 0) return 0;
+
+  const { count, error } = await supabaseAdmin
+    .from('reservas')
+    .select('*', { count: 'exact', head: true })
+    .or(filters.join(','));
+
+  if (error) throw error;
+  return count ?? 0;
+}
+
 async function getRankingEntryForEmail(email) {
   if (!email) return null;
 
@@ -2824,7 +2840,9 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
 
     let perfilQuery = supabaseAdmin
       .from('jugadores_perfil')
-      .select('id, email, supabase_user_id, nombre, pais, ciudad, nivel, sede_id, foto_url');
+      .select(
+        'id, email, supabase_user_id, nombre, apellido, nombre_saludo, apodo, pais, ciudad, nivel, sede_id, foto_url, es_jugador_torneos',
+      );
 
     if (identifier.includes('@')) {
       perfilQuery = perfilQuery.eq('email', identifier);
@@ -2844,8 +2862,12 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
       return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
     }
 
-    const [partidosJugados, rankingStats, sedesHabituales] = await Promise.all([
+    const [partidosJugados, reservasCount, rankingStats, sedesHabituales] = await Promise.all([
       countPartidosJugados({
+        email: perfil.email,
+        supabaseUserId: perfil.supabase_user_id,
+      }),
+      countReservasForUser({
         email: perfil.email,
         supabaseUserId: perfil.supabase_user_id,
       }),
@@ -2856,6 +2878,8 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
         primarySedeId: perfil.sede_id,
       }),
     ]);
+
+    const torneosJugados = rankingStats?.torneos ?? 0;
 
     let ciudad = perfil.ciudad ?? '';
     let pais = perfil.pais ?? '';
@@ -2882,15 +2906,23 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
       id: perfil.id,
       email: perfil.email ?? null,
       supabase_user_id: perfil.supabase_user_id ?? null,
+      nombre_saludo: perfil.nombre_saludo ?? null,
+      apodo: perfil.apodo ?? null,
       nombre: perfil.nombre ?? '',
+      apellido: perfil.apellido ?? '',
+      foto_url: perfil.foto_url ?? null,
+      nivel: perfil.nivel ?? '',
+      es_jugador_torneos: Boolean(perfil.es_jugador_torneos),
       pais,
       ciudad,
-      nivel: perfil.nivel ?? '',
       categoria_ranking: rankingStats?.categoria_ranking ?? perfil.nivel ?? null,
-      foto_url: perfil.foto_url ?? null,
+      stats: {
+        reservas: reservasCount,
+        torneos: torneosJugados,
+      },
       estadisticas: {
         partidos_jugados: partidosJugados,
-        torneos: rankingStats?.torneos ?? 0,
+        torneos: torneosJugados,
         ranking_position: rankingStats?.ranking_position ?? null,
         puntos_total: rankingStats?.puntos_total ?? 0,
       },
