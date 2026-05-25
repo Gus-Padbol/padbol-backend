@@ -98,7 +98,6 @@ function resolveCapitanNombreFromPerfil(perfil, email) {
 async function fetchCapitanPerfil(supabaseAdmin, userId, email) {
   const filters = [];
   if (userId) {
-    filters.push(`supabase_user_id.eq.${userId}`);
     filters.push(`user_id.eq.${userId}`);
   }
   if (email) {
@@ -436,7 +435,7 @@ async function resolveHostName(partido, supabaseAdmin) {
   const capitanEmail = getCapitanEmail(partido);
   const filters = [];
   if (capitanUserId) {
-    filters.push(`supabase_user_id.eq.${capitanUserId}`);
+    filters.push(`user_id.eq.${capitanUserId}`);
   }
   if (capitanEmail) {
     filters.push(`email.eq."${String(capitanEmail).replace(/"/g, '\\"')}"`);
@@ -467,7 +466,7 @@ async function resolveCapitanFotoUrl(partido, supabaseAdmin) {
   const { data: perfil, error } = await supabaseAdmin
     .from('jugadores_perfil')
     .select('foto_url')
-    .or(`supabase_user_id.eq.${capitanUserId},user_id.eq.${capitanUserId}`)
+    .eq('user_id', capitanUserId)
     .maybeSingle();
 
   if (error) throw error;
@@ -476,7 +475,7 @@ async function resolveCapitanFotoUrl(partido, supabaseAdmin) {
 
 async function resolveJugadorName({ user_id: userId, email }, supabaseAdmin) {
   const filters = [];
-  if (userId) filters.push(`supabase_user_id.eq.${userId}`);
+  if (userId) filters.push(`user_id.eq.${userId}`);
   if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
 
   if (filters.length > 0) {
