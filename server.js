@@ -9,7 +9,7 @@ import cron from 'node-cron';
 import { createEquiposUsuarioRouter } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
 import { createMembresiasRouter } from './routes/membresias.js';
-import { createPartidosAbiertosRouter, createPartidosRouter } from './routes/partidos.js';
+import { createPartidosAbiertosRouter, createPartidosRouter, logPartidoCanchaBody, resolvePartidoCanchaNombre } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
 
 dotenv.config();
@@ -560,6 +560,9 @@ app.post('/api/reservas', async (req, res) => {
       fecha,
       hora,
       cancha,
+      cancha_id,
+      cancha_nombre,
+      canchaSeleccionada,
       nombre,
       email,
       whatsapp,
@@ -574,6 +577,10 @@ app.post('/api/reservas', async (req, res) => {
     } = req.body;
 
     const modoPartido = modoPartidoRaw === true || modoPartidoRaw === 'true';
+
+    if (modoPartido) {
+      logPartidoCanchaBody(req.body, 'POST /api/reservas modo_partido');
+    }
 
     let authUser = null;
     if (modoPartido || userIdBody) {
@@ -625,11 +632,14 @@ app.post('/api/reservas', async (req, res) => {
       return res.status(400).json({ error: 'Sede no encontrada' });
     }
 
-    const canchaNum = cancha != null ? parseInt(cancha, 10) : null;
+    const canchaRaw = cancha ?? cancha_id ?? cancha_nombre ?? canchaSeleccionada;
+    let canchaNum = canchaRaw != null ? parseInt(canchaRaw, 10) : null;
     if (canchaNum == null || Number.isNaN(canchaNum)) {
-      return res.status(400).json({ error: 'Falta cancha válida' });
+      const labeled = canchaRaw != null ? String(canchaRaw).trim().match(/^cancha\s*(\d+)$/i) : null;
+      canchaNum = labeled ? parseInt(labeled[1], 10) : 1;
     }
     const canchaValue = normalizeReservaCancha(canchaNum);
+    const partidoCanchaNombre = resolvePartidoCanchaNombre(req.body);
 
     if (!modoPartido && !userIdBody && !contactWhatsapp) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -705,6 +715,7 @@ app.post('/api/reservas', async (req, res) => {
           reserva_id: reserva.id,
           sede_id: sedeId,
           sede_nombre: sedeNombre,
+          cancha: partidoCanchaNombre,
           capitan_user_id: authUser.id,
           capitan_email: authUser.email ?? contactEmail,
           capitan_nombre: contactNombre,

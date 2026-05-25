@@ -96,6 +96,36 @@ function normalizeReservaCancha(cancha) {
   return String(cancha);
 }
 
+export function logPartidoCanchaBody(body = {}, label = 'partido') {
+  console.log(`[${label}] cancha body:`, {
+    cancha: body.cancha ?? null,
+    cancha_id: body.cancha_id ?? null,
+    cancha_nombre: body.cancha_nombre ?? null,
+    canchaSeleccionada: body.canchaSeleccionada ?? null,
+  });
+}
+
+export function resolvePartidoCanchaNombre(body = {}) {
+  const raw = body.cancha ?? body.cancha_nombre ?? body.canchaSeleccionada ?? body.cancha_id;
+  if (raw != null && String(raw).trim() !== '') {
+    const str = String(raw).trim();
+    if (/^\d+$/.test(str)) return `Cancha ${str}`;
+    return str;
+  }
+  return 'Cancha 1';
+}
+
+function extractCanchaNumeric(body = {}) {
+  const raw = body.cancha_id ?? body.cancha ?? body.cancha_nombre ?? body.canchaSeleccionada;
+  if (raw == null || String(raw).trim() === '') return 1;
+  const str = String(raw).trim();
+  const labeled = str.match(/^cancha\s*(\d+)$/i);
+  if (labeled) return parseInt(labeled[1], 10);
+  const num = parseInt(str, 10);
+  if (!Number.isNaN(num)) return num;
+  return 1;
+}
+
 async function cancelPartidoWithReserva(supabaseAdmin, partidoId, reservaId, partidoEstado) {
   if (reservaId) {
     await supabaseAdmin
@@ -368,6 +398,8 @@ export function createPartidosRouter({
         sede_id,
         cancha_id,
         cancha,
+        cancha_nombre,
+        canchaSeleccionada,
         fecha,
         hora,
         duracion,
@@ -381,11 +413,14 @@ export function createPartidosRouter({
         whatsapp,
       } = req.body;
 
+      logPartidoCanchaBody(req.body, 'POST /api/partidos/crear-con-prereserva');
+
       const sedeId = parseInt(sede_id, 10);
-      const canchaNum = parseInt(cancha_id ?? cancha, 10);
+      const canchaNombre = resolvePartidoCanchaNombre(req.body);
+      const canchaNum = extractCanchaNumeric(req.body);
       const durationMinutes = parseInt(duracion_minutos ?? duracion, 10);
 
-      if (!sedeId || !fecha || !hora || !nivel || Number.isNaN(canchaNum)) {
+      if (!sedeId || !fecha || !hora || !nivel) {
         return res.status(400).json({ error: 'Faltan campos: sede_id, cancha, fecha, hora, nivel' });
       }
 
@@ -460,6 +495,7 @@ export function createPartidosRouter({
           reserva_id: reserva.id,
           sede_id: sedeId,
           sede_nombre: sedeRow.nombre,
+          cancha: canchaNombre,
           ...buildCapitanFields(user, { nombre: contactNombre, email: contactEmail }),
           fecha,
           hora,
