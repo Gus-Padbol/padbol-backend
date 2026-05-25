@@ -1779,6 +1779,36 @@ app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthentic
 app.use('/api/hub', createHubRouter({ supabaseAdmin }));
 console.log('Hub router registered at /api/hub (GET /api/hub/imagenes)');
 
+app.post('/api/notificaciones/zona-interes', async (req, res) => {
+  try {
+    const { deporte, lat, lng, user_id, email } = req.body ?? {};
+    const auth = await getAuthenticatedUser(req);
+    const resolvedUserId = user_id ?? auth.user?.id ?? null;
+    const parsedLat = Number(lat);
+    const parsedLng = Number(lng);
+
+    if (!deporte || !Number.isFinite(parsedLat) || !Number.isFinite(parsedLng)) {
+      return res.status(400).json({ error: 'deporte, lat y lng son requeridos' });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('notificaciones_zona_interes')
+      .insert({
+        user_id: resolvedUserId,
+        deporte: String(deporte).toLowerCase(),
+        lat: parsedLat,
+        lng: parsedLng,
+        email: email ?? auth.user?.email ?? null,
+      });
+
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('❌ Error POST /api/notificaciones/zona-interes:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===== PARTIDOS (torneos — rutas legacy) =====
 app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
   try {
