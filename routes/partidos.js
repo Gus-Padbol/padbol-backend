@@ -156,19 +156,6 @@ function asText(value, fallback = null) {
   return String(value);
 }
 
-function getReservaCanchaMatchValues(canchaText) {
-  const values = new Set();
-  if (canchaText != null && String(canchaText).trim() !== '') {
-    values.add(String(canchaText).trim());
-  }
-  const numericId = resolvePartidoCanchaId({ cancha: canchaText, cancha_id: canchaText });
-  if (numericId != null) {
-    values.add(String(numericId));
-    values.add(`Cancha ${numericId}`);
-  }
-  return [...values];
-}
-
 export function buildReservaInsertRow({
   sedeNombre,
   fecha,
