@@ -19,7 +19,7 @@ import {
   logPartidoCanchaBody,
   parsePositiveInt,
   resolvePartidoCanchaNombre,
-  resolveReservaCanchaText,
+  resolveReservaCanchaStorageText,
 } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
 
@@ -643,7 +643,7 @@ app.post('/api/reservas', async (req, res) => {
       return res.status(400).json({ error: 'Sede no encontrada' });
     }
 
-    const canchaText = resolveReservaCanchaText(req.body);
+    const canchaStorage = resolveReservaCanchaStorageText(req.body);
     const partidoCanchaNombre = resolvePartidoCanchaNombre(req.body);
     const durationMinutes = parsePositiveInt(duracion_minutos);
 
@@ -655,7 +655,7 @@ app.post('/api/reservas', async (req, res) => {
       sedeNombre,
       fecha,
       hora,
-      cancha: canchaText,
+      cancha: canchaStorage,
     });
 
     if (blocked) {
@@ -666,7 +666,7 @@ app.post('/api/reservas', async (req, res) => {
       sedeNombre,
       fecha,
       hora,
-      canchaText,
+      canchaText: canchaStorage,
       nombre: contactNombre,
       email: contactEmail,
       telefono: contactWhatsapp,
@@ -683,7 +683,7 @@ app.post('/api/reservas', async (req, res) => {
       delete insertRow.pago_estado;
     }
 
-    console.log(`[POST /api/reservas${modoPartido ? ' modo_partido' : ''}] reservas insert:`, insertRow);
+    console.log('[DEBUG INSERT reservas]', insertRow);
 
     const { data: reservaRows, error: insertErr } = await supabaseAdmin
       .from('reservas')
@@ -712,28 +712,31 @@ app.post('/api/reservas', async (req, res) => {
       const nivelPartido = nivel_partido ?? nivel ?? 'Intermedio';
       deadlineCancel = computePartidoDeadlineCancel(fecha, hora);
 
+      const partidoInsert = buildPartidoAbiertoInsertRow({
+        sedeRow: { id: sedeId, nombre: sedeNombre },
+        body: req.body,
+        reservaId: reserva.id,
+        canchaNombre: partidoCanchaNombre,
+        capitanFields: {
+          capitan_user_id: authUser.id,
+          capitan_email: authUser.email ?? contactEmail,
+          capitan_nombre: contactNombre,
+          capitan_foto_url: authUser.user_metadata?.avatar_url
+            ?? authUser.user_metadata?.picture
+            ?? null,
+        },
+        fecha,
+        hora,
+        nivel: nivelPartido,
+        estado: 'esperando_jugadores',
+        deadlineCancel,
+        duracionMinutos: durationMinutes,
+      });
+      console.log('[DEBUG INSERT partidos_abiertos]', partidoInsert);
+
       const { data: partido, error: partidoErr } = await supabaseAdmin
         .from('partidos_abiertos')
-        .insert([buildPartidoAbiertoInsertRow({
-          sedeRow: { id: sedeId, nombre: sedeNombre },
-          body: req.body,
-          reservaId: reserva.id,
-          canchaNombre: partidoCanchaNombre,
-          capitanFields: {
-            capitan_user_id: authUser.id,
-            capitan_email: authUser.email ?? contactEmail,
-            capitan_nombre: contactNombre,
-            capitan_foto_url: authUser.user_metadata?.avatar_url
-              ?? authUser.user_metadata?.picture
-              ?? null,
-          },
-          fecha,
-          hora,
-          nivel: nivelPartido,
-          estado: 'esperando_jugadores',
-          deadlineCancel,
-          duracionMinutos: durationMinutes,
-        })])
+        .insert([partidoInsert])
         .select('*')
         .single();
 
