@@ -11,14 +11,15 @@ import { createHubRouter } from './routes/hub.js';
 import { createMembresiasRouter } from './routes/membresias.js';
 import {
   buildPartidoAbiertoInsertRow,
+  buildReservaInsertRow,
   createPartidosAbiertosRouter,
   createPartidosRouter,
   filterBlockingReservas,
   isCourtBlocked,
   logPartidoCanchaBody,
   parsePositiveInt,
-  resolvePartidoCanchaId,
   resolvePartidoCanchaNombre,
+  resolveReservaCanchaText,
 } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
 
@@ -642,8 +643,7 @@ app.post('/api/reservas', async (req, res) => {
       return res.status(400).json({ error: 'Sede no encontrada' });
     }
 
-    const canchaNum = resolvePartidoCanchaId(req.body) ?? 1;
-    const canchaValue = normalizeReservaCancha(canchaNum);
+    const canchaText = resolveReservaCanchaText(req.body);
     const partidoCanchaNombre = resolvePartidoCanchaNombre(req.body);
     const durationMinutes = parsePositiveInt(duracion_minutos);
 
@@ -655,33 +655,35 @@ app.post('/api/reservas', async (req, res) => {
       sedeNombre,
       fecha,
       hora,
-      cancha: canchaNum,
+      cancha: canchaText,
     });
 
     if (blocked) {
       return res.status(409).json({ error: 'Este horario ya está reservado' });
     }
 
-    const insertRow = {
-      sede: sedeNombre,
+    const insertRow = buildReservaInsertRow({
+      sedeNombre,
       fecha,
       hora,
-      cancha: canchaValue,
+      canchaText,
       nombre: contactNombre,
       email: contactEmail,
       telefono: contactWhatsapp,
       whatsapp: contactWhatsapp,
       nivel: nivel_partido ?? nivel ?? 'Principiante',
-      precio: precio != null ? parsePositiveInt(precio) ?? 0 : 0,
+      precio,
       estado: modoPartido ? 'prereserva' : (estado || 'confirmada'),
       pago_estado: modoPartido ? 'pendiente' : undefined,
       duracion_minutos: durationMinutes,
       user_id: authUser?.id ?? userIdBody ?? null,
-    };
+    });
 
     if (!modoPartido) {
       delete insertRow.pago_estado;
     }
+
+    console.log(`[POST /api/reservas${modoPartido ? ' modo_partido' : ''}] reservas insert:`, insertRow);
 
     const { data: reservaRows, error: insertErr } = await supabaseAdmin
       .from('reservas')

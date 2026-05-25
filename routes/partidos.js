@@ -141,6 +141,62 @@ export function resolvePartidoCanchaNombre(body = {}) {
   return 'Cancha 1';
 }
 
+export function resolveReservaCanchaText(body = {}) {
+  return resolvePartidoCanchaNombre(body);
+}
+
+function getReservaCanchaMatchValues(canchaText) {
+  const values = new Set();
+  if (canchaText != null && String(canchaText).trim() !== '') {
+    values.add(String(canchaText).trim());
+  }
+  const numericId = resolvePartidoCanchaId({ cancha: canchaText });
+  if (numericId != null) {
+    values.add(String(numericId));
+    values.add(`Cancha ${numericId}`);
+  }
+  return [...values];
+}
+
+export function buildReservaInsertRow({
+  sedeNombre,
+  fecha,
+  hora,
+  canchaText,
+  nombre,
+  email,
+  telefono,
+  whatsapp,
+  nivel,
+  precio,
+  estado,
+  pago_estado,
+  duracion_minutos,
+  user_id,
+}) {
+  const row = {
+    sede: sedeNombre,
+    fecha,
+    hora,
+    cancha: canchaText,
+    nombre,
+    email,
+    telefono: telefono ?? whatsapp ?? '',
+    whatsapp: whatsapp ?? telefono ?? '',
+    nivel,
+    precio: parsePositiveInt(precio) ?? 0,
+    estado,
+    duracion_minutos: parsePositiveInt(duracion_minutos),
+    user_id: user_id ?? null,
+  };
+
+  if (pago_estado != null && pago_estado !== undefined) {
+    row.pago_estado = pago_estado;
+  }
+
+  return row;
+}
+
 export async function resolveSedeRow(supabaseAdmin, { sede_id, sede, sede_nombre }) {
   const byId = parsePositiveInt(sede_id);
   if (byId != null) {
@@ -253,14 +309,19 @@ export function filterBlockingReservas(reservas, nowMs = Date.now()) {
 async function isCourtBlocked(supabaseAdmin, { sedeNombre, fecha, hora, cancha }) {
   if (!sedeNombre) return false;
 
-  const canchaValue = normalizeReservaCancha(cancha);
+  const canchaText = typeof cancha === 'string'
+    ? cancha
+    : resolveReservaCanchaText({ cancha_id: cancha, cancha });
+  const matchValues = getReservaCanchaMatchValues(canchaText);
+  if (!matchValues.length) return false;
+
   const { data, error } = await supabaseAdmin
     .from('reservas')
     .select('id, estado, created_at')
     .eq('sede', sedeNombre)
     .eq('fecha', fecha)
     .eq('hora', hora)
-    .eq('cancha', canchaValue)
+    .in('cancha', matchValues)
     .in('estado', ['confirmada', 'prereserva']);
 
   if (error) throw error;
@@ -530,8 +591,7 @@ export function createPartidosRouter({
 
       logPartidoCanchaBody(req.body, 'POST /api/partidos/crear-con-prereserva');
 
-      const canchaNombre = resolvePartidoCanchaNombre(req.body);
-      const canchaNum = resolvePartidoCanchaId(req.body) ?? 1;
+      const canchaText = resolveReservaCanchaText(req.body);
       const durationMinutes = parsePositiveInt(duracion_minutos ?? duracion);
 
       if (!fecha || !hora || !nivel) {
@@ -547,7 +607,7 @@ export function createPartidosRouter({
         sedeNombre: sedeRow.nombre,
         fecha,
         hora,
-        cancha: canchaNum,
+        cancha: canchaText,
       });
 
       if (blocked) {
@@ -567,27 +627,29 @@ export function createPartidosRouter({
         ?? metadata.telefono
         ?? '';
       const totalPrecio = precio != null ? parsePositiveInt(precio) ?? 0 : 0;
-      const canchaValue = normalizeReservaCancha(canchaNum);
       const deadlineCancel = resolveDeadline(fecha, hora);
+
+      const reservaInsert = buildReservaInsertRow({
+        sedeNombre: sedeRow.nombre,
+        fecha,
+        hora,
+        canchaText,
+        nombre: contactNombre,
+        email: contactEmail,
+        telefono: contactWhatsapp,
+        whatsapp: contactWhatsapp,
+        nivel,
+        precio: totalPrecio,
+        estado: 'prereserva',
+        pago_estado: 'pendiente',
+        duracion_minutos: durationMinutes,
+        user_id: user.id,
+      });
+      console.log('[POST /api/partidos/crear-con-prereserva] reservas insert:', reservaInsert);
 
       const { data: reservaRows, error: reservaErr } = await supabaseAdmin
         .from('reservas')
-        .insert([{
-          sede: sedeRow.nombre,
-          fecha,
-          hora,
-          cancha: canchaValue,
-          nombre: contactNombre,
-          email: contactEmail,
-          telefono: contactWhatsapp,
-          whatsapp: contactWhatsapp,
-          nivel,
-          precio: totalPrecio,
-          estado: 'prereserva',
-          pago_estado: 'pendiente',
-          duracion_minutos: durationMinutes,
-          user_id: user.id,
-        }])
+        .insert([reservaInsert])
         .select('*');
 
       if (reservaErr) throw reservaErr;
@@ -603,7 +665,7 @@ export function createPartidosRouter({
           sedeRow,
           body: req.body,
           reservaId: reserva.id,
-          canchaNombre,
+          canchaNombre: canchaText,
           capitanFields: buildCapitanFields(user, { nombre: contactNombre, email: contactEmail }),
           fecha,
           hora,
