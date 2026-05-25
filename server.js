@@ -11,6 +11,7 @@ import { createHubRouter } from './routes/hub.js';
 import { createMembresiasRouter } from './routes/membresias.js';
 import {
   buildPartidoAbiertoInsertRow,
+  buildCapitanFields,
   buildReservaInsertRow,
   createPartidosAbiertosRouter,
   createPartidosRouter,
@@ -717,14 +718,7 @@ app.post('/api/reservas', async (req, res) => {
         body: req.body,
         reservaId: reserva.id,
         canchaNombre: partidoCanchaNombre,
-        capitanFields: {
-          capitan_user_id: authUser.id,
-          capitan_email: authUser.email ?? contactEmail,
-          capitan_nombre: contactNombre,
-          capitan_foto_url: authUser.user_metadata?.avatar_url
-            ?? authUser.user_metadata?.picture
-            ?? null,
-        },
+        capitanFields: await buildCapitanFields(supabaseAdmin, authUser, { email: contactEmail }),
         fecha,
         hora,
         nivel: nivelPartido,

@@ -69,17 +69,60 @@ function getJugadoresRequeridos(partido) {
   return partido.jugadores_requeridos ?? partido.jugadores_necesarios ?? 4;
 }
 
-function buildCapitanFields(user, { nombre, email } = {}) {
+function emailLocalPart(email) {
+  if (!email) return null;
+  const localPart = String(email).split('@')[0]?.trim();
+  return localPart || null;
+}
+
+function resolveCapitanNombreFromPerfil(perfil, email) {
+  if (perfil) {
+    const fromProfile =
+      perfil.nombre_saludo
+      ?? perfil.apodo
+      ?? perfil.nombre
+      ?? null;
+
+    if (fromProfile && String(fromProfile).trim()) {
+      return String(fromProfile).trim();
+    }
+  }
+
+  return emailLocalPart(email) ?? 'Capitán';
+}
+
+async function fetchCapitanPerfil(supabaseAdmin, userId, email) {
+  const filters = [];
+  if (userId) {
+    filters.push(`supabase_user_id.eq.${userId}`);
+    filters.push(`user_id.eq.${userId}`);
+  }
+  if (email) {
+    filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
+  }
+
+  if (filters.length === 0) return null;
+
+  const { data, error } = await supabaseAdmin
+    .from('jugadores_perfil')
+    .select('nombre_saludo, apodo, nombre, apellido, email, foto_url')
+    .or(filters.join(','))
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function buildCapitanFields(supabaseAdmin, user, { email } = {}) {
+  const capitanEmail = email ?? user?.email ?? null;
+  const perfil = await fetchCapitanPerfil(supabaseAdmin, user?.id, capitanEmail);
   const metadata = user?.user_metadata ?? {};
+
   return {
     capitan_user_id: user.id,
-    capitan_email: email ?? user.email ?? null,
-    capitan_nombre: nombre
-      ?? metadata.full_name
-      ?? metadata.name
-      ?? user.email
-      ?? 'Capitán',
-    capitan_foto_url: metadata.avatar_url ?? metadata.picture ?? null,
+    capitan_email: capitanEmail,
+    capitan_nombre: resolveCapitanNombreFromPerfil(perfil, capitanEmail),
+    capitan_foto_url: perfil?.foto_url ?? metadata.avatar_url ?? metadata.picture ?? null,
   };
 }
 
@@ -687,7 +730,7 @@ export function createPartidosRouter({
         body: req.body,
         reservaId: reserva.id,
         canchaNombre: canchaDisplay,
-        capitanFields: buildCapitanFields(user, { nombre: contactNombre, email: contactEmail }),
+        capitanFields: await buildCapitanFields(supabaseAdmin, user, { email: contactEmail }),
         fecha,
         hora,
         nivel,
@@ -1075,7 +1118,7 @@ export function createPartidosRouter({
         sedeRow,
         body: req.body,
         canchaNombre: resolvePartidoCanchaNombre(req.body),
-        capitanFields: buildCapitanFields(user),
+        capitanFields: await buildCapitanFields(supabaseAdmin, user),
         fecha,
         hora,
         nivel,
