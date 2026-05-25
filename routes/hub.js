@@ -90,7 +90,14 @@ export function createHubRouter({ supabaseAdmin }) {
 
   router.get('/imagenes', async (req, res) => {
     try {
+      console.log('GET /api/hub/imagenes hit', {
+        deporte: req.query.deporte,
+        query: req.query,
+      });
+
       const deporte = String(req.query.deporte ?? 'padbol').trim().toLowerCase();
+      console.log('GET /api/hub/imagenes deporte param:', deporte);
+
       if (!VALID_DEPORTES.has(deporte)) {
         return res.status(400).json({ error: 'deporte inválido' });
       }
@@ -104,16 +111,24 @@ export function createHubRouter({ supabaseAdmin }) {
 
         if (error) throw error;
         rows = data ?? [];
+        console.log('GET /api/hub/imagenes DB result:', {
+          deporte,
+          rowCount: rows.length,
+          rows,
+        });
       } catch (dbError) {
         console.warn('⚠️ hub_deporte_config no disponible, usando config estática:', dbError.message);
         return res.json(buildResponseFromStatic(deporte));
       }
 
       if (rows.length === 0) {
+        console.log('GET /api/hub/imagenes sin filas, usando config estática para:', deporte);
         return res.json(buildResponseFromStatic(deporte));
       }
 
-      res.json(buildResponseFromRows(rows, deporte));
+      const payload = buildResponseFromRows(rows, deporte);
+      console.log('GET /api/hub/imagenes response payload:', payload);
+      res.json(payload);
     } catch (err) {
       console.error('❌ Error GET /api/hub/imagenes:', err.message);
       res.status(500).json({ error: err.message });
