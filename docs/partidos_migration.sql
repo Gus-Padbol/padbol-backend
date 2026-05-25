@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS partidos_abiertos (
   hora TIME NOT NULL,
   nivel TEXT NOT NULL,
   estado TEXT DEFAULT 'abierto',
-  max_jugadores INTEGER DEFAULT 4,
   jugadores_confirmados INTEGER DEFAULT 1,
   jugadores_requeridos INTEGER DEFAULT 4,
   created_at TIMESTAMPTZ DEFAULT NOW()

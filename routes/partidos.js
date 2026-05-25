@@ -41,7 +41,6 @@ const PARTIDO_SELECT = `
   hora,
   nivel,
   estado,
-  max_jugadores,
   jugadores_confirmados,
   jugadores_requeridos,
   deadline_cancel,
@@ -66,7 +65,7 @@ function getJugadoresConfirmados(partido, fallback = null) {
 }
 
 function getJugadoresRequeridos(partido) {
-  return partido.jugadores_requeridos ?? partido.jugadores_necesarios ?? partido.max_jugadores ?? 4;
+  return partido.jugadores_requeridos ?? partido.jugadores_necesarios ?? 4;
 }
 
 function buildCapitanFields(user, { nombre, email } = {}) {
@@ -132,7 +131,7 @@ export async function cancelExpiredPartidos(supabaseAdmin) {
   const now = new Date().toISOString();
   const { data: partidos, error } = await supabaseAdmin
     .from('partidos_abiertos')
-    .select('id, reserva_id, jugadores_confirmados, jugadores_requeridos, max_jugadores')
+    .select('id, reserva_id, jugadores_confirmados, jugadores_requeridos')
     .eq('estado', 'esperando_jugadores')
     .lte('deadline_cancel', now);
 
@@ -468,7 +467,6 @@ export function createPartidosRouter({
           estado: 'esperando_jugadores',
           jugadores_confirmados: 1,
           jugadores_requeridos: 4,
-          max_jugadores: 4,
           deadline_cancel: deadlineCancel,
         }])
         .select('*')
@@ -600,7 +598,7 @@ export function createPartidosRouter({
 
       if (countErr) throw countErr;
 
-      const maxJugadores = partido.max_jugadores ?? getJugadoresRequeridos(partido);
+      const maxJugadores = getJugadoresRequeridos(partido);
       if ((count ?? 0) >= maxJugadores) {
         return res.status(409).json({ error: 'El partido ya está completo' });
       }
@@ -855,7 +853,6 @@ export function createPartidosRouter({
           estado: 'abierto',
           jugadores_confirmados: 1,
           jugadores_requeridos: 4,
-          max_jugadores: 4,
         }])
         .select('*')
         .single();

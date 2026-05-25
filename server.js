@@ -717,7 +717,6 @@ app.post('/api/reservas', async (req, res) => {
           estado: 'esperando_jugadores',
           jugadores_confirmados: 1,
           jugadores_requeridos: 4,
-          max_jugadores: 4,
           deadline_cancel: deadlineCancel,
         }])
         .select('*')
@@ -2351,7 +2350,7 @@ async function runPartidoAutoCancelCron() {
     const now = new Date().toISOString();
     const { data: partidos, error } = await supabaseAdmin
       .from('partidos_abiertos')
-      .select('id, reserva_id, jugadores_confirmados, jugadores_requeridos, max_jugadores')
+      .select('id, reserva_id, jugadores_confirmados, jugadores_requeridos')
       .eq('estado', 'esperando_jugadores')
       .lte('deadline_cancel', now);
 
@@ -2359,7 +2358,7 @@ async function runPartidoAutoCancelCron() {
     if (!partidos?.length) return;
 
     for (const partido of partidos) {
-      const needed = partido.jugadores_requeridos ?? partido.jugadores_necesarios ?? partido.max_jugadores ?? 4;
+      const needed = partido.jugadores_requeridos ?? partido.jugadores_necesarios ?? 4;
       const current = partido.jugadores_confirmados ?? partido.jugadores_actuales ?? 0;
       if (current >= needed) continue;
 
