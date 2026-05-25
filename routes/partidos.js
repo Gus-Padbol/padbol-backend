@@ -274,6 +274,7 @@ export function buildPartidoAbiertoInsertRow({
     hora: asText(hora),
     nivel: asText(nivel),
     estado: asText(estado),
+    deporte: body.deporte || 'Padbol',
     jugadores_confirmados: requirePositiveInt(jugadoresConfirmados ?? 1, 'jugadores_confirmados'),
     jugadores_requeridos: requirePositiveInt(jugadoresRequeridos ?? 4, 'jugadores_requeridos'),
   };
