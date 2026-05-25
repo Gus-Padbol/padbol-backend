@@ -49,7 +49,7 @@ const PARTIDO_SELECT = `
   ganador,
   resultado,
   created_at,
-  sedes ( nombre ),
+  sedes ( nombre, ciudad, pais ),
   partidos_abiertos_jugadores ( user_id, email, joined_at )
 `;
 
@@ -512,6 +512,8 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     sede_id: partido.sede_id,
     reserva_id: partido.reserva_id ?? null,
     sede_nombre: partido.sede_nombre ?? partido.sedes?.nombre ?? null,
+    sede_ciudad: partido.sedes?.ciudad ?? null,
+    sede_pais: partido.sedes?.pais ?? null,
     cancha: partido.cancha ?? null,
     fecha: partido.fecha,
     hora: formatHora(partido.hora),
@@ -524,6 +526,8 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     lugares_disponibles: Math.max(0, maxJugadores - jugadoresActuales),
     deadline_cancel: partido.deadline_cancel ?? null,
     pago_url: partido.pago_url ?? null,
+    capitan_nombre: partido.capitan_nombre ?? hostNombre,
+    capitan_foto_url: partido.capitan_foto_url ?? null,
     host_nombre: hostNombre,
     host_email: capitanEmail,
     host_user_id: capitanUserId,
