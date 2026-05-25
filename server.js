@@ -21,6 +21,9 @@ const PORT = 3001;
 app.use(cors({
   origin: [
     'http://localhost:3000',
+    'http://localhost:8081',
+    'exp://192.168.0.19:8081',
+    'https://expo.dev',
     'https://padbol-match.netlify.app',
     'https://padbol-match-9abn.vercel.app'
   ],
@@ -1386,6 +1389,7 @@ app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthentic
 
 // ===== HUB (action card images — public GET /api/hub/imagenes) =====
 app.use('/api/hub', createHubRouter({ supabaseAdmin }));
+console.log('Hub router registered at /api/hub (GET /api/hub/imagenes)');
 
 // ===== PARTIDOS (torneos — rutas legacy) =====
 app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
@@ -2582,5 +2586,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Padbol Match API running on port ${PORT}`);
   console.log(`📊 Supabase: ${SUPABASE_URL}`);
   console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
-  console.log('🖼️ Hub router mounted at GET /api/hub/imagenes');
+  console.log('Hub endpoint ready: GET /api/hub/imagenes');
 });
