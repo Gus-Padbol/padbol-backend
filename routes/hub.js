@@ -1,6 +1,6 @@
 import express from 'express';
 
-const CARD_TYPES = ['reservar', 'buscar_partido', 'torneos', 'armar_partido'];
+const CARD_KEYS = ['reservar', 'buscar_partido', 'torneos', 'armar_partido'];
 
 const VALID_DEPORTES = new Set([
   'padbol',
@@ -57,17 +57,30 @@ const STATIC_HUB_IMAGES = {
   },
 };
 
-function buildEmptyResponse() {
-  return CARD_TYPES.reduce((acc, cardType) => {
-    acc[cardType] = { image_url: null };
-    return acc;
-  }, {});
+function mapCardResponse(row, staticImageUrl) {
+  return {
+    image_url: row?.imagen_url ?? staticImageUrl ?? null,
+    titulo: row?.titulo ?? null,
+    subtitulo: row?.subtitulo ?? null,
+  };
 }
 
 function buildResponseFromStatic(deporte) {
   const staticImages = STATIC_HUB_IMAGES[deporte] ?? {};
-  return CARD_TYPES.reduce((acc, cardType) => {
-    acc[cardType] = { image_url: staticImages[cardType] ?? null };
+  return CARD_KEYS.reduce((acc, cardKey) => {
+    acc[cardKey] = mapCardResponse(null, staticImages[cardKey] ?? null);
+    return acc;
+  }, {});
+}
+
+function buildResponseFromRows(rows, deporte) {
+  const byKey = Object.fromEntries(rows.map((row) => [row.card_key, row]));
+
+  return CARD_KEYS.reduce((acc, cardKey) => {
+    acc[cardKey] = mapCardResponse(
+      byKey[cardKey],
+      STATIC_HUB_IMAGES[deporte]?.[cardKey] ?? null,
+    );
     return acc;
   }, {});
 }
@@ -91,7 +104,7 @@ export function createHubRouter({ supabaseAdmin, getAuthenticatedUser }) {
       try {
         const { data, error } = await supabaseAdmin
           .from('hub_deporte_config')
-          .select('card_type, image_url')
+          .select('card_key, titulo, subtitulo, imagen_url')
           .eq('deporte', deporte);
 
         if (error) throw error;
@@ -105,14 +118,7 @@ export function createHubRouter({ supabaseAdmin, getAuthenticatedUser }) {
         return res.json(buildResponseFromStatic(deporte));
       }
 
-      const byType = Object.fromEntries(rows.map((row) => [row.card_type, row.image_url]));
-      const response = CARD_TYPES.reduce((acc, cardType) => {
-        const imageUrl = byType[cardType] ?? STATIC_HUB_IMAGES[deporte]?.[cardType] ?? null;
-        acc[cardType] = { image_url: imageUrl || null };
-        return acc;
-      }, {});
-
-      res.json(response);
+      res.json(buildResponseFromRows(rows, deporte));
     } catch (err) {
       console.error('❌ Error GET /api/hub/imagenes:', err.message);
       res.status(500).json({ error: err.message });
