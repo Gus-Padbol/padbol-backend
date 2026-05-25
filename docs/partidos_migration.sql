@@ -4,13 +4,18 @@
 CREATE TABLE IF NOT EXISTS partidos_abiertos (
   id BIGSERIAL PRIMARY KEY,
   sede_id INTEGER REFERENCES sedes(id),
-  host_user_id UUID,
-  host_email TEXT,
+  sede_nombre TEXT,
+  capitan_user_id UUID,
+  capitan_email TEXT,
+  capitan_nombre TEXT,
+  capitan_foto_url TEXT,
   fecha DATE NOT NULL,
   hora TIME NOT NULL,
   nivel TEXT NOT NULL,
   estado TEXT DEFAULT 'abierto',
   max_jugadores INTEGER DEFAULT 4,
+  jugadores_confirmados INTEGER DEFAULT 1,
+  jugadores_requeridos INTEGER DEFAULT 4,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

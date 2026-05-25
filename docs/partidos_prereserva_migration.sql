@@ -5,10 +5,18 @@ ALTER TABLE reservas
 
 ALTER TABLE partidos_abiertos
   ADD COLUMN IF NOT EXISTS reserva_id BIGINT REFERENCES reservas(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS jugadores_actuales INTEGER DEFAULT 1,
-  ADD COLUMN IF NOT EXISTS jugadores_necesarios INTEGER DEFAULT 4,
+  ADD COLUMN IF NOT EXISTS sede_nombre TEXT,
+  ADD COLUMN IF NOT EXISTS capitan_nombre TEXT,
+  ADD COLUMN IF NOT EXISTS capitan_foto_url TEXT,
+  ADD COLUMN IF NOT EXISTS jugadores_confirmados INTEGER DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS jugadores_requeridos INTEGER DEFAULT 4,
   ADD COLUMN IF NOT EXISTS deadline_cancel TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS pago_url TEXT;
+
+-- Legacy aliases (optional — omit if production already uses confirmados/requeridos only)
+ALTER TABLE partidos_abiertos
+  ADD COLUMN IF NOT EXISTS jugadores_actuales INTEGER DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS jugadores_necesarios INTEGER DEFAULT 4;
 
 CREATE INDEX IF NOT EXISTS idx_partidos_abiertos_deadline
   ON partidos_abiertos (estado, deadline_cancel);

@@ -704,14 +704,19 @@ app.post('/api/reservas', async (req, res) => {
         .insert([{
           reserva_id: reserva.id,
           sede_id: sedeId,
-          host_user_id: authUser.id,
-          host_email: authUser.email ?? contactEmail,
+          sede_nombre: sedeNombre,
+          capitan_user_id: authUser.id,
+          capitan_email: authUser.email ?? contactEmail,
+          capitan_nombre: contactNombre,
+          capitan_foto_url: authUser.user_metadata?.avatar_url
+            ?? authUser.user_metadata?.picture
+            ?? null,
           fecha,
           hora,
           nivel: nivelPartido,
           estado: 'esperando_jugadores',
-          jugadores_actuales: 1,
-          jugadores_necesarios: 4,
+          jugadores_confirmados: 1,
+          jugadores_requeridos: 4,
           max_jugadores: 4,
           deadline_cancel: deadlineCancel,
         }])
@@ -2346,7 +2351,7 @@ async function runPartidoAutoCancelCron() {
     const now = new Date().toISOString();
     const { data: partidos, error } = await supabaseAdmin
       .from('partidos_abiertos')
-      .select('id, reserva_id, jugadores_actuales, jugadores_necesarios, max_jugadores')
+      .select('id, reserva_id, jugadores_confirmados, jugadores_requeridos, max_jugadores')
       .eq('estado', 'esperando_jugadores')
       .lte('deadline_cancel', now);
 
@@ -2354,8 +2359,8 @@ async function runPartidoAutoCancelCron() {
     if (!partidos?.length) return;
 
     for (const partido of partidos) {
-      const needed = partido.jugadores_necesarios ?? partido.max_jugadores ?? 4;
-      const current = partido.jugadores_actuales ?? 0;
+      const needed = partido.jugadores_requeridos ?? partido.jugadores_necesarios ?? partido.max_jugadores ?? 4;
+      const current = partido.jugadores_confirmados ?? partido.jugadores_actuales ?? 0;
       if (current >= needed) continue;
 
       if (partido.reserva_id) {
