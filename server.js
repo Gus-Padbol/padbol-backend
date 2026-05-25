@@ -413,62 +413,208 @@ app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
 // POST reserva
 app.post('/api/reservas', async (req, res) => {
   try {
-    const { sede, fecha, hora, cancha, nombre, email, whatsapp, nivel, precio, estado } = req.body;
+    const {
+      sede,
+      sede_id: sedeIdBody,
+      fecha,
+      hora,
+      cancha,
+      nombre,
+      email,
+      whatsapp,
+      telefono,
+      nivel,
+      nivel_partido,
+      precio,
+      duracion_minutos,
+      user_id: userIdBody,
+      modo_partido: modoPartidoRaw,
+      estado,
+    } = req.body;
 
-    // Validar campos
-    if (!sede || !fecha || !hora || !cancha || !nombre || !email || !whatsapp) {
+    const modoPartido = modoPartidoRaw === true || modoPartidoRaw === 'true';
+
+    let authUser = null;
+    if (modoPartido || userIdBody) {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+      }
+      authUser = user;
+    }
+
+    const contactEmail = email ?? authUser?.email;
+    const contactWhatsapp = whatsapp ?? telefono ?? '';
+    const contactNombre = nombre
+      ?? authUser?.user_metadata?.full_name
+      ?? authUser?.user_metadata?.name
+      ?? authUser?.email
+      ?? 'Jugador';
+
+    if (!fecha || !hora || !contactEmail) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
     }
 
-    // Verificar double-booking
-    const { data: existentes, error: errCheck } = await supabase
+    if (!sede && !sedeIdBody) {
+      return res.status(400).json({ error: 'Falta sede o sede_id' });
+    }
+
+    let sedeNombre = sede;
+    let sedeId = sedeIdBody != null ? parseInt(sedeIdBody, 10) : null;
+
+    if (sedeId && !sedeNombre) {
+      const { data: sedeRow } = await supabaseAdmin
+        .from('sedes')
+        .select('nombre')
+        .eq('id', sedeId)
+        .maybeSingle();
+      sedeNombre = sedeRow?.nombre ?? null;
+    }
+
+    if (!sedeId && sedeNombre) {
+      const { data: sedeRow } = await supabaseAdmin
+        .from('sedes')
+        .select('id')
+        .eq('nombre', sedeNombre)
+        .maybeSingle();
+      sedeId = sedeRow?.id ?? null;
+    }
+
+    if (!sedeNombre) {
+      return res.status(400).json({ error: 'Sede no encontrada' });
+    }
+
+    const canchaNum = cancha != null ? parseInt(cancha, 10) : null;
+    if (canchaNum == null || Number.isNaN(canchaNum)) {
+      return res.status(400).json({ error: 'Falta cancha válida' });
+    }
+
+    if (!modoPartido && !userIdBody && !contactWhatsapp) {
+      return res.status(400).json({ error: 'Faltan campos requeridos' });
+    }
+
+    let conflictQuery = supabaseAdmin
       .from('reservas')
-      .select('*')
-      .eq('sede', sede)
+      .select('id')
       .eq('fecha', fecha)
       .eq('hora', hora)
-      .eq('cancha', cancha);
+      .eq('cancha', canchaNum)
+      .neq('estado', 'cancelada');
 
+    if (sedeId) {
+      conflictQuery = conflictQuery.eq('sede_id', sedeId);
+    } else {
+      conflictQuery = conflictQuery.eq('sede', sedeNombre);
+    }
+
+    const { data: existentes, error: errCheck } = await conflictQuery;
     if (errCheck) throw errCheck;
 
     if (existentes && existentes.length > 0) {
       return res.status(409).json({ error: 'Este horario ya está reservado' });
     }
 
-    // Crear reserva
-    const { data, error } = await supabase
+    const insertRow = {
+      sede: sedeNombre,
+      sede_id: sedeId,
+      fecha,
+      hora,
+      cancha: canchaNum,
+      nombre: contactNombre,
+      email: contactEmail,
+      telefono: contactWhatsapp,
+      whatsapp: contactWhatsapp,
+      nivel: nivel_partido ?? nivel ?? 'Principiante',
+      precio: precio != null ? parseInt(precio, 10) : 0,
+      estado: estado || 'confirmada',
+      duracion_minutos: duracion_minutos != null ? parseInt(duracion_minutos, 10) : null,
+      user_id: authUser?.id ?? userIdBody ?? null,
+      monto: precio != null ? parseInt(precio, 10) : null,
+    };
+
+    const { data: reservaRows, error: insertErr } = await supabaseAdmin
       .from('reservas')
-      .insert([{
-        sede,
-        fecha,
-        hora,
-        cancha: parseInt(cancha),
-        nombre,
-        email,
-        telefono: whatsapp,
-        whatsapp,
-        nivel: nivel || 'Principiante',
-        precio: parseInt(precio),
-        estado: estado || 'reservada',
-      }])
-      .select();
+      .insert([insertRow])
+      .select('*');
 
-    if (error) throw error;
+    if (insertErr) throw insertErr;
 
-    console.log('✓ Reserva creada:', data);
+    const reserva = reservaRows?.[0];
+    if (!reserva) {
+      throw new Error('No se pudo crear la reserva');
+    }
 
-    // Fetch sede address for WhatsApp message (best-effort)
+    console.log('✓ Reserva creada:', reserva.id);
+
+    let partidoId = null;
+    if (modoPartido) {
+      if (!authUser) {
+        return res.status(401).json({ error: 'Autenticación requerida para crear partido' });
+      }
+      if (!sedeId) {
+        return res.status(400).json({ error: 'sede_id requerido para partido abierto' });
+      }
+
+      const nivelPartido = nivel_partido ?? nivel ?? 'Intermedio';
+
+      const { data: partido, error: partidoErr } = await supabaseAdmin
+        .from('partidos_abiertos')
+        .insert([{
+          sede_id: sedeId,
+          host_user_id: authUser.id,
+          host_email: authUser.email ?? contactEmail,
+          fecha,
+          hora,
+          nivel: nivelPartido,
+          estado: 'abierto',
+          max_jugadores: 4,
+        }])
+        .select('*')
+        .single();
+
+      if (partidoErr) throw partidoErr;
+
+      const { error: hostJoinErr } = await supabaseAdmin
+        .from('partidos_abiertos_jugadores')
+        .insert([{
+          partido_id: partido.id,
+          user_id: authUser.id,
+          email: authUser.email ?? contactEmail,
+        }]);
+
+      if (hostJoinErr) throw hostJoinErr;
+
+      partidoId = partido.id;
+      console.log(`✓ Partido abierto ${partidoId} creado con reserva ${reserva.id}`);
+    }
+
     const { data: sedeRow } = await supabase
       .from('sedes')
       .select('direccion')
-      .eq('nombre', sede)
+      .eq('nombre', sedeNombre)
       .maybeSingle();
 
-    // Enviar confirmación por WhatsApp (no bloquea la respuesta si falla)
-    sendWhatsAppConfirmation(whatsapp, { sede, fecha, hora, cancha, direccion: sedeRow?.direccion })
-      .catch(err => console.warn('⚠️ WhatsApp no enviado:', err.message));
+    if (contactWhatsapp) {
+      sendWhatsAppConfirmation(contactWhatsapp, {
+        sede: sedeNombre,
+        fecha,
+        hora,
+        cancha: canchaNum,
+        direccion: sedeRow?.direccion,
+      }).catch((err) => console.warn('⚠️ WhatsApp no enviado:', err.message));
+    }
 
-    res.json(data);
+    const mappedReserva = mapMisReservaRow({ ...reserva, sedes: { nombre: sedeNombre } });
+
+    if (modoPartido && partidoId) {
+      return res.status(201).json({
+        reserva: mappedReserva,
+        partido_id: partidoId,
+        partido_link: `padbolmatch://partido/${partidoId}`,
+      });
+    }
+
+    res.json([mappedReserva]);
   } catch (err) {
     console.error('❌ Error POST reserva:', err.message);
     res.status(500).json({ error: err.message });
