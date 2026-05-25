@@ -49,7 +49,7 @@ const PARTIDO_SELECT = `
   ganador,
   resultado,
   created_at,
-  sedes ( nombre, ciudad, pais ),
+  sedes ( nombre, direccion, ciudad, pais ),
   partidos_abiertos_jugadores ( user_id, email, joined_at )
 `;
 
@@ -452,6 +452,31 @@ async function resolveHostName(partido, supabaseAdmin) {
   return capitanEmail ?? 'Anfitrión';
 }
 
+async function resolveCapitanFotoUrl(partido, supabaseAdmin) {
+  if (partido.capitan_foto_url) return partido.capitan_foto_url;
+
+  const capitanUserId = getCapitanUserId(partido);
+  const capitanEmail = getCapitanEmail(partido);
+  const filters = [];
+  if (capitanUserId) {
+    filters.push(`supabase_user_id.eq.${capitanUserId}`);
+    filters.push(`user_id.eq.${capitanUserId}`);
+  }
+  if (capitanEmail) {
+    filters.push(`email.eq."${String(capitanEmail).replace(/"/g, '\\"')}"`);
+  }
+
+  if (filters.length === 0) return null;
+
+  const { data: perfil } = await supabaseAdmin
+    .from('jugadores_perfil')
+    .select('foto_url')
+    .or(filters.join(','))
+    .maybeSingle();
+
+  return perfil?.foto_url ?? null;
+}
+
 async function resolveJugadorName({ user_id: userId, email }, supabaseAdmin) {
   const filters = [];
   if (userId) filters.push(`supabase_user_id.eq.${userId}`);
@@ -499,6 +524,7 @@ async function userCanAccessPartido(partidoId, user, supabaseAdmin) {
 
 async function mapPartidoRow(partido, supabaseAdmin, user = null) {
   const hostNombre = await resolveHostName(partido, supabaseAdmin);
+  const capitanFotoUrl = await resolveCapitanFotoUrl(partido, supabaseAdmin);
   const jugadoresRows = [...(partido.partidos_abiertos_jugadores ?? [])]
     .sort((a, b) => new Date(a.joined_at ?? 0) - new Date(b.joined_at ?? 0));
   const participantUserIds = jugadoresRows.map((row) => row.user_id).filter(Boolean);
@@ -512,6 +538,7 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     sede_id: partido.sede_id,
     reserva_id: partido.reserva_id ?? null,
     sede_nombre: partido.sede_nombre ?? partido.sedes?.nombre ?? null,
+    sede_direccion: partido.sedes?.direccion ?? null,
     sede_ciudad: partido.sedes?.ciudad ?? null,
     sede_pais: partido.sedes?.pais ?? null,
     cancha: partido.cancha ?? null,
@@ -527,7 +554,7 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     deadline_cancel: partido.deadline_cancel ?? null,
     pago_url: partido.pago_url ?? null,
     capitan_nombre: partido.capitan_nombre ?? hostNombre,
-    capitan_foto_url: partido.capitan_foto_url ?? null,
+    capitan_foto_url: capitanFotoUrl,
     host_nombre: hostNombre,
     host_email: capitanEmail,
     host_user_id: capitanUserId,
