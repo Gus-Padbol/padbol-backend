@@ -145,10 +145,24 @@ export function resolveReservaCanchaText(body = {}) {
   return resolvePartidoCanchaNombre(body);
 }
 
-/** Numeric court id as text for reservas.cancha (legacy schema stores 1, 2, not labels). */
-export function resolveReservaCanchaStorageText(body = {}) {
-  const numeric = resolvePartidoCanchaId(body);
+/** Numeric court id as text for reservas.cancha queries and inserts ("1", "2"). */
+export function resolveReservaCanchaQueryText(canchaInput) {
+  if (canchaInput == null || canchaInput === '') return '1';
+  if (typeof canchaInput === 'number' && !Number.isNaN(canchaInput)) {
+    return String(canchaInput);
+  }
+  if (typeof canchaInput === 'object') {
+    const numeric = resolvePartidoCanchaId(canchaInput);
+    return numeric != null ? String(numeric) : '1';
+  }
+
+  const str = String(canchaInput).trim();
+  const numeric = resolvePartidoCanchaId({ cancha: str, cancha_id: str });
   return numeric != null ? String(numeric) : '1';
+}
+
+export function resolveReservaCanchaStorageText(body = {}) {
+  return resolveReservaCanchaQueryText(body);
 }
 
 function asText(value, fallback = null) {
@@ -314,11 +328,8 @@ export function filterBlockingReservas(reservas, nowMs = Date.now()) {
 async function isCourtBlocked(supabaseAdmin, { sedeNombre, fecha, hora, cancha }) {
   if (!sedeNombre) return false;
 
-  const canchaText = typeof cancha === 'string'
-    ? cancha
-    : resolveReservaCanchaText({ cancha_id: cancha, cancha });
-  const matchValues = getReservaCanchaMatchValues(canchaText);
-  if (!matchValues.length) return false;
+  const canchaValue = resolveReservaCanchaQueryText(cancha);
+  console.log('[isCourtBlocked] checking cancha:', canchaValue);
 
   const { data, error } = await supabaseAdmin
     .from('reservas')
@@ -326,7 +337,7 @@ async function isCourtBlocked(supabaseAdmin, { sedeNombre, fecha, hora, cancha }
     .eq('sede', sedeNombre)
     .eq('fecha', fecha)
     .eq('hora', hora)
-    .in('cancha', matchValues)
+    .eq('cancha', canchaValue)
     .in('estado', ['confirmada', 'prereserva']);
 
   if (error) throw error;
