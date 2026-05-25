@@ -75,6 +75,10 @@ function emailLocalPart(email) {
   return localPart || null;
 }
 
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
 function resolveCapitanNombreFromPerfil(perfil, email) {
   if (perfil) {
     const fromProfile =
@@ -453,28 +457,21 @@ async function resolveHostName(partido, supabaseAdmin) {
 }
 
 async function resolveCapitanFotoUrl(partido, supabaseAdmin) {
-  if (partido.capitan_foto_url) return partido.capitan_foto_url;
+  if (isNonEmptyString(partido.capitan_foto_url)) {
+    return String(partido.capitan_foto_url).trim();
+  }
 
   const capitanUserId = getCapitanUserId(partido);
-  const capitanEmail = getCapitanEmail(partido);
-  const filters = [];
-  if (capitanUserId) {
-    filters.push(`supabase_user_id.eq.${capitanUserId}`);
-    filters.push(`user_id.eq.${capitanUserId}`);
-  }
-  if (capitanEmail) {
-    filters.push(`email.eq."${String(capitanEmail).replace(/"/g, '\\"')}"`);
-  }
+  if (!capitanUserId) return null;
 
-  if (filters.length === 0) return null;
-
-  const { data: perfil } = await supabaseAdmin
+  const { data: perfil, error } = await supabaseAdmin
     .from('jugadores_perfil')
     .select('foto_url')
-    .or(filters.join(','))
+    .or(`supabase_user_id.eq.${capitanUserId},user_id.eq.${capitanUserId}`)
     .maybeSingle();
 
-  return perfil?.foto_url ?? null;
+  if (error) throw error;
+  return isNonEmptyString(perfil?.foto_url) ? String(perfil.foto_url).trim() : null;
 }
 
 async function resolveJugadorName({ user_id: userId, email }, supabaseAdmin) {
@@ -554,6 +551,7 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     deadline_cancel: partido.deadline_cancel ?? null,
     pago_url: partido.pago_url ?? null,
     capitan_nombre: partido.capitan_nombre ?? hostNombre,
+    capitan_user_id: capitanUserId,
     capitan_foto_url: capitanFotoUrl,
     host_nombre: hostNombre,
     host_email: capitanEmail,
