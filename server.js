@@ -2227,15 +2227,19 @@ usuariosRouter.get('/perfil', async (req, res) => {
       return res.status(status).json({ error: authError });
     }
 
-    const email = user.email;
-    if (!email) {
-      return res.status(400).json({ error: 'Usuario sin email' });
+    const filters = buildUserEmailOrIdFilters(user, {
+      emailField: 'email',
+      userIdFields: ['supabase_user_id'],
+    });
+
+    if (filters.length === 0) {
+      return res.status(400).json({ error: 'Usuario sin identificador válido' });
     }
 
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
-      .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url')
-      .eq('email', email)
+      .select('*')
+      .or(filters.join(','))
       .maybeSingle();
 
     if (error) throw error;
@@ -2249,7 +2253,7 @@ usuariosRouter.get('/perfil', async (req, res) => {
       nivel: data.nivel ?? '',
       lateralidad: data.lateralidad ?? data.pierna_habil ?? '',
       pais: data.pais ?? '',
-      email: data.email ?? email,
+      email: data.email ?? user.email ?? '',
       foto_url: data.foto_url ?? null,
     });
   } catch (err) {
