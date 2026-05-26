@@ -11,3 +11,8 @@ CREATE TABLE IF NOT EXISTS public.solicitudes_partido (
 
 CREATE INDEX IF NOT EXISTS idx_solicitudes_partido_partido_id ON public.solicitudes_partido(partido_id);
 CREATE INDEX IF NOT EXISTS idx_solicitudes_partido_solicitante_id ON public.solicitudes_partido(solicitante_id);
+
+-- Invitaciones del capitán (estado invitado)
+ALTER TABLE public.solicitudes_partido DROP CONSTRAINT IF EXISTS solicitudes_partido_estado_check;
+ALTER TABLE public.solicitudes_partido ADD CONSTRAINT solicitudes_partido_estado_check
+  CHECK (estado IN ('pendiente', 'aceptado', 'rechazado', 'invitado'));
