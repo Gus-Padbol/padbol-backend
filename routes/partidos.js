@@ -2151,7 +2151,8 @@ export function createPartidosRouter({
         return res.status(403).json({ error: 'Solo el creador puede cancelar el partido' });
       }
 
-      if (partido.estado !== 'abierto') {
+      const cancellableStates = ['abierto', 'completo'];
+      if (!cancellableStates.includes(partido.estado)) {
         return res.status(400).json({ error: 'Este partido ya no se puede cancelar' });
       }
 
@@ -2161,6 +2162,8 @@ export function createPartidosRouter({
         partido.reserva_id,
         'cancelado',
       );
+
+      // TODO: notify all jugadores_partido via push notification when partido is cancelled
 
       console.log(`✓ POST /api/partidos/${partidoId}/cancelar — ${user.email ?? user.id}`);
       res.json({ success: true });
