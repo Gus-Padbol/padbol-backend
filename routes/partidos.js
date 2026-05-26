@@ -29,6 +29,34 @@ function isMatchPast(fecha, hora) {
 
 const OPEN_JOIN_STATES = ['abierto'];
 
+const ACTIVE_PARTIDO_CREATION_STATES = ['abierto', 'completo'];
+const ACTIVE_PARTIDO_LIMIT = 2;
+
+// TODO: Reputation score — track cancellations per user per month; if > 2, restrict partido creation for 7 days
+// TODO: No-show penalty — if partido expires without filling, count as cancellation for reputation
+// TODO: Progressive bans — warning → 7 day suspension → permanent ban
+// TODO: Prepago — require capitán to pay cancha upfront when creating partido
+
+async function countActiveCapitanPartidos(supabaseAdmin, userId) {
+  const today = getTodayArgentinaDate();
+  const { data, error } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select('id')
+    .eq('capitan_user_id', userId)
+    .in('estado', ACTIVE_PARTIDO_CREATION_STATES)
+    .gte('fecha', today);
+
+  if (error) throw error;
+  return (data ?? []).length;
+}
+
+function activePartidoLimitResponse(res) {
+  return res.status(400).json({
+    error: 'limite_partidos_activos',
+    message: 'Máximo 2 partidos activos simultáneos',
+  });
+}
+
 const PARTIDO_SELECT = `
   id,
   sede_id,
@@ -1059,6 +1087,11 @@ export function createPartidosRouter({
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) {
         return res.status(status).json({ error: authError });
+      }
+
+      const activeCount = await countActiveCapitanPartidos(supabaseAdmin, user.id);
+      if (activeCount >= ACTIVE_PARTIDO_LIMIT) {
+        return activePartidoLimitResponse(res);
       }
 
       const {
@@ -2265,6 +2298,11 @@ export function createPartidosRouter({
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) {
         return res.status(status).json({ error: authError });
+      }
+
+      const activeCount = await countActiveCapitanPartidos(supabaseAdmin, user.id);
+      if (activeCount >= ACTIVE_PARTIDO_LIMIT) {
+        return activePartidoLimitResponse(res);
       }
 
       if (!fecha || !hora || !nivel) {
