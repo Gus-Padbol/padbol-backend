@@ -566,6 +566,137 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
   };
 }
 
+async function sendExpoPushToUser(supabaseAdmin, userId, { title, body, data = {} }) {
+  if (!userId) return;
+
+  const { data: perfil, error } = await supabaseAdmin
+    .from('jugadores_perfil')
+    .select('expo_push_token')
+    .eq('supabase_user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn('⚠️ Push lookup falló:', error.message);
+    return;
+  }
+
+  if (!perfil?.expo_push_token) {
+    console.log('[push TODO]', userId, title, body);
+    return;
+  }
+
+  try {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: perfil.expo_push_token,
+        title,
+        body,
+        data,
+        sound: 'default',
+      }),
+    });
+  } catch (pushErr) {
+    console.warn('⚠️ Push partido falló:', pushErr.message);
+  }
+}
+
+async function countPartidosJugados(supabaseAdmin, userId) {
+  if (!userId) return 0;
+
+  const { count, error } = await supabaseAdmin
+    .from('partidos_abiertos_jugadores')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId);
+
+  if (error) throw error;
+  return count ?? 0;
+}
+
+async function fetchJugadorPerfilPublic(supabaseAdmin, userId, email) {
+  const filters = [];
+  if (userId) filters.push(`supabase_user_id.eq.${userId}`);
+  if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
+
+  if (filters.length === 0) return null;
+
+  const { data, error } = await supabaseAdmin
+    .from('jugadores_perfil')
+    .select('nombre, nombre_saludo, apodo, foto_url, nivel, email, supabase_user_id')
+    .or(filters.join(','))
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+function isDeadlinePassed(partido) {
+  if (!partido?.deadline_cancel) return false;
+  const deadlineMs = new Date(partido.deadline_cancel).getTime();
+  return !Number.isNaN(deadlineMs) && deadlineMs <= Date.now();
+}
+
+async function isPartidoFull(supabaseAdmin, partido) {
+  const { count, error } = await supabaseAdmin
+    .from('partidos_abiertos_jugadores')
+    .select('*', { count: 'exact', head: true })
+    .eq('partido_id', partido.id);
+
+  if (error) throw error;
+  return (count ?? 0) >= getJugadoresRequeridos(partido);
+}
+
+async function addJugadorToPartido(supabaseAdmin, partido, user, { triggerPayment = true } = {}) {
+  const partidoId = partido.id;
+  const maxJugadores = getJugadoresRequeridos(partido);
+
+  const { count, error: countErr } = await supabaseAdmin
+    .from('partidos_abiertos_jugadores')
+    .select('*', { count: 'exact', head: true })
+    .eq('partido_id', partidoId);
+
+  if (countErr) throw countErr;
+  if ((count ?? 0) >= maxJugadores) {
+    return { error: 'El partido ya está completo', status: 409 };
+  }
+
+  const { error: insertErr } = await supabaseAdmin
+    .from('partidos_abiertos_jugadores')
+    .insert([{
+      partido_id: partidoId,
+      user_id: user.id,
+      email: user.email ?? null,
+    }]);
+
+  if (insertErr) throw insertErr;
+
+  const newCount = (count ?? 0) + 1;
+  await supabaseAdmin
+    .from('partidos_abiertos')
+    .update({ jugadores_confirmados: newCount })
+    .eq('id', partidoId);
+
+  let partidoCompleto = false;
+  if (newCount >= maxJugadores) {
+    partidoCompleto = true;
+    await supabaseAdmin
+      .from('partidos_abiertos')
+      .update({ estado: 'completo', jugadores_confirmados: newCount })
+      .eq('id', partidoId);
+
+    if (triggerPayment) {
+      console.log(`[TODO Stripe] Cobrar reserva al capitán — partido ${partidoId} completo`);
+    }
+  }
+
+  return { ok: true, partidoCompleto, jugadores_actuales: newCount };
+}
+
 async function mapPartidoDetail(partido, supabaseAdmin, user) {
   const base = await mapPartidoRow(partido, supabaseAdmin, user);
   const jugadoresRows = [...(partido.partidos_abiertos_jugadores ?? [])]
@@ -851,6 +982,431 @@ export function createPartidosRouter({
       res.json(result);
     } catch (err) {
       console.error('❌ Error GET /api/partidos/abiertos:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/solicitudes-pendientes', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const { data: partidosCapitan, error: capitanErr } = await supabaseAdmin
+        .from('partidos_abiertos')
+        .select('id, sede_nombre, fecha, hora, estado')
+        .eq('capitan_user_id', user.id)
+        .eq('estado', 'abierto');
+
+      if (capitanErr) throw capitanErr;
+
+      const partidoIds = (partidosCapitan ?? []).map((row) => row.id);
+      if (partidoIds.length === 0) {
+        return res.json([]);
+      }
+
+      const { data: solicitudes, error: solErr } = await supabaseAdmin
+        .from('solicitudes_partido')
+        .select('id, partido_id, solicitante_id, estado, created_at')
+        .in('partido_id', partidoIds)
+        .eq('estado', 'pendiente')
+        .order('created_at', { ascending: false });
+
+      if (solErr) throw solErr;
+
+      const partidoMap = Object.fromEntries((partidosCapitan ?? []).map((row) => [row.id, row]));
+      const result = await Promise.all(
+        (solicitudes ?? []).map(async (solicitud) => {
+          const perfil = await fetchJugadorPerfilPublic(
+            supabaseAdmin,
+            solicitud.solicitante_id,
+            null,
+          );
+          const partido = partidoMap[solicitud.partido_id] ?? null;
+          return {
+            solicitud_id: solicitud.id,
+            partido_id: solicitud.partido_id,
+            solicitante_id: solicitud.solicitante_id,
+            created_at: solicitud.created_at,
+            sede_nombre: partido?.sede_nombre ?? null,
+            fecha: partido?.fecha ?? null,
+            hora: formatHora(partido?.hora),
+            solicitante: {
+              nombre: perfil?.nombre_saludo ?? perfil?.apodo ?? perfil?.nombre ?? 'Jugador',
+              foto_url: perfil?.foto_url ?? null,
+              nivel: perfil?.nivel ?? null,
+            },
+          };
+        }),
+      );
+
+      res.json(result);
+    } catch (err) {
+      console.error('❌ Error GET /api/partidos/solicitudes-pendientes:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/:id', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const { data: partido, error } = await supabaseAdmin
+        .from('partidos_abiertos')
+        .select(PARTIDO_SELECT)
+        .eq('id', partidoId)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!partido) {
+        return res.status(404).json({ error: 'Partido no encontrado' });
+      }
+
+      const mapped = await mapPartidoRow(partido, supabaseAdmin, user);
+
+      const { data: miSolicitud } = await supabaseAdmin
+        .from('solicitudes_partido')
+        .select('id, estado')
+        .eq('partido_id', partidoId)
+        .eq('solicitante_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      res.json({
+        ...mapped,
+        deporte: partido.deporte ?? 'padbol',
+        mi_solicitud_estado: miSolicitud?.estado ?? null,
+        mi_solicitud_id: miSolicitud?.id ?? null,
+      });
+    } catch (err) {
+      console.error('❌ Error GET /api/partidos/:id:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/:id/mi-solicitud', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const { data: solicitud, error } = await supabaseAdmin
+        .from('solicitudes_partido')
+        .select('id, estado, created_at')
+        .eq('partido_id', partidoId)
+        .eq('solicitante_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      res.json({
+        solicitud_id: solicitud?.id ?? null,
+        estado: solicitud?.estado ?? null,
+      });
+    } catch (err) {
+      console.error('❌ Error GET /api/partidos/:id/mi-solicitud:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/:id/solicitar-union', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const { data: partido, error: fetchErr } = await supabaseAdmin
+        .from('partidos_abiertos')
+        .select('*')
+        .eq('id', partidoId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!partido) {
+        return res.status(404).json({ error: 'Partido no encontrado' });
+      }
+      if (partido.estado !== 'abierto') {
+        return res.status(400).json({ error: 'Este partido ya no acepta jugadores' });
+      }
+      if (isDeadlinePassed(partido)) {
+        return res.status(400).json({ error: 'El plazo para unirse ya venció' });
+      }
+      if (getCapitanUserId(partido) === user.id) {
+        return res.status(400).json({ error: 'Ya sos el capitán de este partido' });
+      }
+
+      const { data: existingJoin, error: joinErr } = await supabaseAdmin
+        .from('partidos_abiertos_jugadores')
+        .select('id')
+        .eq('partido_id', partidoId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (joinErr) throw joinErr;
+      if (existingJoin) {
+        return res.status(409).json({ error: 'Ya estás unido a este partido' });
+      }
+
+      if (await isPartidoFull(supabaseAdmin, partido)) {
+        return res.status(409).json({ error: 'El partido ya está completo' });
+      }
+
+      const { data: existingSolicitud, error: solErr } = await supabaseAdmin
+        .from('solicitudes_partido')
+        .select('id, estado')
+        .eq('partido_id', partidoId)
+        .eq('solicitante_id', user.id)
+        .maybeSingle();
+
+      if (solErr) throw solErr;
+      if (existingSolicitud?.estado === 'pendiente') {
+        return res.status(409).json({ error: 'Ya enviaste una solicitud para este partido' });
+      }
+
+      if (existingSolicitud?.estado === 'aceptado') {
+        return res.status(409).json({ error: 'Ya estás unido a este partido' });
+      }
+
+      if (existingSolicitud) {
+        const { error: updateErr } = await supabaseAdmin
+          .from('solicitudes_partido')
+          .update({ estado: 'pendiente', created_at: new Date().toISOString() })
+          .eq('id', existingSolicitud.id);
+
+        if (updateErr) throw updateErr;
+      } else {
+        const { error: insertErr } = await supabaseAdmin
+          .from('solicitudes_partido')
+          .insert([{
+            partido_id: partidoId,
+            solicitante_id: user.id,
+            estado: 'pendiente',
+          }]);
+
+        if (insertErr) throw insertErr;
+      }
+
+      const capitanUserId = getCapitanUserId(partido);
+      const solicitantePerfil = await fetchJugadorPerfilPublic(supabaseAdmin, user.id, user.email);
+      const solicitanteNombre =
+        solicitantePerfil?.nombre_saludo
+        ?? solicitantePerfil?.apodo
+        ?? solicitantePerfil?.nombre
+        ?? emailLocalPart(user.email)
+        ?? 'Un jugador';
+
+      await sendExpoPushToUser(supabaseAdmin, capitanUserId, {
+        title: 'Nueva solicitud',
+        body: `${solicitanteNombre} quiere unirse a tu partido del ${partido.fecha}`,
+        data: {
+          type: 'solicitud_partido',
+          partido_id: String(partidoId),
+        },
+      });
+
+      console.log(`✓ POST /api/partidos/${partidoId}/solicitar-union — ${user.id}`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('❌ Error POST /api/partidos/:id/solicitar-union:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/:id/solicitudes', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const { data: partido, error: fetchErr } = await supabaseAdmin
+        .from('partidos_abiertos')
+        .select('id, capitan_user_id, sede_nombre, fecha, hora, estado, jugadores_requeridos')
+        .eq('id', partidoId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!partido) {
+        return res.status(404).json({ error: 'Partido no encontrado' });
+      }
+      if (getCapitanUserId(partido) !== user.id) {
+        return res.status(403).json({ error: 'Solo el capitán puede ver las solicitudes' });
+      }
+
+      const { data: solicitudes, error: solErr } = await supabaseAdmin
+        .from('solicitudes_partido')
+        .select('id, solicitante_id, estado, created_at')
+        .eq('partido_id', partidoId)
+        .eq('estado', 'pendiente')
+        .order('created_at', { ascending: true });
+
+      if (solErr) throw solErr;
+
+      const mapped = await Promise.all(
+        (solicitudes ?? []).map(async (solicitud) => {
+          const perfil = await fetchJugadorPerfilPublic(
+            supabaseAdmin,
+            solicitud.solicitante_id,
+            null,
+          );
+          const partidosJugados = await countPartidosJugados(supabaseAdmin, solicitud.solicitante_id);
+
+          return {
+            id: solicitud.id,
+            solicitante_id: solicitud.solicitante_id,
+            estado: solicitud.estado,
+            created_at: solicitud.created_at,
+            nombre: perfil?.nombre_saludo ?? perfil?.apodo ?? perfil?.nombre ?? 'Jugador',
+            foto_url: perfil?.foto_url ?? null,
+            nivel: perfil?.nivel ?? 'Intermedio',
+            partidos_jugados: partidosJugados,
+          };
+        }),
+      );
+
+      res.json({
+        partido: {
+          id: partido.id,
+          sede_nombre: partido.sede_nombre,
+          fecha: partido.fecha,
+          hora: formatHora(partido.hora),
+          estado: partido.estado,
+          completo: await isPartidoFull(supabaseAdmin, partido),
+        },
+        solicitudes: mapped,
+      });
+    } catch (err) {
+      console.error('❌ Error GET /api/partidos/:id/solicitudes:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.patch('/:id/solicitudes/:solicitudId', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      const solicitudId = req.params.solicitudId;
+      const accion = String(req.body?.accion ?? '').trim().toLowerCase();
+
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+      if (!['aceptar', 'rechazar'].includes(accion)) {
+        return res.status(400).json({ error: 'accion debe ser aceptar o rechazar' });
+      }
+
+      const { data: partido, error: fetchErr } = await supabaseAdmin
+        .from('partidos_abiertos')
+        .select('*')
+        .eq('id', partidoId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!partido) {
+        return res.status(404).json({ error: 'Partido no encontrado' });
+      }
+      if (getCapitanUserId(partido) !== user.id) {
+        return res.status(403).json({ error: 'Solo el capitán puede responder solicitudes' });
+      }
+
+      const { data: solicitud, error: solErr } = await supabaseAdmin
+        .from('solicitudes_partido')
+        .select('*')
+        .eq('id', solicitudId)
+        .eq('partido_id', partidoId)
+        .maybeSingle();
+
+      if (solErr) throw solErr;
+      if (!solicitud) {
+        return res.status(404).json({ error: 'Solicitud no encontrada' });
+      }
+      if (solicitud.estado !== 'pendiente') {
+        return res.status(400).json({ error: 'Esta solicitud ya fue respondida' });
+      }
+
+      if (accion === 'rechazar') {
+        await supabaseAdmin
+          .from('solicitudes_partido')
+          .update({ estado: 'rechazado' })
+          .eq('id', solicitudId);
+
+        await sendExpoPushToUser(supabaseAdmin, solicitud.solicitante_id, {
+          title: 'Solicitud no aceptada',
+          body: 'El partido está completo — ¡busca tu próximo partido!',
+          data: { type: 'solicitud_rechazada', partido_id: String(partidoId) },
+        });
+
+        return res.json({ ok: true });
+      }
+
+      if (await isPartidoFull(supabaseAdmin, partido)) {
+        return res.status(409).json({ error: 'El partido ya está completo' });
+      }
+
+      const { data: solicitanteAuth, error: authLookupErr } = await supabaseAdmin.auth.admin.getUserById(
+        solicitud.solicitante_id,
+      );
+
+      if (authLookupErr || !solicitanteAuth?.user) {
+        return res.status(404).json({ error: 'No encontramos al solicitante' });
+      }
+
+      const solicitanteUser = solicitanteAuth.user;
+      const joinResult = await addJugadorToPartido(supabaseAdmin, partido, solicitanteUser);
+
+      if (joinResult.error) {
+        return res.status(joinResult.status ?? 409).json({ error: joinResult.error });
+      }
+
+      await supabaseAdmin
+        .from('solicitudes_partido')
+        .update({ estado: 'aceptado' })
+        .eq('id', solicitudId);
+
+      const horaLabel = formatHora(partido.hora) ?? '';
+      await sendExpoPushToUser(supabaseAdmin, solicitud.solicitante_id, {
+        title: '¡Estás dentro!',
+        body: `¡Estás dentro! El partido es el ${partido.fecha} a las ${horaLabel}`,
+        data: { type: 'solicitud_aceptada', partido_id: String(partidoId) },
+      });
+
+      console.log(`✓ PATCH /api/partidos/${partidoId}/solicitudes/${solicitudId} — aceptar`);
+      res.json({ ok: true, partido_completo: joinResult.partidoCompleto });
+    } catch (err) {
+      console.error('❌ Error PATCH /api/partidos/:id/solicitudes/:solicitudId:', err.message);
       res.status(500).json({ error: err.message });
     }
   });
