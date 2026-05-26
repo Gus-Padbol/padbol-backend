@@ -956,7 +956,7 @@ export function createPartidosRouter({
 
       const { data: partidosCapitan, error: capitanErr } = await supabaseAdmin
         .from('partidos_abiertos')
-        .select('id, sede_nombre, fecha, hora, estado')
+        .select('id, sede_nombre, fecha, hora, estado, deporte')
         .eq('capitan_user_id', user.id)
         .eq('estado', 'abierto');
 
@@ -993,6 +993,7 @@ export function createPartidosRouter({
             sede_nombre: partido?.sede_nombre ?? null,
             fecha: partido?.fecha ?? null,
             hora: formatHora(partido?.hora),
+            deporte: partido?.deporte ?? 'padbol',
             solicitante: {
               nombre: perfil?.nombre_saludo ?? perfil?.apodo ?? perfil?.nombre ?? 'Jugador',
               foto_url: perfil?.foto_url ?? null,
