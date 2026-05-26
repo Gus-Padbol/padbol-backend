@@ -2870,6 +2870,74 @@ async function getSedesHabituales({ email, supabaseUserId, primarySedeId }) {
     .filter(Boolean);
 }
 
+const JUGADOR_RANKING_TIPOS = new Set(['club', 'nacional', 'fipa']);
+
+function isMissingJugadorRankingsTable(error) {
+  const message = String(error?.message ?? '').toLowerCase();
+  return (
+    error?.code === '42P01'
+    || error?.code === 'PGRST205'
+    || message.includes('jugador_rankings')
+    || message.includes('does not exist')
+    || message.includes('could not find the table')
+  );
+}
+
+function normalizeJugadorRankingRow(row) {
+  const tipo = String(row?.tipo ?? '').trim().toLowerCase();
+  const posicion = Number(row?.posicion);
+  if (!JUGADOR_RANKING_TIPOS.has(tipo) || !Number.isFinite(posicion) || posicion <= 0) {
+    return null;
+  }
+
+  return {
+    tipo,
+    deporte: String(row?.deporte ?? '').trim(),
+    categoria: String(row?.categoria ?? '').trim(),
+    posicion: Math.floor(posicion),
+  };
+}
+
+const jugadorRouter = express.Router();
+
+// GET /api/jugador/rankings — Authenticated player's earned ranking positions
+jugadorRouter.get('/rankings', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('jugador_rankings')
+      .select('tipo, deporte, categoria, posicion')
+      .eq('user_id', user.id)
+      .gt('posicion', 0);
+
+    if (error) {
+      if (isMissingJugadorRankingsTable(error)) {
+        return res.json({ rankings: [] });
+      }
+      throw error;
+    }
+
+    const tipoOrder = { club: 0, nacional: 1, fipa: 2 };
+    const rankings = (data ?? [])
+      .map(normalizeJugadorRankingRow)
+      .filter(Boolean)
+      .sort((a, b) => {
+        const orderDiff = (tipoOrder[a.tipo] ?? 99) - (tipoOrder[b.tipo] ?? 99);
+        if (orderDiff !== 0) return orderDiff;
+        return a.deporte.localeCompare(b.deporte) || a.categoria.localeCompare(b.categoria);
+      });
+
+    res.json({ rankings });
+  } catch (err) {
+    console.error('❌ Error GET /api/jugador/rankings:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const usuariosRouter = express.Router();
 
 // POST /api/usuarios/push-token — Save Expo push token on jugadores_perfil
@@ -3525,6 +3593,7 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
 });
 
 app.use('/api/usuarios', usuariosRouter);
+app.use('/api/jugador', jugadorRouter);
 
 // ===== CHECKIN =====
 const checkinRouter = express.Router();
