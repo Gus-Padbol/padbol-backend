@@ -379,23 +379,231 @@ export function filterBlockingReservas(reservas, nowMs = Date.now()) {
   return (reservas ?? []).filter((reserva) => isBlockingReserva(reserva, nowMs));
 }
 
-async function isCourtBlocked(supabaseAdmin, { sedeNombre, fecha, hora, cancha }) {
-  if (!sedeNombre) return false;
+const PARTIDO_BLOCKING_STATES = ['abierto', 'completo'];
+
+function parseTimeToMinutes(time) {
+  const [hours, minutes] = String(time ?? '').slice(0, 5).split(':').map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return 0;
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(totalMinutes) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function generateSlotTimes(apertura, cierre, duracionMinutos) {
+  const start = parseTimeToMinutes(apertura || '18:00');
+  const end = parseTimeToMinutes(cierre || '23:00');
+  const duration = duracionMinutos > 0 ? duracionMinutos : 90;
+  const slots = [];
+
+  for (let current = start; current + duration <= end; current += 30) {
+    slots.push(minutesToTime(current));
+  }
+
+  return slots;
+}
+
+export function parseCourtNumberFromStorage(cancha) {
+  return resolvePartidoCanchaId({ cancha });
+}
+
+export function isReservaBlockingSlot(reserva, { hora, canchaNum }, nowMs = Date.now()) {
+  if (!isBlockingReserva(reserva, nowMs)) return false;
+  if (formatHora(reserva.hora) !== formatHora(hora)) return false;
+  return Number(resolveReservaCanchaQueryText(reserva.cancha)) === canchaNum;
+}
+
+export function isPartidoBlockingSlot(partido, { hora, canchaNum }) {
+  if (!PARTIDO_BLOCKING_STATES.includes(partido?.estado)) return false;
+  if (formatHora(partido.hora) !== formatHora(hora)) return false;
+  return parseCourtNumberFromStorage(partido.cancha) === canchaNum;
+}
+
+function slotBlockingInfo({ hora, canchaNum }, blockingReservas, blockingPartidos, nowMs) {
+  const partidoHit = (blockingPartidos ?? []).some(
+    (partido) => isPartidoBlockingSlot(partido, { hora, canchaNum }),
+  );
+  if (partidoHit) {
+    return { blocked: true, motivo: 'partido_armado' };
+  }
+
+  const reservaHit = (blockingReservas ?? []).some(
+    (reserva) => isReservaBlockingSlot(reserva, { hora, canchaNum }, nowMs),
+  );
+  if (reservaHit) {
+    return { blocked: true, motivo: 'reservado' };
+  }
+
+  return { blocked: false, motivo: null };
+}
+
+export async function fetchDisponibilidadOccupancy(supabaseAdmin, { sedeId, sedeNombre, fecha }) {
+  const { data: reservas, error: reservasErr } = await supabaseAdmin
+    .from('reservas')
+    .select('id, hora, cancha, estado, created_at')
+    .eq('sede', sedeNombre)
+    .eq('fecha', fecha);
+
+  if (reservasErr) throw reservasErr;
+
+  const { data: partidos, error: partidosErr } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select('hora, duracion_minutos, cancha, estado')
+    .eq('sede_id', sedeId)
+    .eq('fecha', fecha)
+    .in('estado', PARTIDO_BLOCKING_STATES);
+
+  if (partidosErr) throw partidosErr;
+
+  return {
+    reservas: filterBlockingReservas(reservas ?? []),
+    partidos: partidos ?? [],
+  };
+}
+
+export async function buildDisponibilidadSlots(
+  supabaseAdmin,
+  { sedeId, fecha, duracionMinutos, expandCourts = false },
+) {
+  const { data: sede, error: sedeErr } = await supabaseAdmin
+    .from('sedes')
+    .select('id, nombre, horario_apertura, horario_cierre, cantidad_canchas')
+    .eq('id', sedeId)
+    .maybeSingle();
+
+  if (sedeErr) throw sedeErr;
+  if (!sede) return null;
+
+  const { reservas: blockingReservas, partidos: blockingPartidos } = await fetchDisponibilidadOccupancy(
+    supabaseAdmin,
+    { sedeId, sedeNombre: sede.nombre, fecha },
+  );
+
+  const slotTimes = generateSlotTimes(
+    sede.horario_apertura,
+    sede.horario_cierre,
+    duracionMinutos,
+  );
+  const totalCourts = sede.cantidad_canchas || 1;
+  const nowMs = Date.now();
+
+  if (expandCourts) {
+    return slotTimes.flatMap((hora) => {
+      const availableCourts = [];
+
+      for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
+        const { blocked } = slotBlockingInfo(
+          { hora, canchaNum: cancha },
+          blockingReservas,
+          blockingPartidos,
+          nowMs,
+        );
+        if (!blocked) availableCourts.push(cancha);
+      }
+
+      if (availableCourts.length === 0) {
+        const sample = slotBlockingInfo(
+          { hora, canchaNum: 1 },
+          blockingReservas,
+          blockingPartidos,
+          nowMs,
+        );
+        return [{
+          hora,
+          disponible: false,
+          cancha: null,
+          motivo: sample.motivo ?? 'reservado',
+        }];
+      }
+
+      return availableCourts.map((cancha) => ({
+        hora,
+        disponible: true,
+        cancha,
+      }));
+    });
+  }
+
+  return slotTimes.map((hora) => {
+    let firstAvailable = null;
+    let firstMotivo = null;
+
+    for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
+      const info = slotBlockingInfo(
+        { hora, canchaNum: cancha },
+        blockingReservas,
+        blockingPartidos,
+        nowMs,
+      );
+      if (!info.blocked) {
+        firstAvailable = cancha;
+        break;
+      }
+      if (!firstMotivo) firstMotivo = info.motivo;
+    }
+
+    if (firstAvailable != null) {
+      return { hora, disponible: true, cancha: firstAvailable };
+    }
+
+    return {
+      hora,
+      disponible: false,
+      cancha: null,
+      motivo: firstMotivo ?? 'reservado',
+    };
+  });
+}
+
+async function resolveSedeIdFromNombre(supabaseAdmin, sedeNombre) {
+  if (!sedeNombre) return null;
+  const { data, error } = await supabaseAdmin
+    .from('sedes')
+    .select('id')
+    .eq('nombre', sedeNombre)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.id ?? null;
+}
+
+async function isCourtBlocked(supabaseAdmin, { sedeNombre, sedeId, fecha, hora, cancha }) {
+  if (!sedeNombre && sedeId == null) return false;
 
   const canchaValue = resolveReservaCanchaQueryText(cancha);
-  console.log('[isCourtBlocked] checking cancha:', canchaValue);
+  const canchaNum = Number(canchaValue);
 
-  const { data, error } = await supabaseAdmin
-    .from('reservas')
-    .select('id, estado, created_at')
-    .eq('sede', sedeNombre)
+  if (sedeNombre) {
+    const { data, error } = await supabaseAdmin
+      .from('reservas')
+      .select('id, hora, cancha, estado, created_at')
+      .eq('sede', sedeNombre)
+      .eq('fecha', fecha)
+      .eq('hora', hora)
+      .eq('cancha', canchaValue)
+      .in('estado', ['confirmada', 'prereserva']);
+
+    if (error) throw error;
+    if (filterBlockingReservas(data).length > 0) return true;
+  }
+
+  const resolvedSedeId = sedeId ?? await resolveSedeIdFromNombre(supabaseAdmin, sedeNombre);
+  if (resolvedSedeId == null) return false;
+
+  const { data: partidos, error: partidosErr } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select('hora, cancha, estado')
+    .eq('sede_id', resolvedSedeId)
     .eq('fecha', fecha)
-    .eq('hora', hora)
-    .eq('cancha', canchaValue)
-    .in('estado', ['confirmada', 'prereserva']);
+    .in('estado', PARTIDO_BLOCKING_STATES);
 
-  if (error) throw error;
-  return filterBlockingReservas(data).length > 0;
+  if (partidosErr) throw partidosErr;
+
+  return (partidos ?? []).some(
+    (partido) => isPartidoBlockingSlot(partido, { hora, canchaNum }),
+  );
 }
 
 export { isCourtBlocked };
@@ -793,6 +1001,7 @@ export function createPartidosRouter({
 
       const blocked = await isCourtBlocked(supabaseAdmin, {
         sedeNombre: sedeRow.nombre,
+        sedeId: sedeRow.id,
         fecha,
         hora,
         cancha: canchaStorage,

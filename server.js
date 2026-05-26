@@ -15,6 +15,8 @@ import {
   buildReservaInsertRow,
   createPartidosAbiertosRouter,
   createPartidosRouter,
+  buildDisponibilidadSlots,
+  fetchDisponibilidadOccupancy,
   filterBlockingReservas,
   isCourtBlocked,
   logPartidoCanchaBody,
@@ -545,17 +547,81 @@ app.get('/api/sedes/:id/extras', async (req, res) => {
   }
 });
 
-// GET disponibilidad
+// GET disponibilidad — slots con reservas + partidos_abiertos (cancha + hora)
+app.get('/api/disponibilidad', async (req, res) => {
+  try {
+    const sedeId = parsePositiveInt(req.query.sede_id);
+    const fecha = req.query.fecha;
+    const duracionMinutos = parsePositiveInt(req.query.duracion) ?? 90;
+    const expandCourts = req.query.expand_courts === 'true' || req.query.expand_courts === '1';
+
+    if (sedeId == null || !fecha) {
+      return res.status(400).json({ error: 'sede_id y fecha son requeridos' });
+    }
+
+    const slots = await buildDisponibilidadSlots(supabaseAdmin, {
+      sedeId,
+      fecha,
+      duracionMinutos,
+      expandCourts,
+    });
+
+    if (!slots) {
+      return res.status(404).json({ error: 'Sede no encontrada' });
+    }
+
+    res.json({ slots });
+  } catch (err) {
+    console.error('❌ Error GET /api/disponibilidad:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET bloqueos (reservas + partidos) para fallback del cliente
+app.get('/api/disponibilidad/bloqueos', async (req, res) => {
+  try {
+    const sedeId = parsePositiveInt(req.query.sede_id);
+    const fecha = req.query.fecha;
+
+    if (sedeId == null || !fecha) {
+      return res.status(400).json({ error: 'sede_id y fecha son requeridos' });
+    }
+
+    const { data: sede, error: sedeErr } = await supabaseAdmin
+      .from('sedes')
+      .select('id, nombre')
+      .eq('id', sedeId)
+      .maybeSingle();
+
+    if (sedeErr) throw sedeErr;
+    if (!sede) {
+      return res.status(404).json({ error: 'Sede no encontrada' });
+    }
+
+    const occupancy = await fetchDisponibilidadOccupancy(supabaseAdmin, {
+      sedeId,
+      sedeNombre: sede.nombre,
+      fecha,
+    });
+
+    res.json(occupancy);
+  } catch (err) {
+    console.error('❌ Error GET /api/disponibilidad/bloqueos:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET disponibilidad — reservas bloqueantes por sede (nombre) + fecha
 app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
   try {
     const { sede, fecha } = req.params;
-    
+
     const { data, error } = await supabase
       .from('reservas')
-      .select('*')
+      .select('id, hora, cancha, estado, created_at')
       .eq('sede', sede)
       .eq('fecha', fecha);
-    
+
     if (error) throw error;
     res.json(filterBlockingReservas(data || []));
   } catch (err) {
@@ -654,6 +720,7 @@ app.post('/api/reservas', async (req, res) => {
 
     const blocked = await isCourtBlocked(supabaseAdmin, {
       sedeNombre,
+      sedeId,
       fecha,
       hora,
       cancha: canchaStorage,
