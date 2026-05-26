@@ -422,12 +422,83 @@ export function isPartidoBlockingSlot(partido, { hora, canchaNum }) {
   return parseCourtNumberFromStorage(partido.cancha) === canchaNum;
 }
 
+function formatPartidoSlotPayload(partido) {
+  return {
+    id: partido.id,
+    jugadores_confirmados: getJugadoresConfirmados(partido, 0) ?? 0,
+    jugadores_requeridos: getJugadoresRequeridos(partido),
+    nivel: partido.nivel ?? null,
+  };
+}
+
+function getPartidoLugaresLibres(partido) {
+  const requeridos = getJugadoresRequeridos(partido);
+  const confirmados = getJugadoresConfirmados(partido, 0) ?? 0;
+  return Math.max(0, requeridos - confirmados);
+}
+
+function getHoraUnavailableInfo(hora, totalCourts, blockingReservas, blockingPartidos, nowMs) {
+  let reservaBlocked = false;
+  let bestPartido = null;
+  let bestLugares = -1;
+
+  for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
+    const partido = (blockingPartidos ?? []).find(
+      (row) => isPartidoBlockingSlot(row, { hora, canchaNum: cancha }),
+    );
+    if (partido) {
+      const lugares = getPartidoLugaresLibres(partido);
+      if (lugares > bestLugares) {
+        bestLugares = lugares;
+        bestPartido = partido;
+      }
+      continue;
+    }
+
+    const takenByReserva = (blockingReservas ?? []).some(
+      (reserva) => isReservaBlockingSlot(reserva, { hora, canchaNum: cancha }, nowMs),
+    );
+    if (takenByReserva) reservaBlocked = true;
+  }
+
+  if (bestPartido) {
+    return {
+      blocked: true,
+      motivo: 'partido_abierto',
+      partido: formatPartidoSlotPayload(bestPartido),
+    };
+  }
+
+  if (reservaBlocked) {
+    return { blocked: true, motivo: 'reservado' };
+  }
+
+  return { blocked: true, motivo: 'reservado' };
+}
+
+function buildUnavailableSlot(hora, info, cancha = null) {
+  const slot = {
+    hora,
+    disponible: false,
+    cancha,
+    motivo: info.motivo ?? 'reservado',
+  };
+  if (info.partido) {
+    slot.partido = info.partido;
+  }
+  return slot;
+}
+
 function slotBlockingInfo({ hora, canchaNum }, blockingReservas, blockingPartidos, nowMs) {
-  const partidoHit = (blockingPartidos ?? []).some(
-    (partido) => isPartidoBlockingSlot(partido, { hora, canchaNum }),
+  const partido = (blockingPartidos ?? []).find(
+    (row) => isPartidoBlockingSlot(row, { hora, canchaNum }),
   );
-  if (partidoHit) {
-    return { blocked: true, motivo: 'partido_armado' };
+  if (partido) {
+    return {
+      blocked: true,
+      motivo: 'partido_abierto',
+      partido: formatPartidoSlotPayload(partido),
+    };
   }
 
   const reservaHit = (blockingReservas ?? []).some(
@@ -451,7 +522,7 @@ export async function fetchDisponibilidadOccupancy(supabaseAdmin, { sedeId, sede
 
   const { data: partidos, error: partidosErr } = await supabaseAdmin
     .from('partidos_abiertos')
-    .select('hora, cancha, estado')
+    .select('id, hora, cancha, estado, jugadores_confirmados, jugadores_requeridos, nivel')
     .eq('sede_id', sedeId)
     .eq('fecha', fecha)
     .in('estado', PARTIDO_BLOCKING_STATES);
@@ -505,18 +576,14 @@ export async function buildDisponibilidadSlots(
       }
 
       if (availableCourts.length === 0) {
-        const sample = slotBlockingInfo(
-          { hora, canchaNum: 1 },
+        const info = getHoraUnavailableInfo(
+          hora,
+          totalCourts,
           blockingReservas,
           blockingPartidos,
           nowMs,
         );
-        return [{
-          hora,
-          disponible: false,
-          cancha: null,
-          motivo: sample.motivo ?? 'reservado',
-        }];
+        return [buildUnavailableSlot(hora, info)];
       }
 
       return availableCourts.map((cancha) => ({
@@ -528,9 +595,6 @@ export async function buildDisponibilidadSlots(
   }
 
   return slotTimes.map((hora) => {
-    let firstAvailable = null;
-    let firstMotivo = null;
-
     for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
       const info = slotBlockingInfo(
         { hora, canchaNum: cancha },
@@ -539,22 +603,18 @@ export async function buildDisponibilidadSlots(
         nowMs,
       );
       if (!info.blocked) {
-        firstAvailable = cancha;
-        break;
+        return { hora, disponible: true, cancha };
       }
-      if (!firstMotivo) firstMotivo = info.motivo;
     }
 
-    if (firstAvailable != null) {
-      return { hora, disponible: true, cancha: firstAvailable };
-    }
-
-    return {
+    const info = getHoraUnavailableInfo(
       hora,
-      disponible: false,
-      cancha: null,
-      motivo: firstMotivo ?? 'reservado',
-    };
+      totalCourts,
+      blockingReservas,
+      blockingPartidos,
+      nowMs,
+    );
+    return buildUnavailableSlot(hora, info);
   });
 }
 
