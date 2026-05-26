@@ -1089,6 +1089,19 @@ export function createPartidosRouter({
 
       const mapped = await mapPartidoRow(partido, supabaseAdmin, user);
 
+      if (partido.reserva_id) {
+        const { data: reserva } = await supabaseAdmin
+          .from('reservas')
+          .select('precio, moneda')
+          .eq('id', partido.reserva_id)
+          .maybeSingle();
+
+        if (reserva) {
+          mapped.precio = reserva.precio ?? null;
+          mapped.moneda = reserva.moneda ?? 'ARS';
+        }
+      }
+
       const { data: miSolicitud } = await supabaseAdmin
         .from('solicitudes_partido')
         .select('id, estado')
@@ -1242,6 +1255,96 @@ export function createPartidosRouter({
       res.json({ ok: true });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/invitar:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.delete('/:id/salir', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const { data: partido, error: fetchErr } = await supabaseAdmin
+        .from('partidos_abiertos')
+        .select('*')
+        .eq('id', partidoId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!partido) {
+        return res.status(404).json({ error: 'Partido no encontrado' });
+      }
+
+      if (getCapitanUserId(partido) === user.id) {
+        return res.status(403).json({
+          error: 'Eres el capitán — no puedes salir del partido. Si necesitas cancelarlo, contacta al club.',
+        });
+      }
+
+      const { data: joinRow, error: joinErr } = await supabaseAdmin
+        .from('partidos_abiertos_jugadores')
+        .select('id')
+        .eq('partido_id', partidoId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (joinErr) throw joinErr;
+      if (!joinRow) {
+        return res.status(403).json({ error: 'No estás confirmado en este partido' });
+      }
+
+      const { error: deleteErr } = await supabaseAdmin
+        .from('partidos_abiertos_jugadores')
+        .delete()
+        .eq('partido_id', partidoId)
+        .eq('user_id', user.id);
+
+      if (deleteErr) throw deleteErr;
+
+      const { count, error: countErr } = await supabaseAdmin
+        .from('partidos_abiertos_jugadores')
+        .select('*', { count: 'exact', head: true })
+        .eq('partido_id', partidoId);
+
+      if (countErr) throw countErr;
+
+      const newCount = count ?? 0;
+      await supabaseAdmin
+        .from('partidos_abiertos')
+        .update({
+          estado: 'abierto',
+          jugadores_confirmados: newCount,
+        })
+        .eq('id', partidoId);
+
+      const perfil = await fetchJugadorPerfilPublic(supabaseAdmin, user.id, user.email);
+      const nombre =
+        perfil?.nombre_saludo
+        ?? perfil?.apodo
+        ?? perfil?.nombre
+        ?? emailLocalPart(user.email)
+        ?? 'Un jugador';
+
+      const capitanUserId = getCapitanUserId(partido);
+      if (capitanUserId) {
+        await sendPushToUser(supabaseAdmin, capitanUserId, {
+          title: 'Un jugador salió del partido',
+          body: `${nombre} salió — falta 1 jugador para completar el equipo`,
+          data: { tipo: 'jugador_salio', partidoId: String(partidoId) },
+        });
+      }
+
+      console.log(`✓ DELETE /api/partidos/${partidoId}/salir — ${user.id}`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('❌ Error DELETE /api/partidos/:id/salir:', err.message);
       res.status(500).json({ error: err.message });
     }
   });
