@@ -1431,7 +1431,7 @@ app.get('/api/rankings', async (req, res) => {
     if (emails.length > 0) {
       const { data: perfiles } = await supabase
         .from('jugadores_perfil')
-        .select('email, nombre, pais, foto_url, sede_id, nivel')
+        .select('email, nombre, apellido, pais, foto_url, sede_id, nivel')
         .in('email', emails);
 
       (perfiles || []).forEach(perfil => {
@@ -1441,7 +1441,8 @@ app.get('/api/rankings', async (req, res) => {
         entry.pais     = perfil.pais     || null;
         entry.nivel    = perfil.nivel    || null;
         entry.sede_id  = perfil.sede_id  || null;
-        entry.nombre   = perfil.nombre   || entry.nombre;
+        entry.nombre   = formatTournamentPlayerName(perfil) || entry.nombre;
+        entry.apellido = perfil.apellido ?? '';
       });
     }
 
@@ -2582,6 +2583,46 @@ async function fetchUltimosPartidosUsuario({ email, supabaseUserId }, limit = 5)
     }));
 }
 
+const DEPORTE_LABEL_TO_KEY = {
+  padbol: 'padbol',
+  padel: 'padel',
+  pádel: 'padel',
+  pickleball: 'pickleball',
+  tenis: 'tenis',
+  futbol: 'futbol',
+  fútbol: 'futbol',
+  squash: 'squash',
+};
+
+function deporteValueToKey(value) {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  return DEPORTE_LABEL_TO_KEY[lower] ?? DEPORTE_LABEL_TO_KEY[trimmed] ?? lower;
+}
+
+async function syncJugadorDeportesForUser(userId, deportesRaw) {
+  const keys = [...new Set(parsePerfilDeportes(deportesRaw).map(deporteValueToKey).filter(Boolean))];
+  if (!userId || keys.length === 0) return keys;
+
+  await supabaseAdmin.from('jugador_deportes').delete().eq('user_id', userId);
+
+  const rows = keys.map((deporte) => ({ user_id: userId, deporte }));
+  const { error } = await supabaseAdmin.from('jugador_deportes').insert(rows);
+  if (error) {
+    console.warn('⚠️ syncJugadorDeportesForUser:', error.message);
+  }
+
+  return keys;
+}
+
+function formatTournamentPlayerName(perfil) {
+  const nombre = String(perfil?.nombre ?? '').trim();
+  const apellido = String(perfil?.apellido ?? '').trim();
+  const full = [nombre, apellido].filter(Boolean).join(' ');
+  return full || nombre || String(perfil?.apodo ?? '').trim() || 'Jugador';
+}
+
 function parsePerfilDeportes(raw) {
   if (raw == null) return [];
   if (Array.isArray(raw)) {
@@ -3029,12 +3070,13 @@ usuariosRouter.get('/perfil', async (req, res) => {
       nombre: data.nombre ?? '',
       telefono: data.telefono ?? '',
       nivel: data.nivel ?? '',
-      lateralidad: data.lateralidad ?? data.pierna_habil ?? '',
+      apellido: data.apellido ?? '',
+      lateralidad: data.lateralidad ?? '',
       pais: data.pais ?? '',
       email: data.email ?? user.email ?? '',
       foto_url: data.foto_url ?? null,
-      username: data.username ?? data.apodo ?? null,
-      apodo: data.apodo ?? data.username ?? null,
+      username: data.username ?? null,
+      apodo: data.apodo ?? null,
       deporte_principal: deportes[0] ?? null,
       deportes,
     });
@@ -3057,9 +3099,11 @@ usuariosRouter.post('/perfil', async (req, res) => {
       return res.status(400).json({ error: 'Usuario sin email' });
     }
 
-    const { nombre, nivel, username, apodo, deporte, deporte_principal } = req.body ?? {};
+    const { nombre, apellido, nivel, username, apodo, deporte, deporte_principal } = req.body ?? {};
     const trimmedNombre = String(nombre ?? '').trim();
+    const trimmedApellido = String(apellido ?? '').trim();
     const trimmedNivel = String(nivel ?? '').trim();
+    const trimmedApodo = String(apodo ?? '').trim();
     const deporteKey = String(deporte_principal ?? deporte ?? '')
       .trim()
       .toLowerCase();
@@ -3103,12 +3147,18 @@ usuariosRouter.post('/perfil', async (req, res) => {
 
     const profilePayload = {
       nombre: trimmedNombre,
+      apellido: trimmedApellido || null,
       nivel: trimmedNivel,
-      username: normalizedUsername,
-      apodo: normalizedUsername,
       email,
       user_id: user.id,
     };
+
+    if (normalizedUsername) {
+      profilePayload.username = normalizedUsername;
+    }
+    if (trimmedApodo) {
+      profilePayload.apodo = trimmedApodo;
+    }
 
     let perfil = null;
 
@@ -3117,7 +3167,7 @@ usuariosRouter.post('/perfil', async (req, res) => {
         .from('jugadores_perfil')
         .update(profilePayload)
         .eq('id', existingRows[0].id)
-        .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url, username, apodo, user_id');
+        .select('nombre, apellido, telefono, nivel, lateralidad, pais, email, foto_url, username, apodo, user_id, deportes');
 
       if (error) throw error;
       perfil = data?.[0] ?? null;
@@ -3125,7 +3175,7 @@ usuariosRouter.post('/perfil', async (req, res) => {
       const { data, error } = await supabaseAdmin
         .from('jugadores_perfil')
         .insert(profilePayload)
-        .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url, username, apodo, user_id');
+        .select('nombre, apellido, telefono, nivel, lateralidad, pais, email, foto_url, username, apodo, user_id, deportes');
 
       if (error) throw error;
       perfil = data?.[0] ?? null;
@@ -3151,12 +3201,13 @@ usuariosRouter.post('/perfil', async (req, res) => {
       nombre: perfil.nombre ?? '',
       telefono: perfil.telefono ?? '',
       nivel: perfil.nivel ?? '',
-      lateralidad: perfil.lateralidad ?? perfil.pierna_habil ?? '',
+      apellido: perfil.apellido ?? '',
+      lateralidad: perfil.lateralidad ?? '',
       pais: perfil.pais ?? '',
       email: perfil.email ?? email,
       foto_url: perfil.foto_url ?? null,
-      username: perfil.username ?? perfil.apodo ?? null,
-      apodo: perfil.apodo ?? perfil.username ?? null,
+      username: perfil.username ?? null,
+      apodo: perfil.apodo ?? null,
       deporte_principal: deportes[0] ?? null,
       deportes,
     });
@@ -3179,30 +3230,46 @@ usuariosRouter.put('/perfil', async (req, res) => {
       return res.status(400).json({ error: 'Usuario sin email' });
     }
 
-    const { nombre, telefono, nivel, lateralidad, pais, username, apodo } = req.body;
+    const {
+      nombre,
+      apellido,
+      telefono,
+      nivel,
+      lateralidad,
+      pais,
+      username,
+      apodo,
+      deportes,
+    } = req.body;
 
-    const rawUsername = username ?? apodo ?? null;
+    const rawUsername = username ?? null;
     const normalizedUsername =
       rawUsername != null ? String(rawUsername).replace(/^@+/, '').trim() : null;
 
-    const updatePayload = {
-      nombre: nombre ?? null,
-      telefono: telefono ?? null,
-      nivel: nivel ?? null,
-      lateralidad: lateralidad ?? null,
-      pais: pais ?? null,
-    };
+    const updatePayload = {};
 
+    if (nombre != null) updatePayload.nombre = String(nombre).trim();
+    if (apellido != null) updatePayload.apellido = String(apellido).trim();
+    if (telefono != null) updatePayload.telefono = telefono;
+    if (nivel != null) updatePayload.nivel = nivel;
+    if (lateralidad != null) updatePayload.lateralidad = lateralidad;
+    if (pais != null) updatePayload.pais = pais;
+    if (apodo !== undefined) {
+      const trimmedApodo = String(apodo ?? '').trim();
+      updatePayload.apodo = trimmedApodo || null;
+    }
     if (normalizedUsername) {
       updatePayload.username = normalizedUsername;
-      updatePayload.apodo = normalizedUsername;
+    }
+    if (Array.isArray(deportes)) {
+      updatePayload.deportes = deportes;
     }
 
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
       .update(updatePayload)
       .eq('email', email)
-      .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url, username, apodo');
+      .select('nombre, apellido, telefono, nivel, lateralidad, pais, email, foto_url, username, apodo, deportes, user_id');
 
     if (error) throw error;
     if (!data?.length) {
@@ -3210,17 +3277,27 @@ usuariosRouter.put('/perfil', async (req, res) => {
     }
 
     const perfil = data[0];
+
+    if (Array.isArray(deportes) && perfil.user_id) {
+      await syncJugadorDeportesForUser(perfil.user_id, deportes);
+    }
+
+    const resolvedDeportes = await resolvePerfilDeportes(perfil, perfil.user_id ?? user.id);
+
     console.log(`✓ PUT /api/usuarios/perfil — perfil actualizado para ${email}`);
     res.json({
       nombre: perfil.nombre ?? '',
+      apellido: perfil.apellido ?? '',
       telefono: perfil.telefono ?? '',
       nivel: perfil.nivel ?? '',
-      lateralidad: perfil.lateralidad ?? perfil.pierna_habil ?? '',
+      lateralidad: perfil.lateralidad ?? '',
       pais: perfil.pais ?? '',
       email: perfil.email ?? email,
       foto_url: perfil.foto_url ?? null,
-      username: perfil.username ?? perfil.apodo ?? null,
-      apodo: perfil.apodo ?? perfil.username ?? null,
+      username: perfil.username ?? null,
+      apodo: perfil.apodo ?? null,
+      deporte_principal: resolvedDeportes[0] ?? null,
+      deportes: resolvedDeportes,
     });
   } catch (err) {
     console.error('❌ Error PUT /api/usuarios/perfil:', err.message);
