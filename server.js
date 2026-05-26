@@ -2562,9 +2562,9 @@ async function resolvePerfilDeportes(perfil, supabaseUserId) {
 async function resolvePerfilCreatedAt(perfil) {
   if (perfil?.created_at) return perfil.created_at;
 
-  if (!perfil?.supabase_user_id) return null;
+  if (!perfil?.user_id) return null;
 
-  const { data, error } = await supabaseAdmin.auth.admin.getUserById(perfil.supabase_user_id);
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(perfil.user_id);
   if (error || !data?.user) return null;
   return data.user.created_at ?? null;
 }
@@ -2780,7 +2780,7 @@ usuariosRouter.post('/push-token', async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
       .update({ push_token: pushToken, expo_push_token: pushToken })
-      .eq('supabase_user_id', user.id)
+      .eq('user_id', user.id)
       .select('id');
 
     if (error) throw error;
@@ -2814,13 +2814,13 @@ usuariosRouter.get('/check-username', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
-      .select('id, supabase_user_id, user_id, username, apodo')
+      .select('id, user_id, username, apodo')
       .or(`username.ilike."${escaped}",apodo.ilike."${escaped}"`);
 
     if (error) {
       const { data: fallbackRows, error: fallbackErr } = await supabaseAdmin
         .from('jugadores_perfil')
-        .select('id, supabase_user_id, user_id, apodo')
+        .select('id, user_id, apodo')
         .ilike('apodo', username);
 
       if (fallbackErr) throw fallbackErr;
@@ -2837,7 +2837,7 @@ usuariosRouter.get('/check-username', async (req, res) => {
 
       if (rowHandle !== username) return false;
 
-      const rowUserId = row.supabase_user_id ?? row.user_id ?? null;
+      const rowUserId = row.user_id ?? null;
       return rowUserId !== user.id;
     });
 
@@ -2903,7 +2903,7 @@ usuariosRouter.get('/buscar', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
-      .select('supabase_user_id, nombre, nombre_saludo, apodo, username, foto_url, nivel')
+      .select('user_id, nombre, nombre_saludo, apodo, username, foto_url, nivel')
       .or(
         `nombre.ilike."%${escaped}%",apodo.ilike."%${escaped}%",nombre_saludo.ilike."%${escaped}%",username.ilike."%${escaped}%"`,
       )
@@ -2912,9 +2912,9 @@ usuariosRouter.get('/buscar', async (req, res) => {
     if (error) throw error;
 
     const results = (data ?? [])
-      .filter((row) => row.supabase_user_id && !excludeUserIds.has(row.supabase_user_id))
+      .filter((row) => row.user_id && !excludeUserIds.has(row.user_id))
       .map((row) => ({
-        user_id: row.supabase_user_id,
+        user_id: row.user_id,
         nombre: row.nombre_saludo ?? row.nombre ?? 'Jugador',
         username: row.username ?? row.apodo ?? row.nombre_saludo ?? null,
         foto_url: row.foto_url ?? null,
@@ -3122,13 +3122,13 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
     let perfilQuery = supabaseAdmin
       .from('jugadores_perfil')
       .select(
-        'id, email, supabase_user_id, nombre, apellido, nombre_saludo, apodo, username, pais, ciudad, nivel, sede_id, foto_url, es_jugador_torneos',
+        'id, email, user_id, nombre, apellido, nombre_saludo, apodo, username, pais, ciudad, nivel, sede_id, foto_url, es_jugador_torneos',
       );
 
     if (identifier.includes('@')) {
       perfilQuery = perfilQuery.eq('email', identifier);
     } else if (UUID_REGEX.test(identifier)) {
-      perfilQuery = perfilQuery.eq('supabase_user_id', identifier);
+      perfilQuery = perfilQuery.eq('user_id', identifier);
     } else {
       const numericId = parseInt(identifier, 10);
       if (Number.isNaN(numericId)) {
@@ -3143,7 +3143,7 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
       return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
     }
 
-    const userId = perfil.supabase_user_id ?? null;
+    const userId = perfil.user_id ?? null;
     const displayNombre =
       perfil.nombre_saludo
       ?? perfil.nombre
