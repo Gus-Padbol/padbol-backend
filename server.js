@@ -2445,6 +2445,130 @@ async function countPartidosJugados({ email, supabaseUserId }) {
   return count ?? 0;
 }
 
+async function countPartidosArmados(supabaseUserId) {
+  if (!supabaseUserId) return 0;
+
+  const { count, error } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select('*', { count: 'exact', head: true })
+    .eq('capitan_user_id', supabaseUserId);
+
+  if (error) throw error;
+  return count ?? 0;
+}
+
+async function computeTasaCompletados(supabaseUserId) {
+  if (!supabaseUserId) return 0;
+
+  const { data, error } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select('estado')
+    .eq('capitan_user_id', supabaseUserId);
+
+  if (error) throw error;
+
+  const rows = data ?? [];
+  if (rows.length === 0) return 0;
+
+  const completos = rows.filter((row) => row.estado === 'completo').length;
+  return Math.round((completos / rows.length) * 100);
+}
+
+async function fetchUltimosPartidosUsuario({ email, supabaseUserId }, limit = 5) {
+  const filters = [];
+  if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
+  if (supabaseUserId) filters.push(`user_id.eq.${supabaseUserId}`);
+
+  if (filters.length === 0) return [];
+
+  const { data: joins, error: joinErr } = await supabaseAdmin
+    .from('partidos_abiertos_jugadores')
+    .select('partido_id, joined_at')
+    .or(filters.join(','))
+    .order('joined_at', { ascending: false })
+    .limit(30);
+
+  if (joinErr) throw joinErr;
+
+  const partidoIds = [...new Set((joins ?? []).map((row) => row.partido_id).filter(Boolean))];
+  if (partidoIds.length === 0) return [];
+
+  const { data: partidos, error: partidosErr } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select('id, sede_nombre, fecha, hora, estado, deporte')
+    .in('id', partidoIds);
+
+  if (partidosErr) throw partidosErr;
+
+  const joinOrder = new Map(partidoIds.map((id, index) => [id, index]));
+
+  return (partidos ?? [])
+    .sort((a, b) => (joinOrder.get(a.id) ?? 99) - (joinOrder.get(b.id) ?? 99))
+    .slice(0, limit)
+    .map((partido) => ({
+      partido_id: partido.id,
+      sede_nombre: partido.sede_nombre ?? 'Sede',
+      fecha: partido.fecha,
+      hora: partido.hora ? String(partido.hora).slice(0, 5) : null,
+      estado: partido.estado ?? 'abierto',
+      deporte: partido.deporte ?? 'padbol',
+    }));
+}
+
+function parsePerfilDeportes(raw) {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item).trim()).filter(Boolean);
+      }
+    } catch {
+      return raw.split(',').map((item) => item.trim()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
+async function resolvePerfilDeportes(perfil, supabaseUserId) {
+  const fromPerfil = parsePerfilDeportes(perfil?.deportes);
+  if (fromPerfil.length > 0) return fromPerfil;
+
+  if (supabaseUserId) {
+    const { data: jugadorDeportes, error } = await supabaseAdmin
+      .from('jugador_deportes')
+      .select('deporte')
+      .eq('user_id', supabaseUserId);
+
+    if (!error && (jugadorDeportes ?? []).length > 0) {
+      return [...new Set(jugadorDeportes.map((row) => row.deporte).filter(Boolean))];
+    }
+  }
+
+  const ultimos = await fetchUltimosPartidosUsuario({
+    email: perfil?.email,
+    supabaseUserId,
+  }, 10);
+
+  const fromPartidos = [...new Set(ultimos.map((row) => row.deporte).filter(Boolean))];
+  if (fromPartidos.length > 0) return fromPartidos;
+
+  return ['padbol'];
+}
+
+async function resolvePerfilCreatedAt(perfil) {
+  if (perfil?.created_at) return perfil.created_at;
+
+  if (!perfil?.supabase_user_id) return null;
+
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(perfil.supabase_user_id);
+  if (error || !data?.user) return null;
+  return data.user.created_at ?? null;
+}
+
 async function countReservasForUser({ email, supabaseUserId }) {
   const filters = [];
   if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
@@ -2998,7 +3122,7 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
     let perfilQuery = supabaseAdmin
       .from('jugadores_perfil')
       .select(
-        'id, email, supabase_user_id, nombre, apellido, nombre_saludo, apodo, pais, ciudad, nivel, sede_id, foto_url, es_jugador_torneos',
+        'id, email, supabase_user_id, nombre, apellido, nombre_saludo, apodo, username, pais, ciudad, nivel, sede_id, foto_url, es_jugador_torneos',
       );
 
     if (identifier.includes('@')) {
@@ -3019,19 +3143,44 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
       return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
     }
 
-    const [partidosJugados, reservasCount, rankingStats, sedesHabituales] = await Promise.all([
+    const userId = perfil.supabase_user_id ?? null;
+    const displayNombre =
+      perfil.nombre_saludo
+      ?? perfil.nombre
+      ?? 'Jugador';
+    const displayUsername = perfil.username ?? perfil.apodo ?? null;
+
+    const [
+      partidosJugados,
+      partidosArmados,
+      tasaCompletados,
+      ultimosPartidos,
+      deportes,
+      createdAt,
+      reservasCount,
+      rankingStats,
+      sedesHabituales,
+    ] = await Promise.all([
       countPartidosJugados({
         email: perfil.email,
-        supabaseUserId: perfil.supabase_user_id,
+        supabaseUserId: userId,
       }),
+      countPartidosArmados(userId),
+      computeTasaCompletados(userId),
+      fetchUltimosPartidosUsuario({
+        email: perfil.email,
+        supabaseUserId: userId,
+      }),
+      resolvePerfilDeportes(perfil, userId),
+      resolvePerfilCreatedAt(perfil),
       countReservasForUser({
         email: perfil.email,
-        supabaseUserId: perfil.supabase_user_id,
+        supabaseUserId: userId,
       }),
       getRankingEntryForEmail(perfil.email),
       getSedesHabituales({
         email: perfil.email,
-        supabaseUserId: perfil.supabase_user_id,
+        supabaseUserId: userId,
         primarySedeId: perfil.sede_id,
       }),
     ]);
@@ -3061,22 +3210,30 @@ usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
 
     res.json({
       id: perfil.id,
+      user_id: userId,
       email: perfil.email ?? null,
-      supabase_user_id: perfil.supabase_user_id ?? null,
+      supabase_user_id: userId,
       nombre_saludo: perfil.nombre_saludo ?? null,
       apodo: perfil.apodo ?? null,
-      nombre: perfil.nombre ?? '',
+      username: displayUsername,
+      nombre: displayNombre,
       apellido: perfil.apellido ?? '',
       foto_url: perfil.foto_url ?? null,
-      nivel: perfil.nivel ?? '',
+      nivel: perfil.nivel ?? 'Intermedio',
+      created_at: createdAt,
+      deportes,
       es_jugador_torneos: Boolean(perfil.es_jugador_torneos),
       pais,
       ciudad,
       categoria_ranking: rankingStats?.categoria_ranking ?? perfil.nivel ?? null,
       stats: {
+        partidos_jugados: partidosJugados,
+        partidos_armados: partidosArmados,
+        tasa_completados: tasaCompletados,
         reservas: reservasCount,
         torneos: torneosJugados,
       },
+      ultimos_partidos: ultimosPartidos,
       estadisticas: {
         partidos_jugados: partidosJugados,
         torneos: torneosJugados,
