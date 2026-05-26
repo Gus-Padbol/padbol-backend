@@ -49,6 +49,7 @@ const PARTIDO_SELECT = `
   pago_url,
   ganador,
   resultado,
+  deporte,
   created_at,
   sedes ( nombre, direccion, ciudad, pais ),
   partidos_abiertos_jugadores ( user_id, email, joined_at )
@@ -561,6 +562,7 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     soy_participante: user
       ? participantUserIds.includes(user.id) || capitanUserId === user.id
       : false,
+    deporte: partido.deporte ?? 'padbol',
     ganador: partido.ganador ?? null,
     resultado: partido.resultado ?? null,
     created_at: partido.created_at,
@@ -1006,6 +1008,58 @@ export function createPartidosRouter({
       res.json(result);
     } catch (err) {
       console.error('❌ Error GET /api/partidos/solicitudes-pendientes:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/mis-partidos', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const { data: joinRows, error: joinErr } = await supabaseAdmin
+        .from('partidos_abiertos_jugadores')
+        .select('partido_id')
+        .eq('user_id', user.id);
+
+      if (joinErr) throw joinErr;
+
+      const joinedIds = [...new Set((joinRows ?? []).map((row) => row.partido_id).filter(Boolean))];
+      const partidosById = new Map();
+
+      if (joinedIds.length > 0) {
+        const { data: joinedPartidos, error: joinedPartidosErr } = await supabaseAdmin
+          .from('partidos_abiertos')
+          .select(PARTIDO_SELECT)
+          .in('id', joinedIds);
+
+        if (joinedPartidosErr) throw joinedPartidosErr;
+        (joinedPartidos ?? []).forEach((partido) => partidosById.set(partido.id, partido));
+      }
+
+      const { data: captainPartidos, error: captainErr } = await supabaseAdmin
+        .from('partidos_abiertos')
+        .select(PARTIDO_SELECT)
+        .eq('capitan_user_id', user.id);
+
+      if (captainErr) throw captainErr;
+      (captainPartidos ?? []).forEach((partido) => partidosById.set(partido.id, partido));
+
+      const merged = [...partidosById.values()].sort((a, b) => {
+        const aKey = `${a.fecha ?? ''} ${a.hora ?? ''}`;
+        const bKey = `${b.fecha ?? ''} ${b.hora ?? ''}`;
+        return aKey.localeCompare(bKey);
+      });
+
+      const result = await Promise.all(
+        merged.map((partido) => mapPartidoRow(partido, supabaseAdmin, user)),
+      );
+
+      res.json(result);
+    } catch (err) {
+      console.error('❌ Error GET /api/partidos/mis-partidos:', err.message);
       res.status(500).json({ error: err.message });
     }
   });
