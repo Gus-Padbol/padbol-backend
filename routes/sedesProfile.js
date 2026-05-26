@@ -125,6 +125,66 @@ async function fetchHubHeroImage(supabaseAdmin, deporte = 'padbol') {
   }
 }
 
+async function fetchPlayerProfile(supabaseAdmin, userId) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .select('nombre, apellido, apodo, username, foto_url, avatar_url')
+      .eq('user_id', userId)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function insertResenaForSede(supabaseAdmin, payload) {
+  const tables = ['resenas_sedes', 'reseñas_sedes'];
+
+  for (const table of tables) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from(table)
+        .insert(payload)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch {
+      // try next table name
+    }
+  }
+
+  return null;
+}
+
+async function userHasResenaForSede(supabaseAdmin, sedeId, userId) {
+  const tables = ['resenas_sedes', 'reseñas_sedes'];
+
+  for (const table of tables) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from(table)
+        .select('id')
+        .eq('sede_id', sedeId)
+        .eq('user_id', userId)
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (data) return true;
+    } catch {
+      // try next table
+    }
+  }
+
+  return false;
+}
+
 async function fetchResenasForSede(supabaseAdmin, sedeId) {
   const tables = ['resenas_sedes', 'reseñas_sedes'];
 
@@ -268,6 +328,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
 
       const rows = await fetchResenasForSede(supabaseAdmin, sedeId);
       const resenas = rows.map(mapResenaRow);
+      const userHasReviewed = await userHasResenaForSede(supabaseAdmin, sedeId, user.id);
 
       const total = resenas.length;
       const average = total > 0
@@ -278,6 +339,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         resenas,
         promedio: average != null ? Math.round(average * 10) / 10 : null,
         total,
+        user_has_reviewed: userHasReviewed,
       });
     } catch (err) {
       console.error('❌ Error GET /api/sedes/:id/resenas:', err.message);
@@ -287,4 +349,81 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
 
   app.get('/api/sedes/:id/resenas', handleResenas);
   app.get('/api/sedes/:id/reseñas', handleResenas);
+
+  const handlePostResena = async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const sedeId = parseSedeId(req.params.id);
+      if (sedeId == null) {
+        return res.status(400).json({ error: 'ID de sede inválido' });
+      }
+
+      const { estrellas, comentario, user_id: bodyUserId } = req.body ?? {};
+      const stars = Number(estrellas);
+
+      if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
+        return res.status(400).json({ error: 'Seleccioná una calificación de 1 a 5 estrellas' });
+      }
+
+      if (bodyUserId && bodyUserId !== user.id) {
+        return res.status(403).json({ error: 'No podés publicar reseñas en nombre de otro usuario' });
+      }
+
+      const trimmedComment = String(comentario ?? '').trim();
+      if (trimmedComment.length > 500) {
+        return res.status(400).json({ error: 'El comentario no puede superar 500 caracteres' });
+      }
+
+      const { data: sede, error: sedeError } = await supabase
+        .from('sedes')
+        .select('id')
+        .eq('id', sedeId)
+        .maybeSingle();
+
+      if (sedeError) throw sedeError;
+      if (!sede) {
+        return res.status(404).json({ error: 'Sede no encontrada' });
+      }
+
+      const alreadyReviewed = await userHasResenaForSede(supabaseAdmin, sedeId, user.id);
+      if (alreadyReviewed) {
+        return res.status(409).json({ error: 'Ya reseñaste este club' });
+      }
+
+      const profile = await fetchPlayerProfile(supabaseAdmin, user.id);
+      const nombre = profile?.apodo
+        ?? profile?.username
+        ?? [profile?.nombre, profile?.apellido].filter(Boolean).join(' ').trim()
+        ?? 'Jugador';
+
+      const inserted = await insertResenaForSede(supabaseAdmin, {
+        sede_id: sedeId,
+        user_id: user.id,
+        estrellas: stars,
+        comentario: trimmedComment || null,
+      });
+
+      if (!inserted) {
+        return res.status(500).json({ error: 'No se pudo guardar la reseña' });
+      }
+
+      const resena = mapResenaRow({
+        ...inserted,
+        nombre,
+        avatar_url: profile?.foto_url ?? profile?.avatar_url ?? null,
+      });
+
+      res.status(201).json({ resena });
+    } catch (err) {
+      console.error('❌ Error POST /api/sedes/:id/resenas:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  };
+
+  app.post('/api/sedes/:id/resenas', handlePostResena);
+  app.post('/api/sedes/:id/reseñas', handlePostResena);
 }
