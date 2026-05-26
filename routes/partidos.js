@@ -1,4 +1,5 @@
 import express from 'express';
+import { sendPushToUser } from '../utils/push.js';
 
 function getTodayArgentinaDate() {
   const nowAR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
@@ -564,46 +565,6 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     resultado: partido.resultado ?? null,
     created_at: partido.created_at,
   };
-}
-
-async function sendExpoPushToUser(supabaseAdmin, userId, { title, body, data = {} }) {
-  if (!userId) return;
-
-  const { data: perfil, error } = await supabaseAdmin
-    .from('jugadores_perfil')
-    .select('expo_push_token')
-    .eq('supabase_user_id', userId)
-    .maybeSingle();
-
-  if (error) {
-    console.warn('⚠️ Push lookup falló:', error.message);
-    return;
-  }
-
-  if (!perfil?.expo_push_token) {
-    console.log('[push TODO]', userId, title, body);
-    return;
-  }
-
-  try {
-    await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Accept-encoding': 'gzip, deflate',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        to: perfil.expo_push_token,
-        title,
-        body,
-        data,
-        sound: 'default',
-      }),
-    });
-  } catch (pushErr) {
-    console.warn('⚠️ Push partido falló:', pushErr.message);
-  }
 }
 
 async function countPartidosJugados(supabaseAdmin, userId) {
@@ -1219,12 +1180,12 @@ export function createPartidosRouter({
         ?? emailLocalPart(user.email)
         ?? 'Un jugador';
 
-      await sendExpoPushToUser(supabaseAdmin, capitanUserId, {
-        title: 'Nueva solicitud',
-        body: `${solicitanteNombre} quiere unirse a tu partido del ${partido.fecha}`,
+      await sendPushToUser(supabaseAdmin, capitanUserId, {
+        title: '¡Alguien quiere unirse!',
+        body: `${solicitanteNombre} quiere unirse a tu partido`,
         data: {
-          type: 'solicitud_partido',
-          partido_id: String(partidoId),
+          tipo: 'solicitud',
+          partidoId: String(partidoId),
         },
       });
 
@@ -1363,10 +1324,10 @@ export function createPartidosRouter({
           .update({ estado: 'rechazado' })
           .eq('id', solicitudId);
 
-        await sendExpoPushToUser(supabaseAdmin, solicitud.solicitante_id, {
-          title: 'Solicitud no aceptada',
+        await sendPushToUser(supabaseAdmin, solicitud.solicitante_id, {
+          title: 'El partido está completo',
           body: 'El partido está completo — ¡busca tu próximo partido!',
-          data: { type: 'solicitud_rechazada', partido_id: String(partidoId) },
+          data: { tipo: 'rechazado', partidoId: String(partidoId) },
         });
 
         return res.json({ ok: true });
@@ -1397,10 +1358,10 @@ export function createPartidosRouter({
         .eq('id', solicitudId);
 
       const horaLabel = formatHora(partido.hora) ?? '';
-      await sendExpoPushToUser(supabaseAdmin, solicitud.solicitante_id, {
+      await sendPushToUser(supabaseAdmin, solicitud.solicitante_id, {
         title: '¡Estás dentro!',
-        body: `¡Estás dentro! El partido es el ${partido.fecha} a las ${horaLabel}`,
-        data: { type: 'solicitud_aceptada', partido_id: String(partidoId) },
+        body: `El partido es el ${partido.fecha} a las ${horaLabel}`,
+        data: { tipo: 'aceptado', partidoId: String(partidoId) },
       });
 
       console.log(`✓ PATCH /api/partidos/${partidoId}/solicitudes/${solicitudId} — aceptar`);

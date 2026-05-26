@@ -2648,33 +2648,15 @@ usuariosRouter.post('/push-token', async (req, res) => {
       return res.status(status).json({ error: authError });
     }
 
-    const { expo_push_token, email: bodyEmail, supabase_user_id: bodyUserId } = req.body;
-    if (!expo_push_token) {
-      return res.status(400).json({ error: 'expo_push_token es requerido' });
-    }
-
-    const email = bodyEmail ?? user.email ?? null;
-    const supabase_user_id = bodyUserId ?? user.id ?? null;
-
-    if (bodyEmail && bodyEmail !== user.email) {
-      return res.status(403).json({ error: 'El email no coincide con el usuario autenticado' });
-    }
-    if (bodyUserId && bodyUserId !== user.id) {
-      return res.status(403).json({ error: 'supabase_user_id no coincide con el usuario autenticado' });
-    }
-
-    const filters = [];
-    if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
-    if (supabase_user_id) filters.push(`supabase_user_id.eq.${supabase_user_id}`);
-
-    if (filters.length === 0) {
-      return res.status(400).json({ error: 'Se requiere email o supabase_user_id' });
+    const pushToken = req.body?.push_token ?? req.body?.expo_push_token ?? null;
+    if (!pushToken) {
+      return res.status(400).json({ error: 'push_token es requerido' });
     }
 
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
-      .update({ expo_push_token })
-      .or(filters.join(','))
+      .update({ push_token: pushToken, expo_push_token: pushToken })
+      .eq('supabase_user_id', user.id)
       .select('id');
 
     if (error) throw error;
@@ -2682,8 +2664,8 @@ usuariosRouter.post('/push-token', async (req, res) => {
       return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
     }
 
-    console.log(`✓ POST /api/usuarios/push-token — token guardado para ${email ?? supabase_user_id}`);
-    res.json({ success: true });
+    console.log(`✓ POST /api/usuarios/push-token — token guardado para ${user.id}`);
+    res.json({ ok: true });
   } catch (err) {
     console.error('❌ Error POST /api/usuarios/push-token:', err.message);
     res.status(500).json({ error: err.message });
