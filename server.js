@@ -54,6 +54,8 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_KEY;
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('⚠️  SUPABASE_SERVICE_ROLE_KEY no está configurado — supabaseAdmin usa SUPABASE_KEY');
 }
@@ -1583,6 +1585,9 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       .single();
     if (errFinal) throw errFinal;
 
+    // TODO: Auto-set jugadores_perfil.companero_habitual_id to the tournament doubles partner
+    // when a match is completed (use the partner from that match for each player).
+
     console.log(`🏆 Torneo ${id} finalizado. ${puntosData.length} equipos clasificados.`);
     res.json({
       torneo: torneoFinal,
@@ -1637,6 +1642,106 @@ app.get('/api/jugadores', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+async function buildPublicPerfilResponse(perfil) {
+  const userId = perfil.user_id ?? null;
+  const deportes = await resolvePerfilDeportes(perfil, userId);
+  const createdAt = await resolvePerfilCreatedAt(perfil);
+  const rankingStats = await getRankingEntryForEmail(perfil.email);
+  const torneosJugados = rankingStats?.torneos ?? 0;
+  const victorias = await countVictoriasForUser({
+    email: perfil.email,
+    supabaseUserId: userId,
+  });
+
+  const [
+    companeroHabitual,
+    rankings,
+    sedesHabituales,
+  ] = await Promise.all([
+    fetchCompaneroHabitualById(perfil.companero_habitual_id ?? null),
+    fetchJugadorRankingsForUserId(userId),
+    getSedesHabituales({
+      email: perfil.email,
+      supabaseUserId: userId,
+      primarySedeId: perfil.sede_id,
+    }),
+  ]);
+
+  const clubHabitual = sedesHabituales[0]?.nombre ?? null;
+  const categoriaRanking = rankingStats?.categoria_ranking ?? perfil.nivel ?? null;
+
+  return {
+    user_id: userId,
+    nombre: perfil.nombre ?? 'Jugador',
+    apellido: perfil.apellido ?? '',
+    apodo: perfil.apodo ?? null,
+    username: perfil.username ?? perfil.apodo ?? null,
+    foto_url: perfil.foto_url ?? null,
+    nivel: perfil.nivel ?? 'Intermedio',
+    lateralidad: perfil.lateralidad ?? null,
+    pais: perfil.pais ?? null,
+    created_at: createdAt,
+    deportes,
+    deporte_principal: deportes[0] ?? null,
+    categoria_ranking: categoriaRanking,
+    club_habitual: clubHabitual,
+    companero_habitual: companeroHabitual,
+    rankings,
+    stats: {
+      torneos: torneosJugados,
+      victorias,
+    },
+  };
+}
+
+async function handlePublicPerfilRequest(req, res) {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const identifier = decodeURIComponent(
+      req.params.user_id ?? req.params.identifier ?? '',
+    ).trim();
+    if (!identifier) {
+      return res.status(400).json({ error: 'Identificador de jugador requerido' });
+    }
+
+    let perfilQuery = supabaseAdmin
+      .from('jugadores_perfil')
+      .select(
+        'id, user_id, nombre, apellido, apodo, username, pais, nivel, lateralidad, sede_id, foto_url, companero_habitual_id, email',
+      );
+
+    if (identifier.includes('@')) {
+      perfilQuery = perfilQuery.eq('email', identifier);
+    } else if (UUID_REGEX.test(identifier)) {
+      perfilQuery = perfilQuery.eq('user_id', identifier);
+    } else {
+      const numericId = parseInt(identifier, 10);
+      if (Number.isNaN(numericId)) {
+        return res.status(400).json({ error: 'Identificador de jugador inválido' });
+      }
+      perfilQuery = perfilQuery.eq('id', numericId);
+    }
+
+    const { data: perfil, error: perfilErr } = await perfilQuery.maybeSingle();
+    if (perfilErr) throw perfilErr;
+    if (!perfil) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+    }
+
+    res.json(await buildPublicPerfilResponse(perfil));
+  } catch (err) {
+    console.error('❌ Error GET perfil público:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /api/jugadores/perfil-publico/:user_id — Public profile (JWT required)
+app.get('/api/jugadores/perfil-publico/:user_id', handlePublicPerfilRequest);
 
 app.get('/api/jugadores/:id', async (req, res) => {
   try {
@@ -1949,6 +2054,9 @@ app.put('/api/partidos/:id', async (req, res) => {
 
     const gamesA = set1[0] + set2[0] + set3[0];
     const gamesB = set1[1] + set2[1] + set3[1];
+
+    // TODO: When estado is finalizado, set companero_habitual_id on jugadores_perfil
+    // to each player's partner from this tournament match.
 
     // Actualizar partido
     const { error: errUpdate } = await supabase
@@ -2495,7 +2603,6 @@ setInterval(runPartidoAutoCancelCron, PARTIDO_AUTO_CANCEL_MS);
 runPartidoAutoCancelCron();
 
 // ===== USUARIOS =====
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 async function countPartidosJugados({ email, supabaseUserId }) {
   const filters = [];
@@ -2898,7 +3005,215 @@ function normalizeJugadorRankingRow(row) {
   };
 }
 
+async function fetchJugadorRankingsForUserId(userId) {
+  if (!userId) return [];
+
+  const { data, error } = await supabaseAdmin
+    .from('jugador_rankings')
+    .select('tipo, deporte, categoria, posicion')
+    .eq('user_id', userId)
+    .gt('posicion', 0);
+
+  if (error) {
+    if (isMissingJugadorRankingsTable(error)) return [];
+    throw error;
+  }
+
+  const tipoOrder = { club: 0, nacional: 1, fipa: 2 };
+  return (data ?? [])
+    .map(normalizeJugadorRankingRow)
+    .filter(Boolean)
+    .sort((a, b) => {
+      const orderDiff = (tipoOrder[a.tipo] ?? 99) - (tipoOrder[b.tipo] ?? 99);
+      if (orderDiff !== 0) return orderDiff;
+      return a.deporte.localeCompare(b.deporte) || a.categoria.localeCompare(b.categoria);
+    });
+}
+
+function mapCompaneroHabitualResponse(row) {
+  if (!row?.user_id) return null;
+  return {
+    user_id: row.user_id,
+    nombre: row.nombre ?? '',
+    apodo: row.apodo ?? null,
+    avatar_url: row.foto_url ?? null,
+    username: row.username ?? null,
+  };
+}
+
+async function fetchCompaneroHabitualById(companeroId) {
+  if (!companeroId) return null;
+
+  const { data, error } = await supabaseAdmin
+    .from('jugadores_perfil')
+    .select('user_id, nombre, apodo, username, foto_url')
+    .eq('user_id', companeroId)
+    .maybeSingle();
+
+  if (error) {
+    const message = String(error.message ?? '').toLowerCase();
+    if (error.code === '42703' || message.includes('companero_habitual')) return null;
+    throw error;
+  }
+
+  return data ? mapCompaneroHabitualResponse(data) : null;
+}
+
+async function countVictoriasForUser({ email, supabaseUserId }) {
+  // Placeholder until tournament/partido win aggregation is defined.
+  void email;
+  void supabaseUserId;
+  return 0;
+}
+
+async function buildAuthenticatedPerfilPayload(perfil, user, deportes) {
+  const userId = perfil.user_id ?? user.id;
+  const companero = await fetchCompaneroHabitualById(perfil.companero_habitual_id ?? null);
+
+  return {
+    nombre: perfil.nombre ?? '',
+    apellido: perfil.apellido ?? '',
+    telefono: perfil.telefono ?? '',
+    nivel: perfil.nivel ?? '',
+    lateralidad: perfil.lateralidad ?? '',
+    pais: perfil.pais ?? '',
+    email: perfil.email ?? user.email ?? '',
+    foto_url: perfil.foto_url ?? null,
+    username: perfil.username ?? null,
+    apodo: perfil.apodo ?? null,
+    companero_habitual_id: perfil.companero_habitual_id ?? null,
+    companero_habitual: companero,
+    deporte_principal: deportes[0] ?? null,
+    deportes,
+  };
+}
+
 const jugadorRouter = express.Router();
+
+async function handleGetAuthenticatedPerfil(req, res) {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const filters = buildUserEmailOrIdFilters(user, {
+      emailField: 'email',
+      userIdFields: ['user_id'],
+    });
+
+    if (filters.length === 0) {
+      return res.status(400).json({ error: 'Usuario sin identificador válido' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .select('*')
+      .or(filters.join(','))
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+    }
+
+    const deportes = await resolvePerfilDeportes(data, data.user_id ?? user.id);
+    res.json(await buildAuthenticatedPerfilPayload(data, user, deportes));
+  } catch (err) {
+    console.error('❌ Error GET jugador perfil:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+async function handlePutAuthenticatedPerfil(req, res) {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const email = user.email;
+    if (!email) {
+      return res.status(400).json({ error: 'Usuario sin email' });
+    }
+
+    const {
+      nombre,
+      apellido,
+      telefono,
+      nivel,
+      lateralidad,
+      pais,
+      username,
+      apodo,
+      deportes,
+      companero_habitual_id: companeroHabitualId,
+    } = req.body;
+
+    const rawUsername = username ?? null;
+    const normalizedUsername =
+      rawUsername != null ? String(rawUsername).replace(/^@+/, '').trim() : null;
+
+    const updatePayload = {};
+
+    if (nombre != null) updatePayload.nombre = String(nombre).trim();
+    if (apellido != null) updatePayload.apellido = String(apellido).trim();
+    if (telefono != null) updatePayload.telefono = telefono;
+    if (nivel != null) updatePayload.nivel = nivel;
+    if (lateralidad != null) updatePayload.lateralidad = lateralidad;
+    if (pais != null) updatePayload.pais = pais;
+    if (apodo !== undefined) {
+      const trimmedApodo = String(apodo ?? '').trim();
+      updatePayload.apodo = trimmedApodo || null;
+    }
+    if (normalizedUsername) {
+      updatePayload.username = normalizedUsername;
+    }
+    if (Array.isArray(deportes)) {
+      updatePayload.deportes = deportes;
+    }
+    if (companeroHabitualId !== undefined) {
+      if (companeroHabitualId == null || companeroHabitualId === '') {
+        updatePayload.companero_habitual_id = null;
+      } else if (UUID_REGEX.test(String(companeroHabitualId))) {
+        updatePayload.companero_habitual_id = String(companeroHabitualId);
+      } else {
+        return res.status(400).json({ error: 'companero_habitual_id inválido' });
+      }
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .update(updatePayload)
+      .eq('email', email)
+      .select('*');
+
+    if (error) throw error;
+    if (!data?.length) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+    }
+
+    const perfil = data[0];
+
+    if (Array.isArray(deportes) && perfil.user_id) {
+      await syncJugadorDeportesForUser(perfil.user_id, deportes);
+    }
+
+    const resolvedDeportes = await resolvePerfilDeportes(perfil, perfil.user_id ?? user.id);
+
+    console.log(`✓ PUT jugador perfil — actualizado para ${email}`);
+    res.json(await buildAuthenticatedPerfilPayload(perfil, user, resolvedDeportes));
+  } catch (err) {
+    console.error('❌ Error PUT jugador perfil:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /api/jugador/perfil — Authenticated player profile
+jugadorRouter.get('/perfil', handleGetAuthenticatedPerfil);
+
+// PUT /api/jugador/perfil — Update authenticated player profile
+jugadorRouter.put('/perfil', handlePutAuthenticatedPerfil);
 
 // GET /api/jugador/rankings — Authenticated player's earned ranking positions
 jugadorRouter.get('/rankings', async (req, res) => {
@@ -2908,29 +3223,7 @@ jugadorRouter.get('/rankings', async (req, res) => {
       return res.status(status).json({ error: authError });
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('jugador_rankings')
-      .select('tipo, deporte, categoria, posicion')
-      .eq('user_id', user.id)
-      .gt('posicion', 0);
-
-    if (error) {
-      if (isMissingJugadorRankingsTable(error)) {
-        return res.json({ rankings: [] });
-      }
-      throw error;
-    }
-
-    const tipoOrder = { club: 0, nacional: 1, fipa: 2 };
-    const rankings = (data ?? [])
-      .map(normalizeJugadorRankingRow)
-      .filter(Boolean)
-      .sort((a, b) => {
-        const orderDiff = (tipoOrder[a.tipo] ?? 99) - (tipoOrder[b.tipo] ?? 99);
-        if (orderDiff !== 0) return orderDiff;
-        return a.deporte.localeCompare(b.deporte) || a.categoria.localeCompare(b.categoria);
-      });
-
+    const rankings = await fetchJugadorRankingsForUserId(user.id);
     res.json({ rankings });
   } catch (err) {
     console.error('❌ Error GET /api/jugador/rankings:', err.message);
@@ -3105,54 +3398,7 @@ usuariosRouter.get('/buscar', async (req, res) => {
 });
 
 // GET /api/usuarios/perfil — Current user profile from jugadores_perfil
-usuariosRouter.get('/perfil', async (req, res) => {
-  try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status).json({ error: authError });
-    }
-
-    const filters = buildUserEmailOrIdFilters(user, {
-      emailField: 'email',
-      userIdFields: ['user_id'],
-    });
-
-    if (filters.length === 0) {
-      return res.status(400).json({ error: 'Usuario sin identificador válido' });
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('jugadores_perfil')
-      .select('*')
-      .or(filters.join(','))
-      .maybeSingle();
-
-    if (error) throw error;
-    if (!data) {
-      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
-    }
-
-    const deportes = await resolvePerfilDeportes(data, data.user_id ?? user.id);
-
-    res.json({
-      nombre: data.nombre ?? '',
-      telefono: data.telefono ?? '',
-      nivel: data.nivel ?? '',
-      apellido: data.apellido ?? '',
-      lateralidad: data.lateralidad ?? '',
-      pais: data.pais ?? '',
-      email: data.email ?? user.email ?? '',
-      foto_url: data.foto_url ?? null,
-      username: data.username ?? null,
-      apodo: data.apodo ?? null,
-      deporte_principal: deportes[0] ?? null,
-      deportes,
-    });
-  } catch (err) {
-    console.error('❌ Error GET /api/usuarios/perfil:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+usuariosRouter.get('/perfil', handleGetAuthenticatedPerfil);
 
 // POST /api/usuarios/perfil — Create or complete jugadores_perfil for authenticated user
 usuariosRouter.post('/perfil', async (req, res) => {
@@ -3286,92 +3532,7 @@ usuariosRouter.post('/perfil', async (req, res) => {
 });
 
 // PUT /api/usuarios/perfil — Update jugadores_perfil for authenticated user
-usuariosRouter.put('/perfil', async (req, res) => {
-  try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status).json({ error: authError });
-    }
-
-    const email = user.email;
-    if (!email) {
-      return res.status(400).json({ error: 'Usuario sin email' });
-    }
-
-    const {
-      nombre,
-      apellido,
-      telefono,
-      nivel,
-      lateralidad,
-      pais,
-      username,
-      apodo,
-      deportes,
-    } = req.body;
-
-    const rawUsername = username ?? null;
-    const normalizedUsername =
-      rawUsername != null ? String(rawUsername).replace(/^@+/, '').trim() : null;
-
-    const updatePayload = {};
-
-    if (nombre != null) updatePayload.nombre = String(nombre).trim();
-    if (apellido != null) updatePayload.apellido = String(apellido).trim();
-    if (telefono != null) updatePayload.telefono = telefono;
-    if (nivel != null) updatePayload.nivel = nivel;
-    if (lateralidad != null) updatePayload.lateralidad = lateralidad;
-    if (pais != null) updatePayload.pais = pais;
-    if (apodo !== undefined) {
-      const trimmedApodo = String(apodo ?? '').trim();
-      updatePayload.apodo = trimmedApodo || null;
-    }
-    if (normalizedUsername) {
-      updatePayload.username = normalizedUsername;
-    }
-    if (Array.isArray(deportes)) {
-      updatePayload.deportes = deportes;
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('jugadores_perfil')
-      .update(updatePayload)
-      .eq('email', email)
-      .select('nombre, apellido, telefono, nivel, lateralidad, pais, email, foto_url, username, apodo, deportes, user_id');
-
-    if (error) throw error;
-    if (!data?.length) {
-      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
-    }
-
-    const perfil = data[0];
-
-    if (Array.isArray(deportes) && perfil.user_id) {
-      await syncJugadorDeportesForUser(perfil.user_id, deportes);
-    }
-
-    const resolvedDeportes = await resolvePerfilDeportes(perfil, perfil.user_id ?? user.id);
-
-    console.log(`✓ PUT /api/usuarios/perfil — perfil actualizado para ${email}`);
-    res.json({
-      nombre: perfil.nombre ?? '',
-      apellido: perfil.apellido ?? '',
-      telefono: perfil.telefono ?? '',
-      nivel: perfil.nivel ?? '',
-      lateralidad: perfil.lateralidad ?? '',
-      pais: perfil.pais ?? '',
-      email: perfil.email ?? email,
-      foto_url: perfil.foto_url ?? null,
-      username: perfil.username ?? null,
-      apodo: perfil.apodo ?? null,
-      deporte_principal: resolvedDeportes[0] ?? null,
-      deportes: resolvedDeportes,
-    });
-  } catch (err) {
-    console.error('❌ Error PUT /api/usuarios/perfil:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+usuariosRouter.put('/perfil', handlePutAuthenticatedPerfil);
 
 // POST /api/usuarios/foto-perfil — Upload profile photo to Supabase Storage
 usuariosRouter.post('/foto-perfil', async (req, res) => {
@@ -3445,152 +3606,7 @@ usuariosRouter.post('/foto-perfil', async (req, res) => {
 });
 
 // GET /api/usuarios/perfil-publico/:identifier — Public player profile (JWT required)
-usuariosRouter.get('/perfil-publico/:identifier', async (req, res) => {
-  try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status).json({ error: authError });
-    }
-
-    const identifier = decodeURIComponent(req.params.identifier ?? '').trim();
-    if (!identifier) {
-      return res.status(400).json({ error: 'Identificador de jugador requerido' });
-    }
-
-    let perfilQuery = supabaseAdmin
-      .from('jugadores_perfil')
-      .select(
-        'id, email, user_id, nombre, apellido, nombre_saludo, apodo, username, pais, ciudad, nivel, sede_id, foto_url, es_jugador_torneos',
-      );
-
-    if (identifier.includes('@')) {
-      perfilQuery = perfilQuery.eq('email', identifier);
-    } else if (UUID_REGEX.test(identifier)) {
-      perfilQuery = perfilQuery.eq('user_id', identifier);
-    } else {
-      const numericId = parseInt(identifier, 10);
-      if (Number.isNaN(numericId)) {
-        return res.status(400).json({ error: 'Identificador de jugador inválido' });
-      }
-      perfilQuery = perfilQuery.eq('id', numericId);
-    }
-
-    const { data: perfil, error: perfilErr } = await perfilQuery.maybeSingle();
-    if (perfilErr) throw perfilErr;
-    if (!perfil) {
-      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
-    }
-
-    const userId = perfil.user_id ?? null;
-    const displayNombre =
-      perfil.nombre_saludo
-      ?? perfil.nombre
-      ?? 'Jugador';
-    const displayUsername = perfil.username ?? perfil.apodo ?? null;
-
-    const [
-      partidosJugados,
-      partidosArmados,
-      tasaCompletados,
-      ultimosPartidos,
-      deportes,
-      createdAt,
-      reservasCount,
-      rankingStats,
-      sedesHabituales,
-    ] = await Promise.all([
-      countPartidosJugados({
-        email: perfil.email,
-        supabaseUserId: userId,
-      }),
-      countPartidosArmados(userId),
-      computeTasaCompletados(userId),
-      fetchUltimosPartidosUsuario({
-        email: perfil.email,
-        supabaseUserId: userId,
-      }),
-      resolvePerfilDeportes(perfil, userId),
-      resolvePerfilCreatedAt(perfil),
-      countReservasForUser({
-        email: perfil.email,
-        supabaseUserId: userId,
-      }),
-      getRankingEntryForEmail(perfil.email),
-      getSedesHabituales({
-        email: perfil.email,
-        supabaseUserId: userId,
-        primarySedeId: perfil.sede_id,
-      }),
-    ]);
-
-    const torneosJugados = rankingStats?.torneos ?? 0;
-
-    let ciudad = perfil.ciudad ?? '';
-    let pais = perfil.pais ?? '';
-
-    if (perfil.sede_id != null) {
-      const { data: sedePrincipal } = await supabaseAdmin
-        .from('sedes')
-        .select('ciudad, provincia, pais')
-        .eq('id', perfil.sede_id)
-        .maybeSingle();
-
-      if (sedePrincipal) {
-        ciudad = ciudad || sedePrincipal.ciudad || sedePrincipal.provincia || '';
-        pais = pais || sedePrincipal.pais || '';
-      }
-    }
-
-    if (!ciudad && sedesHabituales.length > 0) {
-      ciudad = sedesHabituales[0].ciudad || sedesHabituales[0].provincia || '';
-      pais = pais || sedesHabituales[0].pais || '';
-    }
-
-    res.json({
-      id: perfil.id,
-      user_id: userId,
-      email: perfil.email ?? null,
-      supabase_user_id: userId,
-      nombre_saludo: perfil.nombre_saludo ?? null,
-      apodo: perfil.apodo ?? null,
-      username: displayUsername,
-      nombre: displayNombre,
-      apellido: perfil.apellido ?? '',
-      foto_url: perfil.foto_url ?? null,
-      nivel: perfil.nivel ?? 'Intermedio',
-      created_at: createdAt,
-      deportes,
-      es_jugador_torneos: Boolean(perfil.es_jugador_torneos),
-      pais,
-      ciudad,
-      categoria_ranking: rankingStats?.categoria_ranking ?? perfil.nivel ?? null,
-      stats: {
-        partidos_jugados: partidosJugados,
-        partidos_armados: partidosArmados,
-        tasa_completados: tasaCompletados,
-        reservas: reservasCount,
-        torneos: torneosJugados,
-      },
-      ultimos_partidos: ultimosPartidos,
-      estadisticas: {
-        partidos_jugados: partidosJugados,
-        torneos: torneosJugados,
-        ranking_position: rankingStats?.ranking_position ?? null,
-        puntos_total: rankingStats?.puntos_total ?? 0,
-      },
-      sedes_habituales: sedesHabituales.map((sede) => ({
-        id: sede.id,
-        nombre: sede.nombre,
-        ciudad: sede.ciudad ?? null,
-        provincia: sede.provincia ?? null,
-        pais: sede.pais ?? null,
-      })),
-    });
-  } catch (err) {
-    console.error('❌ Error GET /api/usuarios/perfil-publico/:identifier:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+usuariosRouter.get('/perfil-publico/:identifier', handlePublicPerfilRequest);
 
 app.use('/api/usuarios', usuariosRouter);
 app.use('/api/jugador', jugadorRouter);
