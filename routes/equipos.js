@@ -20,14 +20,14 @@ function normalizeEmail(email) {
 
 async function resolvePlayerProfile({ email, userId }, supabaseAdmin) {
   const filters = [];
-  if (userId) filters.push(`supabase_user_id.eq.${userId}`);
+  if (userId) filters.push(`user_id.eq.${userId}`);
   if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
 
   if (filters.length === 0) return null;
 
   const { data } = await supabaseAdmin
     .from('jugadores_perfil')
-    .select('nombre, email, supabase_user_id, foto_url, expo_push_token')
+    .select('nombre, email, user_id, foto_url, expo_push_token')
     .or(filters.join(','))
     .maybeSingle();
 
@@ -160,7 +160,7 @@ async function mapEquipoDetail(bundle, supabaseAdmin, user) {
 
       return {
         id: member.id,
-        user_id: member.user_id ?? perfil?.supabase_user_id ?? null,
+        user_id: member.user_id ?? perfil?.user_id ?? null,
         email: member.email,
         nombre: member.nombre ?? perfil?.nombre ?? member.email,
         foto_url: perfil?.foto_url ?? null,
@@ -192,7 +192,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       const escaped = query.replace(/"/g, '\\"');
       const { data, error } = await supabaseAdmin
         .from('jugadores_perfil')
-        .select('nombre, email, supabase_user_id, foto_url')
+        .select('nombre, email, user_id, foto_url')
         .or(`email.ilike."%${escaped}%",nombre.ilike."%${escaped}%"`)
         .limit(10);
 
@@ -202,7 +202,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
         (data ?? [])
           .filter((row) => normalizeEmail(row.email) !== normalizeEmail(user.email))
           .map((row) => ({
-            user_id: row.supabase_user_id ?? null,
+            user_id: row.user_id ?? null,
             email: row.email,
             nombre: row.nombre ?? row.email,
             foto_url: row.foto_url ?? null,
@@ -597,7 +597,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
           return {
             nombre: member.nombre ?? perfil?.nombre ?? member.email,
             email: member.email,
-            user_id: member.user_id ?? perfil?.supabase_user_id ?? null,
+            user_id: member.user_id ?? perfil?.user_id ?? null,
             es_capitan: member.rol === 'capitan',
           };
         }),

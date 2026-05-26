@@ -583,14 +583,14 @@ async function countPartidosJugados(supabaseAdmin, userId) {
 
 async function fetchJugadorPerfilPublic(supabaseAdmin, userId, email) {
   const filters = [];
-  if (userId) filters.push(`supabase_user_id.eq.${userId}`);
+  if (userId) filters.push(`user_id.eq.${userId}`);
   if (email) filters.push(`email.eq."${String(email).replace(/"/g, '\\"')}"`);
 
   if (filters.length === 0) return null;
 
   const { data, error } = await supabaseAdmin
     .from('jugadores_perfil')
-    .select('nombre, nombre_saludo, apodo, foto_url, nivel, email, supabase_user_id')
+    .select('nombre, nombre_saludo, apodo, foto_url, nivel, email, user_id')
     .or(filters.join(','))
     .maybeSingle();
 
