@@ -1143,6 +1143,109 @@ export function createPartidosRouter({
     }
   });
 
+  router.post('/:id/invitar', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const invitadoId = req.body?.invitado_id ?? req.body?.invitadoId ?? null;
+      if (!invitadoId) {
+        return res.status(400).json({ error: 'invitado_id es requerido' });
+      }
+
+      const { data: partido, error: fetchErr } = await supabaseAdmin
+        .from('partidos_abiertos')
+        .select('*')
+        .eq('id', partidoId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!partido) {
+        return res.status(404).json({ error: 'Partido no encontrado' });
+      }
+      if (partido.estado !== 'abierto') {
+        return res.status(400).json({ error: 'Este partido ya no acepta jugadores' });
+      }
+      if (getCapitanUserId(partido) !== user.id) {
+        return res.status(403).json({ error: 'Solo el capitán puede invitar jugadores' });
+      }
+      if (invitadoId === user.id) {
+        return res.status(400).json({ error: 'No podés invitarte a tu propio partido' });
+      }
+
+      const { data: existingJoin, error: joinErr } = await supabaseAdmin
+        .from('partidos_abiertos_jugadores')
+        .select('id')
+        .eq('partido_id', partidoId)
+        .eq('user_id', invitadoId)
+        .maybeSingle();
+
+      if (joinErr) throw joinErr;
+      if (existingJoin) {
+        return res.status(409).json({ error: 'Ese jugador ya está en el partido' });
+      }
+
+      if (await isPartidoFull(supabaseAdmin, partido)) {
+        return res.status(409).json({ error: 'El partido ya está completo' });
+      }
+
+      const { data: existingSolicitud, error: solErr } = await supabaseAdmin
+        .from('solicitudes_partido')
+        .select('id, estado')
+        .eq('partido_id', partidoId)
+        .eq('solicitante_id', invitadoId)
+        .maybeSingle();
+
+      if (solErr) throw solErr;
+      if (existingSolicitud?.estado === 'pendiente' || existingSolicitud?.estado === 'invitado') {
+        return res.status(409).json({ error: 'Ese jugador ya tiene una solicitud o invitación pendiente' });
+      }
+      if (existingSolicitud?.estado === 'aceptado') {
+        return res.status(409).json({ error: 'Ese jugador ya está en el partido' });
+      }
+
+      if (existingSolicitud) {
+        const { error: updateErr } = await supabaseAdmin
+          .from('solicitudes_partido')
+          .update({ estado: 'invitado', created_at: new Date().toISOString() })
+          .eq('id', existingSolicitud.id);
+
+        if (updateErr) throw updateErr;
+      } else {
+        const { error: insertErr } = await supabaseAdmin
+          .from('solicitudes_partido')
+          .insert([{
+            partido_id: partidoId,
+            solicitante_id: invitadoId,
+            estado: 'invitado',
+          }]);
+
+        if (insertErr) throw insertErr;
+      }
+
+      const sedeNombre = partido.sede_nombre ?? 'la sede';
+      const horaLabel = formatHora(partido.hora) ?? '';
+      await sendPushToUser(supabaseAdmin, invitadoId, {
+        title: 'Te invitaron a un partido',
+        body: `Te invitaron a un partido de Padbol en ${sedeNombre} el ${partido.fecha}${horaLabel ? ` a las ${horaLabel}` : ''}`,
+        data: { tipo: 'invitado', partidoId: String(partidoId) },
+      });
+
+      console.log(`✓ POST /api/partidos/${partidoId}/invitar — ${invitadoId}`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('❌ Error POST /api/partidos/:id/invitar:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   router.post('/:id/solicitar-union', async (req, res) => {
     try {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
@@ -1369,6 +1472,57 @@ export function createPartidosRouter({
       if (!solicitud) {
         return res.status(404).json({ error: 'Solicitud no encontrada' });
       }
+      const isCapitan = getCapitanUserId(partido) === user.id;
+      const isInvitee = solicitud.solicitante_id === user.id;
+
+      if (solicitud.estado === 'invitado' && isInvitee) {
+        if (accion === 'rechazar') {
+          await supabaseAdmin
+            .from('solicitudes_partido')
+            .update({ estado: 'rechazado' })
+            .eq('id', solicitudId);
+
+          return res.json({ ok: true });
+        }
+
+        if (await isPartidoFull(supabaseAdmin, partido)) {
+          return res.status(409).json({ error: 'El partido ya está completo' });
+        }
+
+        const { data: solicitanteAuth, error: authLookupErr } = await supabaseAdmin.auth.admin.getUserById(
+          user.id,
+        );
+
+        if (authLookupErr || !solicitanteAuth?.user) {
+          return res.status(404).json({ error: 'No encontramos tu perfil' });
+        }
+
+        const joinResult = await addJugadorToPartido(supabaseAdmin, partido, solicitanteAuth.user);
+
+        if (joinResult.error) {
+          return res.status(joinResult.status ?? 409).json({ error: joinResult.error });
+        }
+
+        await supabaseAdmin
+          .from('solicitudes_partido')
+          .update({ estado: 'aceptado' })
+          .eq('id', solicitudId);
+
+        const horaLabel = formatHora(partido.hora) ?? '';
+        await sendPushToUser(supabaseAdmin, getCapitanUserId(partido), {
+          title: 'Invitación aceptada',
+          body: `Un jugador aceptó tu invitación para el ${partido.fecha}${horaLabel ? ` a las ${horaLabel}` : ''}`,
+          data: { tipo: 'aceptado', partidoId: String(partidoId) },
+        });
+
+        console.log(`✓ PATCH /api/partidos/${partidoId}/solicitudes/${solicitudId} — invitado aceptar`);
+        return res.json({ ok: true, partido_completo: joinResult.partidoCompleto });
+      }
+
+      if (!isCapitan) {
+        return res.status(403).json({ error: 'No tenés permiso para responder esta solicitud' });
+      }
+
       if (solicitud.estado !== 'pendiente') {
         return res.status(400).json({ error: 'Esta solicitud ya fue respondida' });
       }
