@@ -2956,6 +2956,8 @@ usuariosRouter.get('/perfil', async (req, res) => {
       return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
     }
 
+    const deportes = await resolvePerfilDeportes(data, data.user_id ?? user.id);
+
     res.json({
       nombre: data.nombre ?? '',
       telefono: data.telefono ?? '',
@@ -2966,9 +2968,133 @@ usuariosRouter.get('/perfil', async (req, res) => {
       foto_url: data.foto_url ?? null,
       username: data.username ?? data.apodo ?? null,
       apodo: data.apodo ?? data.username ?? null,
+      deporte_principal: deportes[0] ?? null,
+      deportes,
     });
   } catch (err) {
     console.error('❌ Error GET /api/usuarios/perfil:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/usuarios/perfil — Create or complete jugadores_perfil for authenticated user
+usuariosRouter.post('/perfil', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const email = user.email;
+    if (!email) {
+      return res.status(400).json({ error: 'Usuario sin email' });
+    }
+
+    const { nombre, nivel, username, apodo, deporte, deporte_principal } = req.body ?? {};
+    const trimmedNombre = String(nombre ?? '').trim();
+    const trimmedNivel = String(nivel ?? '').trim();
+    const deporteKey = String(deporte_principal ?? deporte ?? '')
+      .trim()
+      .toLowerCase();
+
+    const rawUsername = username ?? apodo ?? null;
+    const normalizedUsername =
+      rawUsername != null ? String(rawUsername).replace(/^@+/, '').trim() : null;
+
+    if (trimmedNombre.length < 2) {
+      return res.status(400).json({ error: 'nombre es requerido (mínimo 2 caracteres)' });
+    }
+    if (!normalizedUsername || normalizedUsername.length < 2) {
+      return res.status(400).json({ error: 'username es requerido (mínimo 2 caracteres)' });
+    }
+    if (normalizedUsername.length > 20) {
+      return res.status(400).json({ error: 'username no puede superar 20 caracteres' });
+    }
+    if (!trimmedNivel) {
+      return res.status(400).json({ error: 'nivel es requerido' });
+    }
+    if (!deporteKey) {
+      return res.status(400).json({ error: 'deporte_principal es requerido' });
+    }
+
+    const filters = buildUserEmailOrIdFilters(user, {
+      emailField: 'email',
+      userIdFields: ['user_id'],
+    });
+
+    if (filters.length === 0) {
+      return res.status(400).json({ error: 'Usuario sin identificador válido' });
+    }
+
+    const { data: existingRows, error: existingError } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .select('id, email, user_id')
+      .or(filters.join(','))
+      .limit(1);
+
+    if (existingError) throw existingError;
+
+    const profilePayload = {
+      nombre: trimmedNombre,
+      nivel: trimmedNivel,
+      username: normalizedUsername,
+      apodo: normalizedUsername,
+      email,
+      user_id: user.id,
+    };
+
+    let perfil = null;
+
+    if (existingRows?.length) {
+      const { data, error } = await supabaseAdmin
+        .from('jugadores_perfil')
+        .update(profilePayload)
+        .eq('id', existingRows[0].id)
+        .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url, username, apodo, user_id');
+
+      if (error) throw error;
+      perfil = data?.[0] ?? null;
+    } else {
+      const { data, error } = await supabaseAdmin
+        .from('jugadores_perfil')
+        .insert(profilePayload)
+        .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url, username, apodo, user_id');
+
+      if (error) throw error;
+      perfil = data?.[0] ?? null;
+    }
+
+    if (!perfil) {
+      return res.status(500).json({ error: 'No se pudo guardar el perfil' });
+    }
+
+    await supabaseAdmin.from('jugador_deportes').delete().eq('user_id', user.id);
+    const { error: deporteError } = await supabaseAdmin
+      .from('jugador_deportes')
+      .insert({ user_id: user.id, deporte: deporteKey });
+
+    if (deporteError) {
+      console.warn('⚠️ jugador_deportes insert:', deporteError.message);
+    }
+
+    const deportes = [deporteKey];
+
+    console.log(`✓ POST /api/usuarios/perfil — perfil guardado para ${email}`);
+    res.status(existingRows?.length ? 200 : 201).json({
+      nombre: perfil.nombre ?? '',
+      telefono: perfil.telefono ?? '',
+      nivel: perfil.nivel ?? '',
+      lateralidad: perfil.lateralidad ?? perfil.pierna_habil ?? '',
+      pais: perfil.pais ?? '',
+      email: perfil.email ?? email,
+      foto_url: perfil.foto_url ?? null,
+      username: perfil.username ?? perfil.apodo ?? null,
+      apodo: perfil.apodo ?? perfil.username ?? null,
+      deporte_principal: deportes[0] ?? null,
+      deportes,
+    });
+  } catch (err) {
+    console.error('❌ Error POST /api/usuarios/perfil:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
