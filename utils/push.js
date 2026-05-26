@@ -1,11 +1,5 @@
-import { Expo } from 'expo-server-sdk';
-
-const expo = new Expo();
-
 export async function sendPushNotification(pushToken, title, body, data = {}) {
-  if (!pushToken || !Expo.isExpoPushToken(pushToken)) {
-    return;
-  }
+  if (!pushToken || !pushToken.startsWith('ExponentPushToken[')) return;
 
   const message = {
     to: pushToken,
@@ -17,7 +11,15 @@ export async function sendPushNotification(pushToken, title, body, data = {}) {
   };
 
   try {
-    await expo.sendPushNotificationsAsync([message]);
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+      },
+      body: JSON.stringify(message),
+    });
   } catch (error) {
     console.error('Push notification error:', error);
   }
