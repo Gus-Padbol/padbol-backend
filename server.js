@@ -2672,6 +2672,58 @@ usuariosRouter.post('/push-token', async (req, res) => {
   }
 });
 
+// GET /api/usuarios/check-username?username= — Username availability (case insensitive)
+usuariosRouter.get('/check-username', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const username = String(req.query.username ?? '').replace(/^@+/, '').trim().toLowerCase();
+    if (!username || username.length < 2) {
+      return res.json({ available: false });
+    }
+
+    const escaped = username.replace(/"/g, '\\"');
+    let rows = [];
+
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .select('id, supabase_user_id, user_id, username, apodo')
+      .or(`username.ilike."${escaped}",apodo.ilike."${escaped}"`);
+
+    if (error) {
+      const { data: fallbackRows, error: fallbackErr } = await supabaseAdmin
+        .from('jugadores_perfil')
+        .select('id, supabase_user_id, user_id, apodo')
+        .ilike('apodo', username);
+
+      if (fallbackErr) throw fallbackErr;
+      rows = fallbackRows ?? [];
+    } else {
+      rows = data ?? [];
+    }
+
+    const taken = rows.some((row) => {
+      const rowHandle = String(row.username ?? row.apodo ?? '')
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+
+      if (rowHandle !== username) return false;
+
+      const rowUserId = row.supabase_user_id ?? row.user_id ?? null;
+      return rowUserId !== user.id;
+    });
+
+    res.json({ available: !taken });
+  } catch (err) {
+    console.error('❌ Error GET /api/usuarios/check-username:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/usuarios/buscar?q=&partido_id= — Search players to invite to a partido
 usuariosRouter.get('/buscar', async (req, res) => {
   try {
@@ -2680,13 +2732,13 @@ usuariosRouter.get('/buscar', async (req, res) => {
       return res.status(status).json({ error: authError });
     }
 
-    const query = String(req.query.q ?? '').trim();
-    if (query.length < 2) {
+    const q = String(req.query.q ?? '').replace(/^@+/, '').trim();
+    if (q.length < 2) {
       return res.json([]);
     }
 
     const partidoId = parseInt(req.query.partido_id, 10);
-    const escaped = query.replace(/"/g, '\\"');
+    const escaped = q.replace(/"/g, '\\"');
 
     let excludeUserIds = new Set([user.id]);
 
@@ -2727,9 +2779,9 @@ usuariosRouter.get('/buscar', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
-      .select('supabase_user_id, nombre, nombre_saludo, apodo, foto_url, nivel')
+      .select('supabase_user_id, nombre, nombre_saludo, apodo, username, foto_url, nivel')
       .or(
-        `nombre.ilike."%${escaped}%",apodo.ilike."%${escaped}%",nombre_saludo.ilike."%${escaped}%"`,
+        `nombre.ilike."%${escaped}%",apodo.ilike."%${escaped}%",nombre_saludo.ilike."%${escaped}%",username.ilike."%${escaped}%"`,
       )
       .limit(10);
 
@@ -2740,7 +2792,7 @@ usuariosRouter.get('/buscar', async (req, res) => {
       .map((row) => ({
         user_id: row.supabase_user_id,
         nombre: row.nombre_saludo ?? row.nombre ?? 'Jugador',
-        username: row.apodo ?? row.nombre_saludo ?? null,
+        username: row.username ?? row.apodo ?? row.nombre_saludo ?? null,
         foto_url: row.foto_url ?? null,
         nivel: row.nivel ?? 'Intermedio',
       }));
@@ -2788,6 +2840,8 @@ usuariosRouter.get('/perfil', async (req, res) => {
       pais: data.pais ?? '',
       email: data.email ?? user.email ?? '',
       foto_url: data.foto_url ?? null,
+      username: data.username ?? data.apodo ?? null,
+      apodo: data.apodo ?? data.username ?? null,
     });
   } catch (err) {
     console.error('❌ Error GET /api/usuarios/perfil:', err.message);
@@ -2808,7 +2862,11 @@ usuariosRouter.put('/perfil', async (req, res) => {
       return res.status(400).json({ error: 'Usuario sin email' });
     }
 
-    const { nombre, telefono, nivel, lateralidad, pais } = req.body;
+    const { nombre, telefono, nivel, lateralidad, pais, username, apodo } = req.body;
+
+    const rawUsername = username ?? apodo ?? null;
+    const normalizedUsername =
+      rawUsername != null ? String(rawUsername).replace(/^@+/, '').trim() : null;
 
     const updatePayload = {
       nombre: nombre ?? null,
@@ -2818,11 +2876,16 @@ usuariosRouter.put('/perfil', async (req, res) => {
       pais: pais ?? null,
     };
 
+    if (normalizedUsername) {
+      updatePayload.username = normalizedUsername;
+      updatePayload.apodo = normalizedUsername;
+    }
+
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
       .update(updatePayload)
       .eq('email', email)
-      .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url');
+      .select('nombre, telefono, nivel, lateralidad, pierna_habil, pais, email, foto_url, username, apodo');
 
     if (error) throw error;
     if (!data?.length) {
@@ -2839,6 +2902,8 @@ usuariosRouter.put('/perfil', async (req, res) => {
       pais: perfil.pais ?? '',
       email: perfil.email ?? email,
       foto_url: perfil.foto_url ?? null,
+      username: perfil.username ?? perfil.apodo ?? null,
+      apodo: perfil.apodo ?? perfil.username ?? null,
     });
   } catch (err) {
     console.error('❌ Error PUT /api/usuarios/perfil:', err.message);
