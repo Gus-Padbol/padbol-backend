@@ -874,12 +874,34 @@ async function fetchJugadorPerfilPublic(supabaseAdmin, userId, email) {
 
   const { data, error } = await supabaseAdmin
     .from('jugadores_perfil')
-    .select('nombre, nombre_saludo, apodo, foto_url, nivel, email, user_id')
+    .select('nombre, nombre_saludo, apodo, username, foto_url, nivel, email, user_id')
     .or(filters.join(','))
     .maybeSingle();
 
   if (error) throw error;
   return data;
+}
+
+function mapSolicitanteFromPerfil(perfil) {
+  if (!perfil) {
+    return {
+      nombre: 'Jugador',
+      username: null,
+      apodo: null,
+      nombre_saludo: null,
+      foto_url: null,
+      nivel: null,
+    };
+  }
+
+  return {
+    nombre: perfil.nombre ?? perfil.apodo ?? perfil.nombre_saludo ?? perfil.username ?? 'Jugador',
+    username: perfil.username ?? null,
+    apodo: perfil.apodo ?? null,
+    nombre_saludo: perfil.nombre_saludo ?? null,
+    foto_url: perfil.foto_url ?? null,
+    nivel: perfil.nivel ?? null,
+  };
 }
 
 function isDeadlinePassed(partido) {
@@ -1281,11 +1303,7 @@ export function createPartidosRouter({
             fecha: partido?.fecha ?? null,
             hora: formatHora(partido?.hora),
             deporte: partido?.deporte ?? 'padbol',
-            solicitante: {
-              nombre: perfil?.nombre_saludo ?? perfil?.apodo ?? perfil?.nombre ?? 'Jugador',
-              foto_url: perfil?.foto_url ?? null,
-              nivel: perfil?.nivel ?? null,
-            },
+            solicitante: mapSolicitanteFromPerfil(perfil),
           };
         }),
       );
@@ -1792,8 +1810,7 @@ export function createPartidosRouter({
             solicitante_id: solicitud.solicitante_id,
             estado: solicitud.estado,
             created_at: solicitud.created_at,
-            nombre: perfil?.nombre_saludo ?? perfil?.apodo ?? perfil?.nombre ?? 'Jugador',
-            foto_url: perfil?.foto_url ?? null,
+            ...mapSolicitanteFromPerfil(perfil),
             nivel: perfil?.nivel ?? 'Intermedio',
             partidos_jugados: partidosJugados,
           };
