@@ -563,34 +563,50 @@ export async function buildDisponibilidadSlots(
 
   if (expandCourts) {
     return slotTimes.flatMap((hora) => {
-      const availableCourts = [];
+      const cards = [];
 
       for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
-        const { blocked } = slotBlockingInfo(
+        const info = slotBlockingInfo(
           { hora, canchaNum: cancha },
           blockingReservas,
           blockingPartidos,
           nowMs,
         );
-        if (!blocked) availableCourts.push(cancha);
+
+        if (!info.blocked) {
+          cards.push({ hora, disponible: true, cancha });
+          continue;
+        }
+
+        if (info.motivo === 'partido_abierto' && info.partido) {
+          const lugaresLibres = Math.max(
+            0,
+            (info.partido.jugadores_requeridos ?? 4) - (info.partido.jugadores_confirmados ?? 0),
+          );
+          if (lugaresLibres > 0) {
+            cards.push({
+              hora,
+              disponible: false,
+              cancha,
+              motivo: 'partido_abierto',
+              partido: info.partido,
+            });
+          }
+        }
       }
 
-      if (availableCourts.length === 0) {
-        const info = getHoraUnavailableInfo(
+      if (cards.length === 0) {
+        const unavailableInfo = getHoraUnavailableInfo(
           hora,
           totalCourts,
           blockingReservas,
           blockingPartidos,
           nowMs,
         );
-        return [buildUnavailableSlot(hora, info)];
+        return [buildUnavailableSlot(hora, unavailableInfo)];
       }
 
-      return availableCourts.map((cancha) => ({
-        hora,
-        disponible: true,
-        cancha,
-      }));
+      return cards;
     });
   }
 
