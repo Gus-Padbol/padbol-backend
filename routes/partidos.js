@@ -451,7 +451,7 @@ export async function fetchDisponibilidadOccupancy(supabaseAdmin, { sedeId, sede
 
   const { data: partidos, error: partidosErr } = await supabaseAdmin
     .from('partidos_abiertos')
-    .select('hora, duracion_minutos, cancha, estado')
+    .select('hora, cancha, estado')
     .eq('sede_id', sedeId)
     .eq('fecha', fecha)
     .in('estado', PARTIDO_BLOCKING_STATES);
