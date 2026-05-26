@@ -25,6 +25,7 @@ import {
   resolveReservaCanchaStorageText,
 } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
+import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 
 dotenv.config();
 
@@ -487,6 +488,8 @@ app.get('/api/sedes', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser });
 
 // GET /api/sedes/:id — Single sede with full details (JWT required)
 app.get('/api/sedes/:id', async (req, res) => {
