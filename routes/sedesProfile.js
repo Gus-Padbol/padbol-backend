@@ -433,13 +433,18 @@ function mapResenaRow(row, profile = null) {
 }
 
 export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser }) {
+  /** Sesión opcional: lectura pública; con Bearer se enriquecen flags de reseñas. */
+  async function optionalAuthUser(req) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) return null;
+    const token = authHeader.slice(7);
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data?.user) return null;
+    return data.user;
+  }
+
   app.get('/api/sedes/:id/perfil', async (req, res) => {
     try {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) {
-        return res.status(status).json({ error: authError });
-      }
-
       const sedeId = parseSedeId(req.params.id);
       if (sedeId == null) {
         return res.status(400).json({ error: 'ID de sede inválido' });
@@ -532,11 +537,6 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
 
   app.get('/api/sedes/:id/partidos', async (req, res) => {
     try {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) {
-        return res.status(status).json({ error: authError });
-      }
-
       const sedeId = parseSedeId(req.params.id);
       if (sedeId == null) {
         return res.status(400).json({ error: 'ID de sede inválido' });
@@ -550,6 +550,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       const limitRaw = parseInt(String(req.query.limit ?? '3'), 10);
       const limit = Number.isFinite(limitRaw) ? limitRaw : 3;
 
+      const user = await optionalAuthUser(req);
       const partidos = await fetchSedeUpcomingPartidos(supabaseAdmin, sedeId, user, { limit });
       res.json({ partidos });
     } catch (err) {
@@ -560,10 +561,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
 
   const handleResenas = async (req, res) => {
     try {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) {
-        return res.status(status).json({ error: authError });
-      }
+      const user = await optionalAuthUser(req);
 
       const sedeId = parseSedeId(req.params.id);
       if (sedeId == null) {
@@ -595,10 +593,12 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         })),
       );
       let userHasReviewed = false;
-      try {
-        userHasReviewed = await userHasResenaForSede(supabaseAdmin, sedeId, user.id);
-      } catch {
-        userHasReviewed = resenas.some((row) => resenaUserMatchesProfile(row.user_id, user.id));
+      if (user?.id) {
+        try {
+          userHasReviewed = await userHasResenaForSede(supabaseAdmin, sedeId, user.id);
+        } catch {
+          userHasReviewed = resenas.some((row) => resenaUserMatchesProfile(row.user_id, user.id));
+        }
       }
 
       let total_count = resenas.length;
@@ -621,10 +621,12 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       const has_more = offset + resenas.length < total_count;
 
       let userIsEligible = false;
-      try {
-        userIsEligible = await userIsEligibleForSedeResena(supabaseAdmin, sedeId, user.id);
-      } catch (eligibilityErr) {
-        console.warn('⚠️ userIsEligibleForSedeResena:', eligibilityErr.message);
+      if (user?.id) {
+        try {
+          userIsEligible = await userIsEligibleForSedeResena(supabaseAdmin, sedeId, user.id);
+        } catch (eligibilityErr) {
+          console.warn('⚠️ userIsEligibleForSedeResena:', eligibilityErr.message);
+        }
       }
 
       res.json({

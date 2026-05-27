@@ -1941,13 +1941,20 @@ app.delete('/api/equipos/:id', async (req, res) => {
 });
 
 // ===== PARTIDOS ABIERTOS =====
-app.use('/api/partidos', createPartidosRouter({
+const partidosRouter = createPartidosRouter({
   supabase,
   supabaseAdmin,
   getAuthenticatedUser,
   computePartidoDeadlineCancel,
   triggerPartidoCreatorPayment,
-}));
+});
+app.use('/api/partidos', partidosRouter);
+/** Alias legacy (SedePublica fallback): misma respuesta que GET /api/partidos/abiertos */
+app.get('/api/partidos-abiertos', (req, res, next) => {
+  const qs = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+  req.url = `/abiertos${qs}`;
+  return partidosRouter(req, res, next);
+});
 app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
