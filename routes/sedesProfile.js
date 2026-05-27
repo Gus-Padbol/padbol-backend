@@ -1,14 +1,21 @@
 import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
 
-/** PostgREST table names (production uses `public.resenas`). */
-const RESENAS_TABLE_CANDIDATES = ['resenas', 'resenas_sedes', 'reseñas_sedes'];
+/** Venue reviews live in public.resenas_sedes only. */
+const RESENAS_TABLE = 'resenas_sedes';
 
 const JUGADORES_PERFIL_EMBED =
   'jugadores_perfil(user_id, nombre, apellido, apodo, username, alias, foto_url, avatar_url)';
 
+/** Mirrors SQL: jp.user_id::text = r.user_id::text (avoids UUID casing mismatches). */
 function normalizeUserId(raw) {
   if (raw == null || raw === '') return null;
   return String(raw).trim().toLowerCase();
+}
+
+function resenaUserMatchesProfile(resenaUserId, profileUserId) {
+  const a = normalizeUserId(resenaUserId);
+  const b = normalizeUserId(profileUserId);
+  return Boolean(a && b && a === b);
 }
 
 function extractEmbeddedProfile(row) {
@@ -162,79 +169,59 @@ async function fetchPlayerProfile(supabaseAdmin, userId) {
 }
 
 async function insertResenaForSede(supabaseAdmin, payload) {
-  for (const table of RESENAS_TABLE_CANDIDATES) {
-    try {
-      const { data, error } = await supabaseAdmin
-        .from(table)
-        .insert(payload)
-        .select('*')
-        .single();
+  const { data, error } = await supabaseAdmin
+    .from(RESENAS_TABLE)
+    .insert(payload)
+    .select('*')
+    .single();
 
-      if (error) throw error;
-      return data;
-    } catch {
-      // try next table name
-    }
-  }
-
-  return null;
+  if (error) throw error;
+  return data;
 }
 
 async function userHasResenaForSede(supabaseAdmin, sedeId, userId) {
-  for (const table of RESENAS_TABLE_CANDIDATES) {
-    try {
-      const { data, error } = await supabaseAdmin
-        .from(table)
-        .select('id')
-        .eq('sede_id', sedeId)
-        .eq('user_id', userId)
-        .limit(1)
-        .maybeSingle();
+  const { data, error } = await supabaseAdmin
+    .from(RESENAS_TABLE)
+    .select('id')
+    .eq('sede_id', sedeId)
+    .eq('user_id', userId)
+    .limit(1)
+    .maybeSingle();
 
-      if (error) throw error;
-      if (data) return true;
-    } catch {
-      // try next table
-    }
-  }
-
-  return false;
+  if (error) throw error;
+  return Boolean(data);
 }
 
 async function fetchResenasForSede(supabaseAdmin, sedeId) {
   const selectVariants = [
-    `id, sede_id, user_id, estrellas, comentario, respuesta_admin, fecha_respuesta, created_at, nombre, ${JUGADORES_PERFIL_EMBED}`,
-    `id, sede_id, user_id, estrellas, comentario, created_at, nombre, ${JUGADORES_PERFIL_EMBED}`,
+    `*, ${JUGADORES_PERFIL_EMBED}`,
+    'id, sede_id, user_id, estrellas, comentario, respuesta_admin, fecha_respuesta, created_at',
     '*',
   ];
 
-  for (const table of RESENAS_TABLE_CANDIDATES) {
-    for (const selectClause of selectVariants) {
-      try {
-        const { data, error } = await supabaseAdmin
-          .from(table)
-          .select(selectClause)
-          .eq('sede_id', sedeId)
-          .order('created_at', { ascending: false })
-          .limit(20);
+  let lastError = null;
 
-        if (error) throw error;
+  for (const selectClause of selectVariants) {
+    const { data, error } = await supabaseAdmin
+      .from(RESENAS_TABLE)
+      .select(selectClause)
+      .eq('sede_id', sedeId)
+      .order('created_at', { ascending: false })
+      .limit(20);
 
-        const rows = data ?? [];
-        console.log(
-          `📋 fetchResenasForSede table=${table} select=${selectClause === '*' ? '*' : 'join'} rows=${rows.length}`,
-          rows[0] ? JSON.stringify(rows[0]) : '(empty)',
-        );
-        return rows;
-      } catch (err) {
-        if (selectClause === '*') {
-          console.warn(`⚠️ fetchResenasForSede ${table}:`, err.message);
-        }
-      }
+    if (!error) {
+      const rows = data ?? [];
+      console.log(
+        `📋 fetchResenasForSede ${RESENAS_TABLE} select=${selectClause === '*' ? '*' : 'join'} rows=${rows.length}`,
+        rows[0] ? JSON.stringify(rows[0]) : '(empty)',
+      );
+      return rows;
     }
+
+    lastError = error;
   }
 
-  return [];
+  throw lastError ?? new Error(`No se pudieron leer reseñas de ${RESENAS_TABLE}`);
 }
 
 async function enrichResenasWithProfiles(supabaseAdmin, rows) {
@@ -248,25 +235,25 @@ async function enrichResenasWithProfiles(supabaseAdmin, rows) {
     if (embedded) profileByUserId.set(uid, embedded);
   }
 
-  const missingIds = [
+  const missingUserIds = [
     ...new Set(
       list
-        .map((row) => normalizeUserId(row.user_id))
-        .filter((uid) => uid && !profileByUserId.has(uid)),
+        .map((row) => row.user_id)
+        .filter((uid) => uid && !profileByUserId.has(normalizeUserId(uid))),
     ),
   ];
 
-  if (missingIds.length > 0) {
+  if (missingUserIds.length > 0) {
     try {
       const { data: perfiles, error } = await supabaseAdmin
         .from('jugadores_perfil')
         .select('user_id, nombre, apellido, apodo, username, alias, foto_url, avatar_url')
-        .in('user_id', missingIds);
+        .in('user_id', missingUserIds);
 
       if (error) throw error;
 
       console.log(
-        `📋 enrichResenasWithProfiles lookup uids=${missingIds.length} perfiles=${perfiles?.length ?? 0}`,
+        `📋 enrichResenasWithProfiles JOIN resenas_sedes↔jugadores_perfil uids=${missingUserIds.length} perfiles=${perfiles?.length ?? 0}`,
         (perfiles ?? []).slice(0, 3).map((p) => ({
           user_id: p.user_id,
           nombre: p.nombre,
@@ -275,9 +262,10 @@ async function enrichResenasWithProfiles(supabaseAdmin, rows) {
         })),
       );
 
-      for (const perfil of perfiles ?? []) {
-        const uid = normalizeUserId(perfil?.user_id);
-        if (uid) profileByUserId.set(uid, perfil);
+      for (const row of list) {
+        if (profileByUserId.has(normalizeUserId(row.user_id))) continue;
+        const match = (perfiles ?? []).find((p) => resenaUserMatchesProfile(row.user_id, p.user_id));
+        if (match) profileByUserId.set(normalizeUserId(row.user_id), match);
       }
     } catch (err) {
       console.warn('⚠️ enrichResenasWithProfiles jugadores_perfil:', err.message);
@@ -454,7 +442,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       try {
         userHasReviewed = await userHasResenaForSede(supabaseAdmin, sedeId, user.id);
       } catch {
-        userHasReviewed = resenas.some((row) => row.user_id === user.id);
+        userHasReviewed = resenas.some((row) => resenaUserMatchesProfile(row.user_id, user.id));
       }
 
       const total = resenas.length;
@@ -527,22 +515,13 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       }
 
       const profile = await fetchPlayerProfile(supabaseAdmin, user.id);
-      const nombreAutor = profile?.apodo
-        ?? profile?.username
-        ?? [profile?.nombre, profile?.apellido].filter(Boolean).join(' ').trim()
-        ?? '';
 
       const inserted = await insertResenaForSede(supabaseAdmin, {
         sede_id: sedeId,
         user_id: user.id,
         estrellas: stars,
         comentario: trimmedComment || null,
-        nombre: nombreAutor,
       });
-
-      if (!inserted) {
-        return res.status(500).json({ error: 'No se pudo guardar la reseña' });
-      }
 
       const resena = mapResenaRow(inserted, profile);
 
