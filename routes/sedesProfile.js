@@ -1,4 +1,5 @@
 import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
+import { fetchSedeUpcomingPartidos } from './partidos.js';
 
 /** Venue reviews live in public.resenas_sedes only. */
 const RESENAS_TABLE = 'resenas_sedes';
@@ -526,6 +527,34 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
     } catch (err) {
       console.error('❌ Error GET /api/sedes/:id/torneos:', err.message);
       res.json({ torneos: [] });
+    }
+  });
+
+  app.get('/api/sedes/:id/partidos', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const sedeId = parseSedeId(req.params.id);
+      if (sedeId == null) {
+        return res.status(400).json({ error: 'ID de sede inválido' });
+      }
+
+      const upcoming = String(req.query.upcoming ?? '').toLowerCase() === 'true';
+      if (!upcoming) {
+        return res.status(400).json({ error: 'Usá upcoming=true para listar partidos próximos' });
+      }
+
+      const limitRaw = parseInt(String(req.query.limit ?? '3'), 10);
+      const limit = Number.isFinite(limitRaw) ? limitRaw : 3;
+
+      const partidos = await fetchSedeUpcomingPartidos(supabaseAdmin, sedeId, user, { limit });
+      res.json({ partidos });
+    } catch (err) {
+      console.error('❌ Error GET /api/sedes/:id/partidos:', err.message);
+      res.status(500).json({ error: err.message });
     }
   });
 

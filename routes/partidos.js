@@ -1072,6 +1072,30 @@ function validateResultadoPayload(body) {
   };
 }
 
+const UPCOMING_SEDE_PARTIDO_STATES = ['abierto', 'completo'];
+
+/** Upcoming open/full partidos for a single sede (sede profile preview). */
+export async function fetchSedeUpcomingPartidos(supabaseAdmin, sedeId, user, { limit = 3 } = {}) {
+  const today = getTodayArgentinaDate();
+  const safeLimit = Math.min(20, Math.max(1, Number(limit) || 3));
+
+  const { data, error } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select(PARTIDO_SELECT)
+    .eq('sede_id', sedeId)
+    .in('estado', UPCOMING_SEDE_PARTIDO_STATES)
+    .gte('fecha', today)
+    .order('fecha', { ascending: true })
+    .order('hora', { ascending: true })
+    .limit(safeLimit);
+
+  if (error) throw error;
+
+  return Promise.all(
+    (data ?? []).map((partido) => mapPartidoRow(partido, supabaseAdmin, user)),
+  );
+}
+
 export function createPartidosRouter({
   supabase,
   supabaseAdmin,
