@@ -1,3 +1,5 @@
+import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
+
 function parseSedeId(raw) {
   const sedeId = parseInt(raw, 10);
   if (Number.isNaN(sedeId)) return null;
@@ -257,12 +259,18 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         0,
       ) || (Number(sede.cantidad_canchas) > 0 ? Number(sede.cantidad_canchas) : null);
 
+      const tagline = sede.slogan ?? sede.descripcion ?? null;
+      const amenities = normalizeSedeAmenities(sede.amenities);
+      const historia = sede.historia ?? sede.descripcion_larga ?? null;
+
       res.json({
         sede,
         fotos,
-        slogan: sede.slogan ?? null,
+        slogan: tagline,
         logo_url: sede.logo_url ?? null,
-        descripcion: sede.descripcion ?? sede.descripcion_larga ?? sede.descripcion_corta ?? null,
+        descripcion: historia,
+        historia,
+        amenities,
         horarios,
         canchas_count: canchasCount,
         deportes_disponibles: deportesDisponibles,
@@ -426,4 +434,70 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
 
   app.post('/api/sedes/:id/resenas', handlePostResena);
   app.post('/api/sedes/:id/reseñas', handlePostResena);
+
+  app.patch('/api/sedes/:id', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const sedeId = parseSedeId(req.params.id);
+      if (sedeId == null) {
+        return res.status(400).json({ error: 'ID de sede inválido' });
+      }
+
+      const body = req.body ?? {};
+      const patch = {};
+      const hop = (key) => Object.prototype.hasOwnProperty.call(body, key);
+
+      if (hop('amenities')) {
+        patch.amenities = normalizeSedeAmenities(body.amenities);
+      }
+      if (hop('descripcion')) {
+        const text = String(body.descripcion ?? '').trim();
+        patch.descripcion = text ? text.slice(0, 300) : null;
+      }
+      if (hop('slogan')) {
+        const text = String(body.slogan ?? '').trim();
+        patch.slogan = text ? text.slice(0, 300) : null;
+      }
+      if (hop('historia')) {
+        const text = String(body.historia ?? '').trim();
+        patch.historia = text ? text.slice(0, 500) : null;
+      }
+
+      const passthrough = [
+        'nombre', 'direccion', 'ciudad', 'provincia', 'pais', 'telefono', 'email_contacto',
+        'horario_apertura', 'horario_cierre', 'moneda', 'metodo_pago', 'pago_manual_instrucciones',
+        'instagram', 'facebook', 'tiktok', 'twitter', 'youtube', 'website',
+        'color_fondo_logo', 'color_hero_primario', 'color_hero_secundario', 'color_borde_hero',
+        'mp_access_token', 'stripe_account_id',
+      ];
+      for (const key of passthrough) {
+        if (hop(key)) patch[key] = body[key];
+      }
+      if (hop('latitud')) patch.latitud = body.latitud == null || body.latitud === '' ? null : Number(body.latitud);
+      if (hop('longitud')) patch.longitud = body.longitud == null || body.longitud === '' ? null : Number(body.longitud);
+
+      if (Object.keys(patch).length === 0) {
+        return res.status(400).json({ error: 'Ningún campo reconocido para actualizar' });
+      }
+
+      const { data: updated, error } = await supabase
+        .from('sedes')
+        .update(patch)
+        .eq('id', sedeId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      if (!updated) return res.status(404).json({ error: 'Sede no encontrada' });
+
+      res.json({ sede: updated });
+    } catch (err) {
+      console.error('❌ Error PATCH /api/sedes/:id:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
 }
