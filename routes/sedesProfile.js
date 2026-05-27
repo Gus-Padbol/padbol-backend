@@ -776,6 +776,38 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       if (hop('latitud')) patch.latitud = body.latitud == null || body.latitud === '' ? null : Number(body.latitud);
       if (hop('longitud')) patch.longitud = body.longitud == null || body.longitud === '' ? null : Number(body.longitud);
 
+      /** Precios por duración (columnas en `sedes`; ver sedes_precios_por_duracion.sql). */
+      const parsePrecioDuracion = (raw, fieldName) => {
+        if (raw === null || raw === '') return null;
+        const p = Number(String(raw).replace(/\./g, '').replace(',', '.'));
+        if (!Number.isFinite(p) || p < 0) {
+          throw Object.assign(new Error(`${fieldName} inválido`), { statusCode: 400 });
+        }
+        return Math.round(p);
+      };
+      const precioKeys = [
+        ['precio_60min', 'precio_60'],
+        ['precio_90min', 'precio_90'],
+        ['precio_120min', 'precio_120'],
+        ['precio_turno', null],
+      ];
+      for (const [canonical, alias] of precioKeys) {
+        const sourceKey = hop(canonical) ? canonical : alias && hop(alias) ? alias : null;
+        if (!sourceKey) continue;
+        try {
+          patch[canonical] = parsePrecioDuracion(body[sourceKey], canonical);
+        } catch (e) {
+          const st = e.statusCode || 400;
+          return res.status(st).json({ error: e.message || String(e) });
+        }
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(patch, 'precio_90min') &&
+        patch.precio_90min != null
+      ) {
+        patch.precio_turno = patch.precio_90min;
+      }
+
       if (Object.keys(patch).length === 0) {
         return res.status(400).json({ error: 'Ningún campo reconocido para actualizar' });
       }
