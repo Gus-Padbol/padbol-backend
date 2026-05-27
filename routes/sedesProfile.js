@@ -3,6 +3,13 @@ import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
 /** Venue reviews live in public.resenas_sedes only. */
 const RESENAS_TABLE = 'resenas_sedes';
 
+const ELIGIBLE_RESERVA_ESTADOS = ['confirmada', 'completada'];
+
+const NO_ELIGIBLE_RESENA = {
+  error: 'no_eligible',
+  message: 'Debes haber reservado o jugado un torneo en este club para poder reseñarlo.',
+};
+
 const JUGADORES_PERFIL_EMBED =
   'jugadores_perfil(user_id, nombre, apellido, apodo, username, alias, foto_url)';
 
@@ -166,6 +173,85 @@ async function fetchPlayerProfile(supabaseAdmin, userId) {
   } catch {
     return null;
   }
+}
+
+async function userHasEligibleReservaInSede(supabaseAdmin, sedeId, userId) {
+  if (!userId) return false;
+
+  const { count, error } = await supabaseAdmin
+    .from('reservas')
+    .select('id', { count: 'exact', head: true })
+    .eq('sede_id', sedeId)
+    .eq('user_id', userId)
+    .in('estado', ELIGIBLE_RESERVA_ESTADOS);
+
+  if (!error && (count ?? 0) > 0) return true;
+
+  const missingSedeIdColumn = error?.code === '42703'
+    || String(error?.message ?? '').toLowerCase().includes('sede_id');
+  if (error && !missingSedeIdColumn) throw error;
+
+  const { data: sedeRow, error: sedeError } = await supabaseAdmin
+    .from('sedes')
+    .select('nombre')
+    .eq('id', sedeId)
+    .maybeSingle();
+
+  if (sedeError) throw sedeError;
+  const sedeNombre = String(sedeRow?.nombre ?? '').trim();
+  if (!sedeNombre) return false;
+
+  const { count: byNameCount, error: byNameError } = await supabaseAdmin
+    .from('reservas')
+    .select('id', { count: 'exact', head: true })
+    .eq('sede', sedeNombre)
+    .eq('user_id', userId)
+    .in('estado', ELIGIBLE_RESERVA_ESTADOS);
+
+  if (byNameError) throw byNameError;
+  return (byNameCount ?? 0) > 0;
+}
+
+async function userHasTorneoParticipationInSede(supabaseAdmin, sedeId, userId) {
+  if (!userId) return false;
+
+  const { data: torneos, error: torneosError } = await supabaseAdmin
+    .from('torneos')
+    .select('id')
+    .eq('sede_id', sedeId);
+
+  if (torneosError) throw torneosError;
+
+  const torneoIds = (torneos ?? []).map((row) => row.id).filter((id) => id != null);
+  if (torneoIds.length === 0) return false;
+
+  const torneoPlayerTables = ['torneos_jugadores', 'jugadores_torneo'];
+
+  for (const table of torneoPlayerTables) {
+    const { count, error } = await supabaseAdmin
+      .from(table)
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .in('torneo_id', torneoIds);
+
+    if (!error && (count ?? 0) > 0) return true;
+
+    const tableMissing = error?.code === '42P01'
+      || error?.code === 'PGRST205'
+      || String(error?.message ?? '').toLowerCase().includes(table);
+    if (tableMissing) continue;
+    if (error) throw error;
+  }
+
+  return false;
+}
+
+async function userIsEligibleForSedeResena(supabaseAdmin, sedeId, userId) {
+  const [hasReserva, hasTorneo] = await Promise.all([
+    userHasEligibleReservaInSede(supabaseAdmin, sedeId, userId),
+    userHasTorneoParticipationInSede(supabaseAdmin, sedeId, userId),
+  ]);
+  return hasReserva || hasTorneo;
 }
 
 async function insertResenaForSede(supabaseAdmin, payload) {
@@ -446,11 +532,19 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         ? resenas.reduce((sum, row) => sum + (Number(row.estrellas) || 0), 0) / total
         : null;
 
+      let userIsEligible = false;
+      try {
+        userIsEligible = await userIsEligibleForSedeResena(supabaseAdmin, sedeId, user.id);
+      } catch (eligibilityErr) {
+        console.warn('⚠️ userIsEligibleForSedeResena:', eligibilityErr.message);
+      }
+
       res.json({
         resenas,
         promedio: average != null ? Math.round(average * 10) / 10 : null,
         total,
         user_has_reviewed: userHasReviewed,
+        user_is_eligible: userIsEligible,
       });
     } catch (err) {
       console.error('❌ Error GET /api/sedes/:id/resenas:', err.message);
@@ -459,6 +553,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         promedio: null,
         total: 0,
         user_has_reviewed: false,
+        user_is_eligible: false,
       });
     }
   };
@@ -508,6 +603,11 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       const alreadyReviewed = await userHasResenaForSede(supabaseAdmin, sedeId, user.id);
       if (alreadyReviewed) {
         return res.status(409).json({ error: 'Ya reseñaste este club' });
+      }
+
+      const isEligible = await userIsEligibleForSedeResena(supabaseAdmin, sedeId, user.id);
+      if (!isEligible) {
+        return res.status(403).json(NO_ELIGIBLE_RESENA);
       }
 
       const profile = await fetchPlayerProfile(supabaseAdmin, user.id);
