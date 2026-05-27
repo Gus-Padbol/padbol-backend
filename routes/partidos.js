@@ -1,6 +1,7 @@
 import express from 'express';
 import { sendPushToUser } from '../utils/push.js';
 import { createNotificacion } from '../utils/notificaciones.js';
+import { generarIniciosMinutosSlotReserva, minutosAHoraReserva } from '../lib/reservaSlotsHorarios.js';
 
 function getTodayArgentinaDate() {
   const nowAR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
@@ -422,16 +423,21 @@ function minutesToTime(totalMinutes) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
-function generateSlotTimes(apertura, cierre, duracionMinutos) {
-  const start = parseTimeToMinutes(apertura || '18:00');
-  const end = parseTimeToMinutes(cierre || '23:00');
+/** Franjas horarias si existen; si no, horario_apertura / horario_cierre de la sede. */
+function generateSlotTimes(sedeOrApertura, cierreOrFecha, duracionMinutos, fechaISO = null) {
   const duration = duracionMinutos > 0 ? duracionMinutos : 90;
+  if (sedeOrApertura && typeof sedeOrApertura === 'object' && !Array.isArray(sedeOrApertura)) {
+    const sede = sedeOrApertura;
+    const fecha = fechaISO || getTodayArgentinaDate();
+    const inicios = generarIniciosMinutosSlotReserva(sede, fecha, duration, 30);
+    return inicios.map((m) => minutosAHoraReserva(m));
+  }
+  const start = parseTimeToMinutes(sedeOrApertura || '18:00');
+  const end = parseTimeToMinutes(cierreOrFecha || '23:00');
   const slots = [];
-
   for (let current = start; current + duration <= end; current += 30) {
     slots.push(minutesToTime(current));
   }
-
   return slots;
 }
 
@@ -570,7 +576,9 @@ export async function buildDisponibilidadSlots(
 ) {
   const { data: sede, error: sedeErr } = await supabaseAdmin
     .from('sedes')
-    .select('id, nombre, horario_apertura, horario_cierre, cantidad_canchas')
+    .select(
+      'id, nombre, horario_apertura, horario_cierre, cantidad_canchas, franjas_horarias, precio_60min, precio_90min, precio_120min, precio_turno, precio_por_reserva',
+    )
     .eq('id', sedeId)
     .maybeSingle();
 
@@ -582,11 +590,7 @@ export async function buildDisponibilidadSlots(
     { sedeId, sedeNombre: sede.nombre, fecha },
   );
 
-  const slotTimes = generateSlotTimes(
-    sede.horario_apertura,
-    sede.horario_cierre,
-    duracionMinutos,
-  );
+  const slotTimes = generateSlotTimes(sede, null, duracionMinutos, fecha);
   const totalCourts = sede.cantidad_canchas || 1;
   const nowMs = Date.now();
 
