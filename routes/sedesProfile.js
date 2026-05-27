@@ -4,7 +4,7 @@ import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
 const RESENAS_TABLE = 'resenas_sedes';
 
 const JUGADORES_PERFIL_EMBED =
-  'jugadores_perfil(user_id, nombre, apellido, apodo, username, alias, foto_url, avatar_url)';
+  'jugadores_perfil(user_id, nombre, apellido, apodo, username, alias, foto_url)';
 
 /** Mirrors SQL: jp.user_id::text = r.user_id::text (avoids UUID casing mismatches). */
 function normalizeUserId(raw) {
@@ -156,7 +156,7 @@ async function fetchPlayerProfile(supabaseAdmin, userId) {
   try {
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
-      .select('nombre, apellido, apodo, username, foto_url, avatar_url')
+      .select('nombre, apellido, apodo, username, foto_url')
       .eq('user_id', userId)
       .limit(1)
       .maybeSingle();
@@ -247,7 +247,7 @@ async function enrichResenasWithProfiles(supabaseAdmin, rows) {
     try {
       const { data: perfiles, error } = await supabaseAdmin
         .from('jugadores_perfil')
-        .select('user_id, nombre, apellido, apodo, username, alias, foto_url, avatar_url')
+        .select('user_id, nombre, apellido, apodo, username, alias, foto_url')
         .in('user_id', missingUserIds);
 
       if (error) throw error;
@@ -287,11 +287,7 @@ function mapResenaRow(row, profile = null) {
   const apodo = String(resolvedProfile?.apodo ?? row.apodo ?? '').trim() || null;
   const usernameRaw = resolvedProfile?.username ?? resolvedProfile?.alias ?? row.username ?? '';
   const username = String(usernameRaw).trim().replace(/^@+/, '') || null;
-  const avatar_url = resolvedProfile?.foto_url
-    ?? resolvedProfile?.avatar_url
-    ?? row.avatar_url
-    ?? row.foto_url
-    ?? null;
+  const foto_url = resolvedProfile?.foto_url ?? row.foto_url ?? null;
   const display_name = apodo || nombre || 'Usuario';
 
   return {
@@ -306,7 +302,7 @@ function mapResenaRow(row, profile = null) {
     nombre,
     apodo,
     username,
-    avatar_url,
+    foto_url,
     display_name,
   };
 }
@@ -435,7 +431,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
           user_id: r.user_id,
           display_name: r.display_name,
           username: r.username,
-          avatar_url: r.avatar_url ? '(set)' : null,
+          foto_url: r.foto_url ? '(set)' : null,
         })),
       );
       let userHasReviewed = false;

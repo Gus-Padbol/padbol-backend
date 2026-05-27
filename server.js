@@ -3039,7 +3039,7 @@ function mapCompaneroHabitualResponse(row) {
     user_id: row.user_id,
     nombre: row.nombre ?? '',
     apodo: row.apodo ?? null,
-    avatar_url: row.foto_url ?? null,
+    foto_url: row.foto_url ?? null,
     username: row.username ?? null,
   };
 }
