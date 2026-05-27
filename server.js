@@ -320,6 +320,129 @@ const TWILIO_AUTH_TOKEN    = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
+// ─── JWT + user_roles (mi-rol para panel /admin) ─────────────────────────────
+const LEGACY_SUPER_ADMIN_EMAILS_API = [
+  'padbolinternacional@gmail.com',
+  'admin@padbol.com',
+  'sm@padbol.com',
+  'juanpablo@padbol.com',
+];
+
+async function authUserFromBearer(req) {
+  const auth = String(req.headers.authorization || '');
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) return null;
+  const token = m[1].trim();
+  if (!token) return null;
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user?.email) return null;
+  return data.user;
+}
+
+async function fetchUserRoleRow(email) {
+  const em = String(email || '').trim().toLowerCase();
+  if (!em) return null;
+  let q = await supabase
+    .from('user_roles')
+    .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
+    .eq('email', em)
+    .maybeSingle();
+  if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
+    q = await supabase
+      .from('user_roles')
+      .select('role, sede_id, nombre, pais, email')
+      .eq('email', em)
+      .maybeSingle();
+  }
+  if (q.error) return null;
+  return q.data;
+}
+
+/** Rol autenticado: `user_id` (JWT) primero, luego email. Service role bypass RLS. */
+async function fetchUserRoleRowForAuthUser(user) {
+  if (!user?.email) return null;
+  const uid = user.id ? String(user.id).trim() : '';
+  if (uid) {
+    let q = await supabase
+      .from('user_roles')
+      .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
+      .eq('user_id', uid)
+      .maybeSingle();
+    if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
+      q = await supabase
+        .from('user_roles')
+        .select('role, sede_id, nombre, pais, email')
+        .eq('user_id', uid)
+        .maybeSingle();
+    }
+    if (!q.error && q.data) return q.data;
+  }
+  return fetchUserRoleRow(user.email);
+}
+
+function buildMiRolJsonPayload(email, row) {
+  const em = String(email || '').trim().toLowerCase();
+  if (!row) {
+    return {
+      email: em,
+      rol: null,
+      role: null,
+      sede_id: null,
+      sedeId: null,
+      nombre: null,
+      pais: null,
+      torneosOficialesHabilitados: false,
+    };
+  }
+  const sedeIdRaw = row.sede_id;
+  const sedeIdNum =
+    sedeIdRaw != null && sedeIdRaw !== '' ? Number(sedeIdRaw) : null;
+  const rol =
+    String(row.role || '')
+      .trim()
+      .toLowerCase() || null;
+  return {
+    email: String(row.email || em).trim().toLowerCase(),
+    rol,
+    role: rol,
+    sede_id: Number.isFinite(sedeIdNum) ? sedeIdNum : null,
+    sedeId: Number.isFinite(sedeIdNum) ? sedeIdNum : null,
+    nombre: row.nombre ?? null,
+    pais: row.pais ?? null,
+    torneosOficialesHabilitados: Boolean(row.torneos_oficiales_habilitados),
+  };
+}
+
+/** GET /api/auth/mi-rol y GET /api/usuarios/mi-rol — JWT; lectura `user_roles`. */
+async function handleGetMiRol(req, res) {
+  try {
+    const authUser = await authUserFromBearer(req);
+    if (!authUser?.email) return res.status(401).json({ error: 'No autorizado' });
+    const email = String(authUser.email).trim().toLowerCase();
+    const row = await fetchUserRoleRowForAuthUser(authUser);
+    if (!row && LEGACY_SUPER_ADMIN_EMAILS_API.includes(email)) {
+      return res.json({
+        email,
+        rol: 'super_admin',
+        role: 'super_admin',
+        sede_id: null,
+        sedeId: null,
+        nombre: null,
+        pais: null,
+        torneosOficialesHabilitados: true,
+        legacy: true,
+      });
+    }
+    return res.json(buildMiRolJsonPayload(email, row));
+  } catch (err) {
+    console.error('❌ GET mi-rol:', err.message);
+    return res.status(500).json({ error: err.message || 'Error al obtener rol' });
+  }
+}
+
+app.get('/api/auth/mi-rol', handleGetMiRol);
+app.get('/api/usuarios/mi-rol', handleGetMiRol);
+
 // WhatsApp confirmation helper
 async function sendWhatsAppConfirmation(phone, { sede, fecha, hora, cancha, direccion }) {
   // Normalise number → E.164 without leading +, then prepend whatsapp:+
@@ -3729,6 +3852,8 @@ app.use('/api/checkin', checkinRouter);
 
 app.listen(PORT, () => {
   console.log(`🚀 Padbol Match API running on port ${PORT}`);
+  console.log('✅ Rutas rol: GET /api/auth/mi-rol');
+  console.log('✅ Rutas rol: GET /api/usuarios/mi-rol');
   console.log(`📊 Supabase: ${SUPABASE_URL}`);
   console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
   console.log('Hub endpoint ready: GET /api/hub/imagenes');
