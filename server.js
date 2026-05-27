@@ -174,11 +174,12 @@ function computePartidoDeadlineCancel(fecha, hora) {
 async function resolveMercadoPagoClient(sedeId) {
   if (!sedeId) return mpClient;
 
-  const { data: sedeRow } = await supabase
+  const { data: sedeRow, error } = await supabaseAdmin
     .from('sedes')
     .select('mp_access_token')
     .eq('id', sedeId)
     .maybeSingle();
+  if (error) throw error;
 
   if (sedeRow?.mp_access_token) {
     return new MercadoPagoConfig({ accessToken: sedeRow.mp_access_token });
@@ -645,33 +646,44 @@ app.get('/api/sedes/:id', async (req, res) => {
   }
 });
 
-// GET /api/sedes/:id/extras — extras activos de la sede (JWT required)
+// GET /api/sedes/:id/extras — extras públicos para checkout (sin JWT)
 app.get('/api/sedes/:id/extras', async (req, res) => {
   try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status).json({ error: authError });
+    const sid = parseInt(String(req.params.id || '').trim(), 10);
+    if (!Number.isFinite(sid) || sid <= 0) {
+      return res.status(400).json({ error: 'sede_id inválido' });
     }
 
-    const sedeId = parseInt(req.params.id, 10);
-    if (Number.isNaN(sedeId)) {
-      return res.status(400).json({ error: 'ID de sede inválido' });
-    }
-
-    const { data, error } = await supabase
-      .from('extras')
-      .select('id, nombre, precio, moneda, categoria, imagen_url, stock')
-      .eq('sede_id', sedeId)
+    const { data, error } = await supabaseAdmin
+      .from('sede_extras')
+      .select('id,nombre,descripcion,precio,precio_moneda,imagen_url,stock')
+      .eq('sede_id', sid)
       .eq('activo', true)
-      .order('categoria', { ascending: true })
+      .eq('aprobado_super', true)
       .order('nombre', { ascending: true });
-
     if (error) throw error;
 
-    res.json(data || []);
+    const extras = (data || [])
+      .filter((row) => {
+        if (row.stock == null) return true;
+        const s = parseInt(String(row.stock), 10);
+        return Number.isFinite(s) && s > 0;
+      })
+      .map((row) => ({
+        ...row,
+        precio: row.precio != null ? Math.round(Number(row.precio)) : 0,
+      }));
+
+    res.json({ extras });
   } catch (err) {
-    console.error('❌ Error GET /api/sedes/:id/extras:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('❌ GET /api/sedes/:id/extras:', {
+      sedeId: req.params.id,
+      message: err?.message || String(err),
+      code: err?.code,
+      details: err?.details,
+      stack: err?.stack,
+    });
+    res.status(500).json({ error: err.message || String(err) });
   }
 });
 
@@ -2491,8 +2503,22 @@ app.get('/api/creditos/:email', async (req, res) => {
   }
 });
 
+function logCrearPreferenciaError(phase, err, ctx = {}) {
+  console.error('❌ POST /api/crear-preferencia', {
+    phase,
+    message: err?.message || String(err),
+    code: err?.code,
+    status: err?.status,
+    cause: err?.cause,
+    details: err?.details,
+    stack: err?.stack,
+    ...ctx,
+  });
+}
+
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', async (req, res) => {
+  const ctx = { sedeId: req.body?.sedeId ?? null, titulo: req.body?.titulo ?? null };
   try {
     const {
       titulo,
@@ -2508,17 +2534,27 @@ app.post('/api/crear-preferencia', async (req, res) => {
       return res.status(400).json({ error: 'Faltan campos requeridos: titulo, precio' });
     }
 
-    // Use sede-specific MP token if configured, otherwise fall back to env var
     let client = mpClient;
     if (sedeId) {
-      const { data: sedeRow } = await supabase
+      const { data: sedeRow, error: sedeTokErr } = await supabaseAdmin
         .from('sedes')
         .select('mp_access_token')
         .eq('id', sedeId)
         .maybeSingle();
+      if (sedeTokErr) {
+        logCrearPreferenciaError('sede_mp_token', sedeTokErr, ctx);
+        throw sedeTokErr;
+      }
       if (sedeRow?.mp_access_token) {
         client = new MercadoPagoConfig({ accessToken: sedeRow.mp_access_token });
+      } else if (!process.env.MP_ACCESS_TOKEN) {
+        return res.status(400).json({
+          error:
+            'Esta sede no tiene configurado Mercado Pago. Configura el Access Token en Admin → Mi sede → Pagos.',
+        });
       }
+    } else if (!process.env.MP_ACCESS_TOKEN) {
+      return res.status(503).json({ error: 'Mercado Pago no configurado en el servidor (MP_ACCESS_TOKEN)' });
     }
 
     const paymentExtras = extras ?? reservaData?.extras ?? [];
@@ -2535,8 +2571,6 @@ app.post('/api/crear-preferencia', async (req, res) => {
       extras: paymentExtras,
     });
 
-    // Embed full reservation data as JSON in external_reference so
-    // PagoExitoso can create the reservation after payment is approved.
     const externalReference = reservaData ? JSON.stringify(reservaData) : '';
 
     const preference = new Preference(client);
@@ -2544,9 +2578,9 @@ app.post('/api/crear-preferencia', async (req, res) => {
       body: {
         items,
         back_urls: {
-          success: 'padbolmatch://pago-exitoso',
-          failure: 'padbolmatch://pago-error',
-          pending: 'padbolmatch://pago-exitoso',
+          success: `${FRONTEND_URL}/pago-exitoso`,
+          failure: `${FRONTEND_URL}/pago-fallido`,
+          pending: `${FRONTEND_URL}/pago-fallido`,
         },
         auto_return: 'approved',
         external_reference: externalReference,
@@ -2557,8 +2591,8 @@ app.post('/api/crear-preferencia', async (req, res) => {
     console.log(`✓ MP preferencia creada: ${response.id} | items: ${items.length} | sede: ${sedeNombre || '—'}`);
     res.json({ init_point: response.init_point, preference_id: response.id });
   } catch (err) {
-    console.error('❌ Error POST /api/crear-preferencia:', err.message);
-    res.status(500).json({ error: err.message });
+    logCrearPreferenciaError('handler', err, ctx);
+    res.status(500).json({ error: err.message || String(err) });
   }
 });
 
