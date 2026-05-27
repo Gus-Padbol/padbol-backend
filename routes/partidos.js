@@ -423,7 +423,7 @@ function minutesToTime(totalMinutes) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
-/** Franjas horarias si existen; si no, horario_apertura / horario_cierre de la sede. */
+/** Turnos desde horario_apertura / horario_cierre de la sede (duración por defecto 90 min). */
 function generateSlotTimes(sedeOrApertura, cierreOrFecha, duracionMinutos, fechaISO = null) {
   const duration = duracionMinutos > 0 ? duracionMinutos : 90;
   if (sedeOrApertura && typeof sedeOrApertura === 'object' && !Array.isArray(sedeOrApertura)) {
@@ -577,7 +577,7 @@ export async function buildDisponibilidadSlots(
   const { data: sede, error: sedeErr } = await supabaseAdmin
     .from('sedes')
     .select(
-      'id, nombre, horario_apertura, horario_cierre, cantidad_canchas, franjas_horarias, precio_60min, precio_90min, precio_120min, precio_turno, precio_por_reserva',
+      'id, nombre, horario_apertura, horario_cierre, cantidad_canchas, precio_60min, precio_90min, precio_120min, precio_turno, precio_por_reserva',
     )
     .eq('id', sedeId)
     .maybeSingle();
