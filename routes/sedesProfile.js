@@ -209,7 +209,45 @@ async function fetchResenasForSede(supabaseAdmin, sedeId) {
   return [];
 }
 
-function mapResenaRow(row) {
+async function enrichResenasWithProfiles(supabaseAdmin, rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const userIds = [...new Set(list.map((row) => row.user_id).filter(Boolean))];
+  const profileByUserId = new Map();
+
+  if (userIds.length > 0) {
+    try {
+      const { data: perfiles, error } = await supabaseAdmin
+        .from('jugadores_perfil')
+        .select('user_id, nombre, apellido, apodo, username, alias, foto_url, avatar_url')
+        .in('user_id', userIds);
+
+      if (error) throw error;
+
+      for (const perfil of perfiles ?? []) {
+        if (perfil?.user_id) profileByUserId.set(perfil.user_id, perfil);
+      }
+    } catch (err) {
+      console.warn('⚠️ enrichResenasWithProfiles:', err.message);
+    }
+  }
+
+  return list.map((row) => mapResenaRow(row, profileByUserId.get(row.user_id)));
+}
+
+function mapResenaRow(row, profile = null) {
+  const nombrePerfil = [profile?.nombre, profile?.apellido].filter(Boolean).join(' ').trim();
+  const nombre = nombrePerfil
+    || String(row.nombre ?? row.autor_nombre ?? '').trim()
+    || null;
+  const apodo = String(profile?.apodo ?? row.apodo ?? '').trim() || null;
+  const usernameRaw = profile?.username ?? profile?.alias ?? row.username ?? '';
+  const username = String(usernameRaw).trim().replace(/^@+/, '') || null;
+  const avatar_url = profile?.foto_url
+    ?? profile?.avatar_url
+    ?? row.avatar_url
+    ?? row.foto_url
+    ?? null;
+
   return {
     id: row.id,
     sede_id: row.sede_id,
@@ -219,8 +257,10 @@ function mapResenaRow(row) {
     respuesta_admin: row.respuesta_admin ?? null,
     fecha_respuesta: row.fecha_respuesta ?? null,
     created_at: row.created_at,
-    nombre: row.nombre ?? row.autor_nombre ?? 'Jugador',
-    avatar_url: row.avatar_url ?? row.foto_url ?? null,
+    nombre,
+    apodo,
+    username,
+    avatar_url,
   };
 }
 
@@ -260,7 +300,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       ) || (Number(sede.cantidad_canchas) > 0 ? Number(sede.cantidad_canchas) : null);
 
       const tagline = sede.slogan ?? sede.descripcion ?? null;
-      const amenities = normalizeSedeAmenities(sede.amenities);
+      const amenities = normalizeSedeAmenities(sede.amenities ?? []);
       const historia = sede.historia ?? sede.descripcion_larga ?? null;
 
       res.json({
@@ -318,7 +358,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       res.json({ torneos: data ?? [] });
     } catch (err) {
       console.error('❌ Error GET /api/sedes/:id/torneos:', err.message);
-      res.status(500).json({ error: err.message });
+      res.json({ torneos: [] });
     }
   });
 
@@ -334,9 +374,20 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         return res.status(400).json({ error: 'ID de sede inválido' });
       }
 
-      const rows = await fetchResenasForSede(supabaseAdmin, sedeId);
-      const resenas = rows.map(mapResenaRow);
-      const userHasReviewed = await userHasResenaForSede(supabaseAdmin, sedeId, user.id);
+      let rows = [];
+      try {
+        rows = await fetchResenasForSede(supabaseAdmin, sedeId);
+      } catch (fetchErr) {
+        console.warn('⚠️ fetchResenasForSede:', fetchErr.message);
+      }
+
+      const resenas = await enrichResenasWithProfiles(supabaseAdmin, rows);
+      let userHasReviewed = false;
+      try {
+        userHasReviewed = await userHasResenaForSede(supabaseAdmin, sedeId, user.id);
+      } catch {
+        userHasReviewed = resenas.some((row) => row.user_id === user.id);
+      }
 
       const total = resenas.length;
       const average = total > 0
@@ -351,7 +402,12 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       });
     } catch (err) {
       console.error('❌ Error GET /api/sedes/:id/resenas:', err.message);
-      res.status(500).json({ error: err.message });
+      res.json({
+        resenas: [],
+        promedio: null,
+        total: 0,
+        user_has_reviewed: false,
+      });
     }
   };
 
