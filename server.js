@@ -36,15 +36,18 @@ const PORT = 3001;
 // CORS
 app.use(cors({
   origin: [
+    'https://padbolmatch.com',
+    'https://www.padbolmatch.com',
     'http://localhost:3000',
+    'http://localhost:3001',
     'http://localhost:8081',
     'exp://192.168.0.19:8081',
     'https://expo.dev',
     'https://padbol-match.netlify.app',
-    'https://padbol-match-9abn.vercel.app'
+    'https://padbol-match-9abn.vercel.app',
   ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  credentials: true,
 }));
 app.use(express.json());
 
