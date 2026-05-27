@@ -56,14 +56,18 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_KEY;
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const SUPABASE_SERVICE_ROLE_KEY =
+  String(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '').trim();
+const supabaseAdmin =
+  SUPABASE_SERVICE_ROLE_KEY && SUPABASE_URL
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    : supabase;
+
+if (!SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn('⚠️  SUPABASE_SERVICE_ROLE_KEY no está configurado — supabaseAdmin usa SUPABASE_KEY (RLS puede bloquear pagos)');
+}
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  console.warn('⚠️  SUPABASE_SERVICE_ROLE_KEY no está configurado — supabaseAdmin usa SUPABASE_KEY');
-}
 
 // Mercado Pago
 if (!process.env.MP_ACCESS_TOKEN) {
@@ -2519,7 +2523,15 @@ function logCrearPreferenciaError(phase, err, ctx = {}) {
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', async (req, res) => {
   const ctx = { sedeId: req.body?.sedeId ?? null, titulo: req.body?.titulo ?? null };
+  const db = supabaseAdmin;
   try {
+    if (!SUPABASE_SERVICE_ROLE_KEY) {
+      logCrearPreferenciaError('config', new Error('SUPABASE_SERVICE_ROLE_KEY no configurada'), ctx);
+      return res.status(503).json({
+        error: 'Configuración del servidor incompleta (SUPABASE_SERVICE_ROLE_KEY). Contactá soporte.',
+      });
+    }
+
     const {
       titulo,
       precio,
@@ -2536,7 +2548,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
 
     let client = mpClient;
     if (sedeId) {
-      const { data: sedeRow, error: sedeTokErr } = await supabaseAdmin
+      const { data: sedeRow, error: sedeTokErr } = await db
         .from('sedes')
         .select('mp_access_token')
         .eq('id', sedeId)
