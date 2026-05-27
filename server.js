@@ -26,6 +26,7 @@ import {
 } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
+import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 
 dotenv.config();
 
@@ -490,6 +491,7 @@ app.get('/api/sedes', async (req, res) => {
 });
 
 mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser });
+mountNotificacionesRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 
 // GET /api/sedes/:id — Single sede with full details (JWT required)
 app.get('/api/sedes/:id', async (req, res) => {

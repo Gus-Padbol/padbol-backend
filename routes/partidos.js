@@ -1,5 +1,6 @@
 import express from 'express';
 import { sendPushToUser } from '../utils/push.js';
+import { createNotificacion } from '../utils/notificaciones.js';
 
 function getTodayArgentinaDate() {
   const nowAR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
@@ -1777,12 +1778,48 @@ export function createPartidosRouter({
         ?? emailLocalPart(user.email)
         ?? 'Un jugador';
 
+      const horaLabel = formatHora(partido.hora) ?? '';
+      const fechaLabel = partido.fecha
+        ? new Date(`${partido.fecha}T12:00:00`).toLocaleDateString('es-AR', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+        })
+        : '';
+
       await sendPushToUser(supabaseAdmin, capitanUserId, {
         title: '¡Alguien quiere unirse!',
         body: `${solicitanteNombre} quiere unirse a tu partido`,
         data: {
           tipo: 'solicitud',
           partidoId: String(partidoId),
+        },
+      });
+
+      let solicitudId = existingSolicitud?.id ?? null;
+      if (!solicitudId) {
+        const { data: solicitudFresh } = await supabaseAdmin
+          .from('solicitudes_partido')
+          .select('id')
+          .eq('partido_id', partidoId)
+          .eq('solicitante_id', user.id)
+          .maybeSingle();
+        solicitudId = solicitudFresh?.id ?? null;
+      }
+
+      await createNotificacion(supabaseAdmin, {
+        user_id: capitanUserId,
+        tipo: 'solicitud_partido',
+        mensaje: `${solicitanteNombre} quiere unirse a tu partido del ${fechaLabel}${horaLabel ? ` · ${horaLabel}` : ''}`,
+        data: {
+          partido_id: partidoId,
+          solicitud_id: solicitudId,
+          solicitante_id: user.id,
+          solicitante_nombre: solicitanteNombre,
+          solicitante_foto_url: solicitantePerfil?.foto_url ?? null,
+          sede_nombre: partido.sede_nombre ?? null,
+          fecha: partido.fecha ?? null,
+          hora: horaLabel,
         },
       });
 
@@ -2005,11 +2042,40 @@ export function createPartidosRouter({
         .eq('id', solicitudId);
 
       const horaLabel = formatHora(partido.hora) ?? '';
+      const fechaLabel = partido.fecha
+        ? new Date(`${partido.fecha}T12:00:00`).toLocaleDateString('es-AR', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+        })
+        : '';
+
       await sendPushToUser(supabaseAdmin, solicitud.solicitante_id, {
         title: '¡Estás dentro!',
         body: `El partido es el ${partido.fecha} a las ${horaLabel}`,
         data: { tipo: 'aceptado', partidoId: String(partidoId) },
       });
+
+      await createNotificacion(supabaseAdmin, {
+        user_id: solicitud.solicitante_id,
+        tipo: 'solicitud_aceptada',
+        mensaje: `Tu solicitud fue aceptada. ¡Jugás el ${fechaLabel}${horaLabel ? ` a las ${horaLabel}` : ''} en ${partido.sede_nombre ?? 'la sede'}!`,
+        data: {
+          partido_id: partidoId,
+          sede_nombre: partido.sede_nombre ?? null,
+          fecha: partido.fecha ?? null,
+          hora: horaLabel,
+        },
+      });
+
+      if (joinResult.partidoCompleto) {
+        await createNotificacion(supabaseAdmin, {
+          user_id: getCapitanUserId(partido),
+          tipo: 'partido_completo',
+          mensaje: `¡Tu partido del ${fechaLabel} está completo! 4/4 jugadores confirmados`,
+          data: { partido_id: partidoId, jugadores: 4, cupo: 4 },
+        });
+      }
 
       console.log(`✓ PATCH /api/partidos/${partidoId}/solicitudes/${solicitudId} — aceptar`);
       res.json({ ok: true, partido_completo: joinResult.partidoCompleto });
