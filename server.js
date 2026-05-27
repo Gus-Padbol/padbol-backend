@@ -619,20 +619,15 @@ app.get('/api/sedes', async (req, res) => {
 mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser });
 mountNotificacionesRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 
-// GET /api/sedes/:id — Single sede with full details (JWT required)
+// GET /api/sedes/:id — datos públicos de la sede (reserva, horarios, precios; sin JWT)
 app.get('/api/sedes/:id', async (req, res) => {
   try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status).json({ error: authError });
-    }
-
     const sedeId = parseInt(req.params.id, 10);
     if (Number.isNaN(sedeId)) {
       return res.status(400).json({ error: 'ID de sede inválido' });
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('sedes')
       .select('*')
       .eq('id', sedeId)
