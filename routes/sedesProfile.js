@@ -1,5 +1,23 @@
 import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
 
+/** PostgREST table names (production uses `public.resenas`). */
+const RESENAS_TABLE_CANDIDATES = ['resenas', 'resenas_sedes', 'reseñas_sedes'];
+
+const JUGADORES_PERFIL_EMBED =
+  'jugadores_perfil(user_id, nombre, apellido, apodo, username, alias, foto_url, avatar_url)';
+
+function normalizeUserId(raw) {
+  if (raw == null || raw === '') return null;
+  return String(raw).trim().toLowerCase();
+}
+
+function extractEmbeddedProfile(row) {
+  const embedded = row?.jugadores_perfil;
+  if (Array.isArray(embedded)) return embedded[0] ?? null;
+  if (embedded && typeof embedded === 'object') return embedded;
+  return null;
+}
+
 function parseSedeId(raw) {
   const sedeId = parseInt(raw, 10);
   if (Number.isNaN(sedeId)) return null;
@@ -144,9 +162,7 @@ async function fetchPlayerProfile(supabaseAdmin, userId) {
 }
 
 async function insertResenaForSede(supabaseAdmin, payload) {
-  const tables = ['resenas_sedes', 'reseñas_sedes'];
-
-  for (const table of tables) {
+  for (const table of RESENAS_TABLE_CANDIDATES) {
     try {
       const { data, error } = await supabaseAdmin
         .from(table)
@@ -165,9 +181,7 @@ async function insertResenaForSede(supabaseAdmin, payload) {
 }
 
 async function userHasResenaForSede(supabaseAdmin, sedeId, userId) {
-  const tables = ['resenas_sedes', 'reseñas_sedes'];
-
-  for (const table of tables) {
+  for (const table of RESENAS_TABLE_CANDIDATES) {
     try {
       const { data, error } = await supabaseAdmin
         .from(table)
@@ -188,21 +202,35 @@ async function userHasResenaForSede(supabaseAdmin, sedeId, userId) {
 }
 
 async function fetchResenasForSede(supabaseAdmin, sedeId) {
-  const tables = ['resenas_sedes', 'reseñas_sedes'];
+  const selectVariants = [
+    `id, sede_id, user_id, estrellas, comentario, respuesta_admin, fecha_respuesta, created_at, nombre, ${JUGADORES_PERFIL_EMBED}`,
+    `id, sede_id, user_id, estrellas, comentario, created_at, nombre, ${JUGADORES_PERFIL_EMBED}`,
+    '*',
+  ];
 
-  for (const table of tables) {
-    try {
-      const { data, error } = await supabaseAdmin
-        .from(table)
-        .select('*')
-        .eq('sede_id', sedeId)
-        .order('created_at', { ascending: false })
-        .limit(20);
+  for (const table of RESENAS_TABLE_CANDIDATES) {
+    for (const selectClause of selectVariants) {
+      try {
+        const { data, error } = await supabaseAdmin
+          .from(table)
+          .select(selectClause)
+          .eq('sede_id', sedeId)
+          .order('created_at', { ascending: false })
+          .limit(20);
 
-      if (error) throw error;
-      return data ?? [];
-    } catch {
-      // try next table name or return empty
+        if (error) throw error;
+
+        const rows = data ?? [];
+        console.log(
+          `📋 fetchResenasForSede table=${table} select=${selectClause === '*' ? '*' : 'join'} rows=${rows.length}`,
+          rows[0] ? JSON.stringify(rows[0]) : '(empty)',
+        );
+        return rows;
+      } catch (err) {
+        if (selectClause === '*') {
+          console.warn(`⚠️ fetchResenasForSede ${table}:`, err.message);
+        }
+      }
     }
   }
 
@@ -211,42 +239,72 @@ async function fetchResenasForSede(supabaseAdmin, sedeId) {
 
 async function enrichResenasWithProfiles(supabaseAdmin, rows) {
   const list = Array.isArray(rows) ? rows : [];
-  const userIds = [...new Set(list.map((row) => row.user_id).filter(Boolean))];
   const profileByUserId = new Map();
 
-  if (userIds.length > 0) {
+  for (const row of list) {
+    const uid = normalizeUserId(row.user_id);
+    if (!uid) continue;
+    const embedded = extractEmbeddedProfile(row);
+    if (embedded) profileByUserId.set(uid, embedded);
+  }
+
+  const missingIds = [
+    ...new Set(
+      list
+        .map((row) => normalizeUserId(row.user_id))
+        .filter((uid) => uid && !profileByUserId.has(uid)),
+    ),
+  ];
+
+  if (missingIds.length > 0) {
     try {
       const { data: perfiles, error } = await supabaseAdmin
         .from('jugadores_perfil')
         .select('user_id, nombre, apellido, apodo, username, alias, foto_url, avatar_url')
-        .in('user_id', userIds);
+        .in('user_id', missingIds);
 
       if (error) throw error;
 
+      console.log(
+        `📋 enrichResenasWithProfiles lookup uids=${missingIds.length} perfiles=${perfiles?.length ?? 0}`,
+        (perfiles ?? []).slice(0, 3).map((p) => ({
+          user_id: p.user_id,
+          nombre: p.nombre,
+          apodo: p.apodo,
+          username: p.username,
+        })),
+      );
+
       for (const perfil of perfiles ?? []) {
-        if (perfil?.user_id) profileByUserId.set(perfil.user_id, perfil);
+        const uid = normalizeUserId(perfil?.user_id);
+        if (uid) profileByUserId.set(uid, perfil);
       }
     } catch (err) {
-      console.warn('⚠️ enrichResenasWithProfiles:', err.message);
+      console.warn('⚠️ enrichResenasWithProfiles jugadores_perfil:', err.message);
     }
   }
 
-  return list.map((row) => mapResenaRow(row, profileByUserId.get(row.user_id)));
+  return list.map((row) => {
+    const uid = normalizeUserId(row.user_id);
+    const profile = (uid && profileByUserId.get(uid)) || extractEmbeddedProfile(row);
+    return mapResenaRow(row, profile);
+  });
 }
 
 function mapResenaRow(row, profile = null) {
-  const nombrePerfil = [profile?.nombre, profile?.apellido].filter(Boolean).join(' ').trim();
-  const nombre = nombrePerfil
-    || String(row.nombre ?? row.autor_nombre ?? '').trim()
-    || null;
-  const apodo = String(profile?.apodo ?? row.apodo ?? '').trim() || null;
-  const usernameRaw = profile?.username ?? profile?.alias ?? row.username ?? '';
+  const resolvedProfile = profile ?? extractEmbeddedProfile(row);
+  const nombrePerfil = [resolvedProfile?.nombre, resolvedProfile?.apellido].filter(Boolean).join(' ').trim();
+  const nombreGuardado = String(row.nombre ?? row.autor_nombre ?? '').trim();
+  const nombre = nombrePerfil || nombreGuardado || null;
+  const apodo = String(resolvedProfile?.apodo ?? row.apodo ?? '').trim() || null;
+  const usernameRaw = resolvedProfile?.username ?? resolvedProfile?.alias ?? row.username ?? '';
   const username = String(usernameRaw).trim().replace(/^@+/, '') || null;
-  const avatar_url = profile?.foto_url
-    ?? profile?.avatar_url
+  const avatar_url = resolvedProfile?.foto_url
+    ?? resolvedProfile?.avatar_url
     ?? row.avatar_url
     ?? row.foto_url
     ?? null;
+  const display_name = apodo || nombre || 'Usuario';
 
   return {
     id: row.id,
@@ -261,6 +319,7 @@ function mapResenaRow(row, profile = null) {
     apodo,
     username,
     avatar_url,
+    display_name,
   };
 }
 
@@ -382,6 +441,15 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       }
 
       const resenas = await enrichResenasWithProfiles(supabaseAdmin, rows);
+      console.log(
+        `📋 GET /api/sedes/${sedeId}/resenas enriched=${resenas.length}`,
+        resenas.slice(0, 3).map((r) => ({
+          user_id: r.user_id,
+          display_name: r.display_name,
+          username: r.username,
+          avatar_url: r.avatar_url ? '(set)' : null,
+        })),
+      );
       let userHasReviewed = false;
       try {
         userHasReviewed = await userHasResenaForSede(supabaseAdmin, sedeId, user.id);
@@ -459,27 +527,24 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       }
 
       const profile = await fetchPlayerProfile(supabaseAdmin, user.id);
-      const nombre = profile?.apodo
+      const nombreAutor = profile?.apodo
         ?? profile?.username
         ?? [profile?.nombre, profile?.apellido].filter(Boolean).join(' ').trim()
-        ?? 'Jugador';
+        ?? '';
 
       const inserted = await insertResenaForSede(supabaseAdmin, {
         sede_id: sedeId,
         user_id: user.id,
         estrellas: stars,
         comentario: trimmedComment || null,
+        nombre: nombreAutor,
       });
 
       if (!inserted) {
         return res.status(500).json({ error: 'No se pudo guardar la reseña' });
       }
 
-      const resena = mapResenaRow({
-        ...inserted,
-        nombre,
-        avatar_url: profile?.foto_url ?? profile?.avatar_url ?? null,
-      });
+      const resena = mapResenaRow(inserted, profile);
 
       res.status(201).json({ resena });
     } catch (err) {
