@@ -278,8 +278,45 @@ async function userHasResenaForSede(supabaseAdmin, sedeId, userId) {
   return Boolean(data);
 }
 
-async function fetchResenasForSede(supabaseAdmin, sedeId, limit = 20) {
+function buildStarDistribution(rows) {
+  const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  for (const row of rows ?? []) {
+    const star = Math.round(Number(row.estrellas));
+    if (star >= 1 && star <= 5) {
+      distribution[star] += 1;
+    }
+  }
+  return distribution;
+}
+
+async function fetchResenasStatsForSede(supabaseAdmin, sedeId) {
+  const { data: allStars, error } = await supabaseAdmin
+    .from(RESENAS_TABLE)
+    .select('estrellas')
+    .eq('sede_id', sedeId);
+
+  if (error) throw error;
+
+  const rows = allStars ?? [];
+  const total_count = rows.length;
+  const distribution = buildStarDistribution(rows);
+  const average = total_count > 0
+    ? rows.reduce((sum, row) => sum + (Number(row.estrellas) || 0), 0) / total_count
+    : null;
+
+  return {
+    total_count,
+    distribution,
+    promedio: average != null ? Math.round(average * 10) / 10 : null,
+  };
+}
+
+async function fetchResenasForSede(supabaseAdmin, sedeId, { page = 1, limit = 20 } = {}) {
   const rowLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+  const pageNum = Math.max(1, Number(page) || 1);
+  const offset = (pageNum - 1) * rowLimit;
+  const rangeEnd = offset + rowLimit - 1;
+
   const selectVariants = [
     `*, ${JUGADORES_PERFIL_EMBED}`,
     'id, sede_id, user_id, estrellas, comentario, respuesta_admin, fecha_respuesta, created_at',
@@ -294,12 +331,12 @@ async function fetchResenasForSede(supabaseAdmin, sedeId, limit = 20) {
       .select(selectClause)
       .eq('sede_id', sedeId)
       .order('created_at', { ascending: false })
-      .limit(rowLimit);
+      .range(offset, rangeEnd);
 
     if (!error) {
       const rows = data ?? [];
       console.log(
-        `📋 fetchResenasForSede ${RESENAS_TABLE} select=${selectClause === '*' ? '*' : 'join'} rows=${rows.length} limit=${rowLimit}`,
+        `📋 fetchResenasForSede ${RESENAS_TABLE} page=${pageNum} limit=${rowLimit} rows=${rows.length}`,
         rows[0] ? JSON.stringify(rows[0]) : '(empty)',
       );
       return rows;
@@ -504,12 +541,16 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         return res.status(400).json({ error: 'ID de sede inválido' });
       }
 
+      const pageRaw = parseInt(String(req.query.page ?? '1'), 10);
       const limitRaw = parseInt(String(req.query.limit ?? '20'), 10);
-      const listLimit = Number.isFinite(limitRaw) ? limitRaw : 20;
+      const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+      const listLimit = Number.isFinite(limitRaw)
+        ? Math.min(100, Math.max(1, limitRaw))
+        : 20;
 
       let rows = [];
       try {
-        rows = await fetchResenasForSede(supabaseAdmin, sedeId, listLimit);
+        rows = await fetchResenasForSede(supabaseAdmin, sedeId, { page, limit: listLimit });
       } catch (fetchErr) {
         console.warn('⚠️ fetchResenasForSede:', fetchErr.message);
       }
@@ -531,24 +572,24 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         userHasReviewed = resenas.some((row) => resenaUserMatchesProfile(row.user_id, user.id));
       }
 
-      let total = resenas.length;
-      let average = null;
+      let total_count = resenas.length;
+      let promedio = null;
+      let distribution = buildStarDistribution(resenas);
       try {
-        const { data: allStars, error: starsErr } = await supabaseAdmin
-          .from(RESENAS_TABLE)
-          .select('estrellas')
-          .eq('sede_id', sedeId);
-        if (!starsErr && allStars) {
-          total = allStars.length;
-          if (total > 0) {
-            average = allStars.reduce((sum, row) => sum + (Number(row.estrellas) || 0), 0) / total;
-          }
-        }
+        const stats = await fetchResenasStatsForSede(supabaseAdmin, sedeId);
+        total_count = stats.total_count;
+        promedio = stats.promedio;
+        distribution = stats.distribution;
       } catch {
         if (resenas.length > 0) {
-          average = resenas.reduce((sum, row) => sum + (Number(row.estrellas) || 0), 0) / resenas.length;
+          total_count = resenas.length;
+          promedio = resenas.reduce((sum, row) => sum + (Number(row.estrellas) || 0), 0) / resenas.length;
+          distribution = buildStarDistribution(resenas);
         }
       }
+
+      const offset = (page - 1) * listLimit;
+      const has_more = offset + resenas.length < total_count;
 
       let userIsEligible = false;
       try {
@@ -559,8 +600,13 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
 
       res.json({
         resenas,
-        promedio: average != null ? Math.round(average * 10) / 10 : null,
-        total,
+        promedio,
+        total: total_count,
+        total_count,
+        page,
+        limit: listLimit,
+        has_more,
+        distribution,
         user_has_reviewed: userHasReviewed,
         user_is_eligible: userIsEligible,
       });
@@ -570,6 +616,11 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         resenas: [],
         promedio: null,
         total: 0,
+        total_count: 0,
+        page: 1,
+        limit: 20,
+        has_more: false,
+        distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
         user_has_reviewed: false,
         user_is_eligible: false,
       });
