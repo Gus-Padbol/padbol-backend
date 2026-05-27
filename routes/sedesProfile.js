@@ -278,7 +278,8 @@ async function userHasResenaForSede(supabaseAdmin, sedeId, userId) {
   return Boolean(data);
 }
 
-async function fetchResenasForSede(supabaseAdmin, sedeId) {
+async function fetchResenasForSede(supabaseAdmin, sedeId, limit = 20) {
+  const rowLimit = Math.min(100, Math.max(1, Number(limit) || 20));
   const selectVariants = [
     `*, ${JUGADORES_PERFIL_EMBED}`,
     'id, sede_id, user_id, estrellas, comentario, respuesta_admin, fecha_respuesta, created_at',
@@ -293,12 +294,12 @@ async function fetchResenasForSede(supabaseAdmin, sedeId) {
       .select(selectClause)
       .eq('sede_id', sedeId)
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(rowLimit);
 
     if (!error) {
       const rows = data ?? [];
       console.log(
-        `📋 fetchResenasForSede ${RESENAS_TABLE} select=${selectClause === '*' ? '*' : 'join'} rows=${rows.length}`,
+        `📋 fetchResenasForSede ${RESENAS_TABLE} select=${selectClause === '*' ? '*' : 'join'} rows=${rows.length} limit=${rowLimit}`,
         rows[0] ? JSON.stringify(rows[0]) : '(empty)',
       );
       return rows;
@@ -503,9 +504,12 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         return res.status(400).json({ error: 'ID de sede inválido' });
       }
 
+      const limitRaw = parseInt(String(req.query.limit ?? '20'), 10);
+      const listLimit = Number.isFinite(limitRaw) ? limitRaw : 20;
+
       let rows = [];
       try {
-        rows = await fetchResenasForSede(supabaseAdmin, sedeId);
+        rows = await fetchResenasForSede(supabaseAdmin, sedeId, listLimit);
       } catch (fetchErr) {
         console.warn('⚠️ fetchResenasForSede:', fetchErr.message);
       }
@@ -527,10 +531,24 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         userHasReviewed = resenas.some((row) => resenaUserMatchesProfile(row.user_id, user.id));
       }
 
-      const total = resenas.length;
-      const average = total > 0
-        ? resenas.reduce((sum, row) => sum + (Number(row.estrellas) || 0), 0) / total
-        : null;
+      let total = resenas.length;
+      let average = null;
+      try {
+        const { data: allStars, error: starsErr } = await supabaseAdmin
+          .from(RESENAS_TABLE)
+          .select('estrellas')
+          .eq('sede_id', sedeId);
+        if (!starsErr && allStars) {
+          total = allStars.length;
+          if (total > 0) {
+            average = allStars.reduce((sum, row) => sum + (Number(row.estrellas) || 0), 0) / total;
+          }
+        }
+      } catch {
+        if (resenas.length > 0) {
+          average = resenas.reduce((sum, row) => sum + (Number(row.estrellas) || 0), 0) / resenas.length;
+        }
+      }
 
       let userIsEligible = false;
       try {
