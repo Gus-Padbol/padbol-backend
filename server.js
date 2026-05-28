@@ -37,6 +37,7 @@ import {
   resolveUserIdByEmailPg,
 } from './routes/reputacion.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
+import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
 
 globalThis.WebSocket = ws;
 
@@ -3666,6 +3667,8 @@ jugadorRouter.get('/rankings', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+mountJugadorReputacionRoutes(jugadorRouter, { supabaseAdmin, getAuthenticatedUser });
 
 const usuariosRouter = express.Router();
 
