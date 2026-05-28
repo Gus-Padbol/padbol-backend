@@ -16,7 +16,7 @@
   "author": "Gustavo Miguens",
   "license": "PROPRIETARY",
   "dependencies": {
-    "@supabase/supabase-js": "^2.101.1",
+    "@supabase/supabase-js": "^2.106.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
