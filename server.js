@@ -2508,15 +2508,37 @@ app.get('/api/creditos/:email', async (req, res) => {
   }
 });
 
+function serializeRawErrorForLog(err, seen = new WeakSet(), depth = 0) {
+  if (err == null) return err;
+  if (typeof err !== 'object') return err;
+  if (seen.has(err)) return '[Circular]';
+  if (depth > 5) return '[MaxDepth]';
+  seen.add(err);
+
+  const out = { __type: err.constructor?.name || 'Object' };
+  for (const key of Object.getOwnPropertyNames(err)) {
+    if (typeof err[key] === 'function') continue;
+    const val = err[key];
+    out[key] =
+      val != null && typeof val === 'object' ? serializeRawErrorForLog(val, seen, depth + 1) : val;
+  }
+  return out;
+}
+
 function logCrearPreferenciaError(phase, err, ctx = {}) {
+  const raw = serializeRawErrorForLog(err);
+  console.error('[POST /api/crear-preferencia] raw error (JSON.stringify):', JSON.stringify(raw));
+
   console.error('❌ POST /api/crear-preferencia', {
     phase,
-    message: err?.message || String(err),
-    code: err?.code,
-    status: err?.status,
-    cause: err?.cause,
-    details: err?.details,
-    stack: err?.stack,
+    message: err?.message ?? raw?.message ?? String(err),
+    code: err?.code ?? raw?.code,
+    details: err?.details ?? raw?.details,
+    hint: err?.hint ?? raw?.hint,
+    status: err?.status ?? raw?.status,
+    cause: err?.cause ?? raw?.cause,
+    stack: err?.stack ?? raw?.stack,
+    raw,
     ...ctx,
   });
 }
@@ -2629,7 +2651,11 @@ app.post('/api/crear-preferencia', async (req, res) => {
     res.json({ init_point: response.init_point, preference_id: response.id });
   } catch (err) {
     logCrearPreferenciaError('handler', err, ctx);
-    res.status(500).json({ error: err.message || String(err) });
+    if (!res.headersSent) {
+      res.status(Number.isFinite(Number(err?.status)) ? Number(err.status) : 500).json({
+        error: err?.message ?? serializeRawErrorForLog(err)?.message ?? String(err),
+      });
+    }
   } finally {
     crearPreferenciaSupabaseLogActive = false;
   }
