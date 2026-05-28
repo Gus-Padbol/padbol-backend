@@ -38,6 +38,7 @@ import {
 } from './routes/reputacion.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
+import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 
 globalThis.WebSocket = ws;
 
@@ -759,6 +760,12 @@ mountReputacionRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountNotificacionesRoutes(app, { supabaseAdmin, getAuthenticatedUser });
+mountMercadoPagoWebhookRoutes(app, {
+  pgPool,
+  supabase,
+  sendWhatsAppConfirmation,
+  defaultMpToken: process.env.MP_ACCESS_TOKEN || '',
+});
 mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 
 // GET /api/sedes/:id — datos públicos de la sede (reserva, horarios, precios; sin JWT)
@@ -4151,6 +4158,20 @@ checkinRouter.post('/verificar', async (req, res) => {
 
 app.use('/api/checkin', checkinRouter);
 
+app.use((_req, res) => {
+  res.status(404).json({ ok: false, error: 'Ruta no encontrada' });
+});
+
+app.use((err, _req, res, _next) => {
+  console.error('❌ Error no capturado:', err?.message || err);
+  if (!res.headersSent) {
+    res.status(Number(err?.status) || 500).json({
+      ok: false,
+      error: err?.message || 'Error interno del servidor',
+    });
+  }
+});
+
 (async () => {
   await verifyPgPoolConnection();
   app.listen(PORT, () => {
@@ -4164,5 +4185,7 @@ app.use('/api/checkin', checkinRouter);
     });
     console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
     console.log('Hub endpoint ready: GET /api/hub/imagenes');
+    console.log('✅ Webhook MP: POST/GET /api/webhooks/mercadopago');
+    console.log('✅ Retorno MP JSON: GET/POST /api/pago-exitoso');
   });
 })();
