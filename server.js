@@ -68,6 +68,11 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('⚠️  SUPABASE_SERVICE_ROLE_KEY no está configurado — supabaseAdmin usa SUPABASE_KEY (RLS puede bloquear pagos)');
 }
 
+function supabaseKeyPrefixForLog(key) {
+  const s = String(key ?? '').trim();
+  return s ? s.slice(0, 20) : '(not set)';
+}
+
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // Mercado Pago
@@ -3949,6 +3954,10 @@ app.listen(PORT, () => {
   console.log('✅ Rutas rol: GET /api/auth/mi-rol');
   console.log('✅ Rutas rol: GET /api/usuarios/mi-rol');
   console.log(`📊 Supabase: ${SUPABASE_URL}`);
+  console.log('🔑 Supabase keys (first 20 chars):', {
+    SUPABASE_KEY: supabaseKeyPrefixForLog(SUPABASE_KEY),
+    SUPABASE_SERVICE_ROLE_KEY: supabaseKeyPrefixForLog(SUPABASE_SERVICE_ROLE_KEY),
+  });
   console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
   console.log('Hub endpoint ready: GET /api/hub/imagenes');
 });
