@@ -40,6 +40,7 @@ import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
+import { mountReservaQrRoutes } from './routes/reservaQr.js';
 
 globalThis.WebSocket = ws;
 
@@ -1234,6 +1235,14 @@ app.post('/api/reservas/:id/confirmar', async (req, res) => {
     console.error('❌ Error POST /api/reservas/:id/confirmar:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+mountReservaQrRoutes(app, {
+  pgPool,
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 
 // GET reservas
@@ -4206,5 +4215,6 @@ app.use((err, _req, res, _next) => {
     console.log('Hub endpoint ready: GET /api/hub/imagenes');
     console.log('✅ Webhook MP: POST/GET /api/webhooks/mercadopago');
     console.log('✅ Retorno MP JSON: GET/POST /api/pago-exitoso');
+    console.log('✅ QR reserva: POST /api/reservas/:id/generar-qr');
   });
 })();
