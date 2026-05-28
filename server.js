@@ -54,12 +54,13 @@ app.use(express.json());
 // Supabase (desde .env)
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const SUPABASE_SERVICE_ROLE_KEY = String(
+  process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY ?? '',
+).trim();
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-const SUPABASE_SERVICE_ROLE_KEY =
-  String(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '').trim();
+// Sin validar formato/prefijo: acepta JWT legacy (eyJ…) y claves nuevas (sb_secret_…).
 const supabaseAdmin =
-  SUPABASE_SERVICE_ROLE_KEY && SUPABASE_URL
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : supabase;
 
