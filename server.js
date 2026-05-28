@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
+import ws from 'ws';
 import twilio from 'twilio';
 import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
@@ -57,11 +58,26 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const SUPABASE_SERVICE_ROLE_KEY = String(
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY ?? '',
 ).trim();
+function createSupabaseAdminClient(url, serviceRoleKey) {
+  const client = createClient(url, serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false,
+    },
+    realtime: {
+      transport: ws,
+    },
+  });
+  void client.realtime.disconnect();
+  return client;
+}
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-// Sin validar formato/prefijo: acepta JWT legacy (eyJ…) y claves nuevas (sb_secret_…).
+/** Service role (sb_secret_…): REST/storage; Realtime desactivado (sin suscripciones). */
 const supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    ? createSupabaseAdminClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : supabase;
 
 if (!SUPABASE_SERVICE_ROLE_KEY) {
