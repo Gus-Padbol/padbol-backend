@@ -121,9 +121,10 @@ export async function confirmarReservaPorPagoPg(pgPool, reservaId, payment) {
   const monto = payment?.transaction_amount != null
     ? Number(payment.transaction_amount)
     : null;
+  const mpPaymentId = payment?.id != null ? String(payment.id).trim() : null;
 
   const { rows: existingRows } = await pgPool.query(
-    'SELECT id, estado, pago_estado, sede, fecha, hora, cancha, whatsapp, telefono, precio FROM reservas WHERE id = $1',
+    'SELECT id, estado, pago_estado, sede, fecha, hora, cancha, whatsapp, telefono, precio, mp_payment_id FROM reservas WHERE id = $1',
     [rid],
   );
   const existing = existingRows[0];
@@ -135,18 +136,41 @@ export async function confirmarReservaPorPagoPg(pgPool, reservaId, payment) {
 
   if (String(existing.estado || '').toLowerCase() === 'confirmada'
     && String(existing.pago_estado || '').toLowerCase() === 'pagado') {
+    if (mpPaymentId && !existing.mp_payment_id) {
+      await pgPool.query(
+        'UPDATE reservas SET mp_payment_id = $2 WHERE id = $1',
+        [rid, mpPaymentId],
+      ).catch((err) => {
+        if (!/mp_payment_id|colum|column/i.test(String(err.message || ''))) throw err;
+      });
+    }
     return { reserva: existing, already: true };
   }
 
-  const { rows: updatedRows } = await pgPool.query(
-    `UPDATE reservas
-     SET estado = 'confirmada',
-         pago_estado = 'pagado',
-         monto_pagado = COALESCE($2::numeric, monto_pagado, precio)
-     WHERE id = $1
-     RETURNING id, estado, pago_estado, monto_pagado, sede, fecha, hora, cancha, whatsapp, telefono, precio, user_id`,
-    [rid, Number.isFinite(monto) ? monto : null],
-  );
+  let updatedRows;
+  try {
+    ({ rows: updatedRows } = await pgPool.query(
+      `UPDATE reservas
+       SET estado = 'confirmada',
+           pago_estado = 'pagado',
+           monto_pagado = COALESCE($2::numeric, monto_pagado, precio),
+           mp_payment_id = COALESCE($3, mp_payment_id)
+       WHERE id = $1
+       RETURNING id, estado, pago_estado, monto_pagado, mp_payment_id, sede, fecha, hora, cancha, whatsapp, telefono, precio, user_id`,
+      [rid, Number.isFinite(monto) ? monto : null, mpPaymentId],
+    ));
+  } catch (updateErr) {
+    if (!/mp_payment_id|colum|column/i.test(String(updateErr.message || ''))) throw updateErr;
+    ({ rows: updatedRows } = await pgPool.query(
+      `UPDATE reservas
+       SET estado = 'confirmada',
+           pago_estado = 'pagado',
+           monto_pagado = COALESCE($2::numeric, monto_pagado, precio)
+       WHERE id = $1
+       RETURNING id, estado, pago_estado, monto_pagado, sede, fecha, hora, cancha, whatsapp, telefono, precio, user_id`,
+      [rid, Number.isFinite(monto) ? monto : null],
+    ));
+  }
 
   return { reserva: updatedRows[0] ?? existing, already: false };
 }

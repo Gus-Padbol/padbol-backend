@@ -39,6 +39,7 @@ import {
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
+import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
 
 globalThis.WebSocket = ws;
 
@@ -341,7 +342,9 @@ async function createMercadoPagoPreferenceInternal({
     pricing: paymentPricing,
     extras: paymentExtras,
   });
-  const externalReference = reservaData ? JSON.stringify(reservaData) : '';
+  const externalReference = reservaData?.reserva_id
+    ? String(reservaData.reserva_id)
+    : (reservaData?.id ? String(reservaData.id) : '');
   const preference = new Preference(client);
   const response = await preference.create({
     body: {
@@ -2794,6 +2797,10 @@ app.post('/api/crear-preferencia', async (req, res) => {
       return res.status(400).json({ error: 'Faltan campos requeridos: titulo, precio' });
     }
 
+    if (!pgPool) {
+      return res.status(503).json({ error: 'DATABASE_URL no configurada — no se puede crear reserva pendiente' });
+    }
+
     let client = mpClient;
     if (sedeId) {
       let sedeRow;
@@ -2817,6 +2824,16 @@ app.post('/api/crear-preferencia', async (req, res) => {
 
     console.log('[POST /api/crear-preferencia] tras pg mp_access_token: sin más queries Supabase en este handler');
 
+    let reservaIdParaMp;
+    try {
+      const pending = await ensureReservaPendienteParaMpPg(pgPool, req.body);
+      reservaIdParaMp = pending.reserva_id;
+      console.log(`[POST /api/crear-preferencia] reserva pendiente id=${reservaIdParaMp} (created=${pending.created})`);
+    } catch (pendingErr) {
+      logCrearPreferenciaError('reserva_pendiente', pendingErr, ctx);
+      return res.status(pendingErr.status || 500).json({ error: pendingErr.message || 'No se pudo crear la reserva pendiente' });
+    }
+
     const paymentExtras = extras ?? reservaData?.extras ?? [];
     const paymentPricing = pricing ?? {
       base: reservaData?.precio_base ?? precio,
@@ -2831,9 +2848,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
       extras: paymentExtras,
     });
 
-    const externalReference = reservaData?.reserva_id
-      ? String(reservaData.reserva_id)
-      : (reservaData?.id ? String(reservaData.id) : '');
+    const externalReference = String(reservaIdParaMp);
 
     const preference = new Preference(client);
     const response = await preference.create({
@@ -2851,8 +2866,12 @@ app.post('/api/crear-preferencia', async (req, res) => {
       },
     });
 
-    console.log(`✓ MP preferencia creada: ${response.id} | items: ${items.length} | sede: ${sedeNombre || '—'}`);
-    res.json({ init_point: response.init_point, preference_id: response.id });
+    console.log(`✓ MP preferencia creada: ${response.id} | reserva_id: ${reservaIdParaMp} | items: ${items.length} | sede: ${sedeNombre || '—'}`);
+    res.json({
+      init_point: response.init_point,
+      preference_id: response.id,
+      reserva_id: reservaIdParaMp,
+    });
   } catch (err) {
     logCrearPreferenciaError('handler', err, ctx);
     if (!res.headersSent) {
