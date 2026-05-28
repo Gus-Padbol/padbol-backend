@@ -29,6 +29,7 @@ import {
 import { createClasesRouter } from './routes/clases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
+import { mountResenasRoutes } from './routes/resenas.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 
 globalThis.WebSocket = ws;
@@ -738,6 +739,12 @@ app.get('/api/sedes', async (req, res) => {
 });
 
 mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser });
+mountResenasRoutes(app, {
+  pgPool,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 mountNotificacionesRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 
