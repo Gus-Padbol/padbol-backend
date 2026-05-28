@@ -156,6 +156,10 @@ export async function procesarPagoMercadoPago(pgPool, paymentId, deps = {}) {
   const pid = String(payment?.id ?? paymentId);
   const status = String(payment?.status || '').toLowerCase();
 
+  if (deps.logTag === 'PAGO-EXITOSO') {
+    console.log('[PAGO-EXITOSO] MP status:', payment?.status, 'external_reference:', payment?.external_reference);
+  }
+
   if (!['approved'].includes(status)) {
     return {
       ok: true,
@@ -174,6 +178,10 @@ export async function procesarPagoMercadoPago(pgPool, paymentId, deps = {}) {
   }
 
   const { reserva, already } = await confirmarReservaPorPagoPg(pgPool, reservaId, payment);
+
+  if (deps.logTag === 'PAGO-EXITOSO') {
+    console.log('[PAGO-EXITOSO] reserva actualizada:', reservaId);
+  }
 
   if (!already && deps.sendWhatsAppConfirmation && reserva) {
     const phone = reserva.whatsapp || reserva.telefono;
@@ -213,8 +221,13 @@ export async function procesarPagoMercadoPago(pgPool, paymentId, deps = {}) {
   };
 }
 
-async function handleMercadoPagoReturnOrWebhook(req, res, pgPool, deps) {
+async function handleMercadoPagoReturnOrWebhook(req, res, pgPool, deps, options = {}) {
+  const logTag = options.logTag || null;
   try {
+    if (logTag === 'PAGO-EXITOSO') {
+      console.log('[PAGO-EXITOSO] query params:', JSON.stringify(req.query));
+    }
+
     if (!pgPool) {
       return jsonError(res, 503, 'DATABASE_URL no configurada — pgPool no disponible');
     }
@@ -224,6 +237,10 @@ async function handleMercadoPagoReturnOrWebhook(req, res, pgPool, deps) {
       ?? (req.query?.payment_id ? String(req.query.payment_id).trim() : null)
       ?? (req.query?.collection_id ? String(req.query.collection_id).trim() : null);
 
+    if (logTag === 'PAGO-EXITOSO') {
+      console.log('[PAGO-EXITOSO] payment_id:', pid);
+    }
+
     if (!pid) {
       return res.status(400).json({
         ok: false,
@@ -231,10 +248,14 @@ async function handleMercadoPagoReturnOrWebhook(req, res, pgPool, deps) {
       });
     }
 
-    const result = await procesarPagoMercadoPago(pgPool, pid, deps);
+    const result = await procesarPagoMercadoPago(pgPool, pid, { ...deps, logTag });
     return res.status(200).json(result);
   } catch (err) {
-    console.error('❌ MP pago/retorno:', err.message);
+    if (logTag === 'PAGO-EXITOSO') {
+      console.error('[PAGO-EXITOSO] error:', err?.message);
+    } else {
+      console.error('❌ MP pago/retorno:', err.message);
+    }
     return jsonError(res, err.status || 500, err.message || 'Error al procesar pago');
   }
 }
@@ -258,7 +279,7 @@ export function mountMercadoPagoWebhookRoutes(app, deps) {
    * Query: payment_id, collection_id, external_reference, status, collection_status
    */
   app.get('/api/pago-exitoso', (req, res) => {
-    void handleMercadoPagoReturnOrWebhook(req, res, pgPool, handlerDeps);
+    void handleMercadoPagoReturnOrWebhook(req, res, pgPool, handlerDeps, { logTag: 'PAGO-EXITOSO' });
   });
 
   app.post('/api/pago-exitoso', (req, res) => {
