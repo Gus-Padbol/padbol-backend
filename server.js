@@ -61,30 +61,51 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const SUPABASE_SERVICE_ROLE_KEY = String(
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY ?? '',
 ).trim();
-const SUPABASE_CLIENT_GLOBAL_OPTS = { global: { WebSocket: ws } };
+const SUPABASE_CLIENT_GLOBAL_OPTS = {
+  global: { WebSocket: ws },
+  realtime: { enabled: false },
+};
+const SUPABASE_ADMIN_CLIENT_OPTS = {
+  ...SUPABASE_CLIENT_GLOBAL_OPTS,
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
+};
 
-function createSupabaseAdminClient(url, serviceRoleKey) {
-  const client = createClient(url, serviceRoleKey, {
-    ...SUPABASE_CLIENT_GLOBAL_OPTS,
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-    realtime: {
-      transport: ws,
-    },
-  });
-  void client.realtime.disconnect();
-  return client;
+function createSupabaseClientSafe(url, key, options, label) {
+  if (!url || !key) {
+    console.error(`❌ ${label} createClient skip: SUPABASE_URL o key faltante`);
+    return null;
+  }
+  try {
+    return createClient(url, key, options);
+  } catch (err) {
+    console.error(`❌ ${label} createClient init failed:`, err?.message || err);
+    return null;
+  }
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, SUPABASE_CLIENT_GLOBAL_OPTS);
+let supabase = createSupabaseClientSafe(
+  SUPABASE_URL,
+  SUPABASE_KEY,
+  SUPABASE_CLIENT_GLOBAL_OPTS,
+  'supabase (anon)',
+);
 /** Service role (sb_secret_…): REST/storage; Realtime desactivado (sin suscripciones). */
-const supabaseAdmin =
+let supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createSupabaseAdminClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    ? createSupabaseClientSafe(
+        SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE_KEY,
+        SUPABASE_ADMIN_CLIENT_OPTS,
+        'supabaseAdmin',
+      )
     : supabase;
+if (!supabaseAdmin) {
+  supabaseAdmin = supabase;
+}
 
 if (!SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('⚠️  SUPABASE_SERVICE_ROLE_KEY no está configurado — supabaseAdmin usa SUPABASE_KEY (RLS puede bloquear pagos)');
@@ -2665,6 +2686,12 @@ app.post('/api/crear-preferencia', async (req, res) => {
   const ctx = { sedeId: req.body?.sedeId ?? null, titulo: req.body?.titulo ?? null };
   const db = supabaseAdmin;
   try {
+    if (!db) {
+      logCrearPreferenciaError('config', new Error('Supabase client no inicializado'), ctx);
+      return res.status(503).json({
+        error: 'Configuración del servidor incompleta (Supabase no disponible). Contactá soporte.',
+      });
+    }
     if (!SUPABASE_SERVICE_ROLE_KEY) {
       logCrearPreferenciaError('config', new Error('SUPABASE_SERVICE_ROLE_KEY no configurada'), ctx);
       return res.status(503).json({
