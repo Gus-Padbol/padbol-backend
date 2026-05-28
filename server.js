@@ -103,13 +103,30 @@ const pgPool = DATABASE_URL
     })
   : null;
 
+async function verifyPgPoolConnection() {
+  if (!pgPool) {
+    console.log('🐘 PostgreSQL: DATABASE_URL no configurada — pgPool no disponible');
+    return false;
+  }
+  try {
+    await pgPool.query('SELECT 1 AS ok');
+    console.log('🐘 PostgreSQL: pgPool conectado OK (DATABASE_URL)');
+    return true;
+  } catch (err) {
+    console.error('🐘 PostgreSQL: pgPool falló al conectar:', err?.message || err);
+    if (err?.code) console.error('🐘 PostgreSQL: código:', err.code);
+    return false;
+  }
+}
+
 /** Lee credenciales MP de sedes vía Postgres (evita PolicyAgent/RLS de Supabase REST). */
 async function fetchSedeMpCredentialsPg(sedeId) {
   const sid = parseInt(String(sedeId), 10);
   if (!Number.isFinite(sid) || sid <= 0) return null;
   if (!pgPool) {
-    const err = new Error('DATABASE_URL no configurada');
+    const err = new Error('DATABASE_URL no configurada — pgPool no disponible para leer mp_access_token');
     err.status = 503;
+    console.error('[POST /api/crear-preferencia] pg query abortado:', err.message);
     throw err;
   }
   console.log('[POST /api/crear-preferencia] pg query', {
@@ -119,11 +136,21 @@ async function fetchSedeMpCredentialsPg(sedeId) {
     sql: 'SELECT mp_access_token, mp_public_key FROM sedes WHERE id = $1',
     params: { id: sid },
   });
-  const { rows } = await pgPool.query(
-    'SELECT mp_access_token, mp_public_key FROM sedes WHERE id = $1',
-    [sid],
-  );
-  return rows[0] ?? null;
+  try {
+    const { rows } = await pgPool.query(
+      'SELECT mp_access_token, mp_public_key FROM sedes WHERE id = $1',
+      [sid],
+    );
+    return rows[0] ?? null;
+  } catch (err) {
+    console.error('[POST /api/crear-preferencia] pg query error:', {
+      message: err?.message,
+      code: err?.code,
+      detail: err?.detail,
+      sedeId: sid,
+    });
+    throw err;
+  }
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -3996,16 +4023,18 @@ checkinRouter.post('/verificar', async (req, res) => {
 
 app.use('/api/checkin', checkinRouter);
 
-app.listen(PORT, () => {
-  console.log(`🚀 Padbol Match API running on port ${PORT}`);
-  console.log('✅ Rutas rol: GET /api/auth/mi-rol');
-  console.log('✅ Rutas rol: GET /api/usuarios/mi-rol');
-  console.log(`📊 Supabase: ${SUPABASE_URL}`);
-  console.log('🔑 Supabase keys (first 20 chars):', {
-    SUPABASE_KEY: supabaseKeyPrefixForLog(SUPABASE_KEY),
-    SUPABASE_SERVICE_ROLE_KEY: supabaseKeyPrefixForLog(SUPABASE_SERVICE_ROLE_KEY),
+(async () => {
+  await verifyPgPoolConnection();
+  app.listen(PORT, () => {
+    console.log(`🚀 Padbol Match API running on port ${PORT}`);
+    console.log('✅ Rutas rol: GET /api/auth/mi-rol');
+    console.log('✅ Rutas rol: GET /api/usuarios/mi-rol');
+    console.log(`📊 Supabase: ${SUPABASE_URL}`);
+    console.log('🔑 Supabase keys (first 20 chars):', {
+      SUPABASE_KEY: supabaseKeyPrefixForLog(SUPABASE_KEY),
+      SUPABASE_SERVICE_ROLE_KEY: supabaseKeyPrefixForLog(SUPABASE_SERVICE_ROLE_KEY),
+    });
+    console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
+    console.log('Hub endpoint ready: GET /api/hub/imagenes');
   });
-  console.log(`🐘 PostgreSQL: ${pgPool ? 'pgPool listo (DATABASE_URL)' : 'DATABASE_URL no configurada'}`);
-  console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
-  console.log('Hub endpoint ready: GET /api/hub/imagenes');
-});
+})();
