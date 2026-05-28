@@ -13,7 +13,7 @@ export function parseReservaRouteId(raw) {
 
 async function fetchReservaForQrPg(pgPool, parsedId) {
   const { rows } = await pgPool.query(
-    `SELECT id, user_id, email, sede, qr_token
+    `SELECT id, user_id, email, sede, estado, qr_token
      FROM reservas
      WHERE id::text = $1
      LIMIT 1`,
@@ -38,7 +38,7 @@ function applySupabaseReservaIdFilter(query, parsedId) {
 async function fetchReservaForQrSupabase(supabaseAdmin, parsedId) {
   let query = supabaseAdmin
     .from('reservas')
-    .select('id, user_id, email, sede, qr_token');
+    .select('id, user_id, email, sede, estado, qr_token');
 
   query = applySupabaseReservaIdFilter(query, parsedId);
 
@@ -52,18 +52,44 @@ async function updateReservaQrTokenPg(pgPool, reservaIdText, qrToken) {
     `UPDATE reservas
      SET qr_token = $2
      WHERE id::text = $1
+       AND (qr_token IS NULL OR qr_token = '')
      RETURNING qr_token`,
     [reservaIdText, qrToken],
   );
-  return rows[0]?.qr_token ?? qrToken;
+  if (rows[0]?.qr_token) return rows[0].qr_token;
+
+  const { rows: existing } = await pgPool.query(
+    'SELECT qr_token FROM reservas WHERE id::text = $1 LIMIT 1',
+    [reservaIdText],
+  );
+  return existing[0]?.qr_token ?? qrToken;
 }
 
 async function updateReservaQrTokenSupabase(supabaseAdmin, parsedId, qrToken) {
-  let query = supabaseAdmin.from('reservas').update({ qr_token: qrToken });
+  let query = supabaseAdmin
+    .from('reservas')
+    .update({ qr_token: qrToken })
+    .is('qr_token', null);
   query = applySupabaseReservaIdFilter(query, parsedId);
   const { data, error } = await query.select('qr_token').maybeSingle();
   if (error) throw error;
-  return data?.qr_token ?? qrToken;
+  if (data?.qr_token) return data.qr_token;
+
+  return fetchReservaForQrSupabase(supabaseAdmin, parsedId).then((row) => row?.qr_token ?? qrToken);
+}
+
+function assertReservaEstadoPermiteQr(reserva) {
+  const estado = String(reserva?.estado ?? '').toLowerCase();
+  if (['cancelada', 'cancelled', 'canceled'].includes(estado)) {
+    const err = new Error('La reserva está cancelada');
+    err.status = 400;
+    throw err;
+  }
+  if (!['confirmada', 'confirmed', 'prereserva'].includes(estado)) {
+    const err = new Error('La reserva debe estar confirmada para generar el QR');
+    err.status = 400;
+    throw err;
+  }
 }
 
 async function assertPuedeGenerarQrReserva({
@@ -150,8 +176,17 @@ export function mountReservaQrRoutes(app, deps) {
         supabaseAdmin,
       });
 
+      assertReservaEstadoPermiteQr(reserva);
+
+      if (reserva.qr_token) {
+        return res.json({
+          qr_token: reserva.qr_token,
+          reserva_id: reserva.id,
+        });
+      }
+
       const idForToken = String(reserva.id);
-      const qr_token = `QR-${idForToken}-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
+      const qr_token = crypto.randomBytes(24).toString('hex');
 
       let savedToken = qr_token;
       if (pgPool) {
@@ -167,7 +202,7 @@ export function mountReservaQrRoutes(app, deps) {
       }
 
       console.log(`✓ POST /api/reservas/${idForToken}/generar-qr — token generado`);
-      return res.json({ qr_token: savedToken });
+      return res.json({ qr_token: savedToken, reserva_id: reserva.id });
     } catch (err) {
       const st = err.status || 500;
       if (st >= 400 && st < 500) {

@@ -647,6 +647,7 @@ function mapMisReservaRow(row) {
     monto_pagado: row.monto_pagado ?? null,
     moneda: row.moneda ?? 'ARS',
     checkin_realizado: row.checkin_realizado ?? false,
+    qr_token: row.qr_token ?? null,
     created_at: row.created_at ?? null,
   };
 }
