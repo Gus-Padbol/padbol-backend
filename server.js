@@ -28,6 +28,7 @@ import {
 } from './routes/partidos.js';
 import { createClasesRouter } from './routes/clases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
+import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 
 globalThis.WebSocket = ws;
@@ -738,6 +739,7 @@ app.get('/api/sedes', async (req, res) => {
 
 mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser });
 mountNotificacionesRoutes(app, { supabaseAdmin, getAuthenticatedUser });
+mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 
 // GET /api/sedes/:id — datos públicos de la sede (reserva, horarios, precios; sin JWT)
 app.get('/api/sedes/:id', async (req, res) => {
