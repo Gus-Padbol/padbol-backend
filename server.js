@@ -2784,6 +2784,14 @@ app.post('/api/crear-preferencia', async (req, res) => {
   } catch (err) {
     logCrearPreferenciaError('handler', err, ctx);
     if (!res.headersSent) {
+      console.error('[MP ERROR DETALLADO]', JSON.stringify({
+        message: err?.message,
+        cause: err?.cause,
+        status: err?.status,
+        error: err?.error,
+        errorsList: err?.cause?.errorsList ?? err?.errorsList,
+        raw: JSON.stringify(err),
+      }, null, 2));
       res.status(Number.isFinite(Number(err?.status)) ? Number(err.status) : 500).json({
         error: err?.message ?? serializeRawErrorForLog(err)?.message ?? String(err),
       });
