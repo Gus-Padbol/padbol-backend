@@ -38,6 +38,7 @@ import {
 } from './routes/reputacion.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
+import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
@@ -1433,6 +1434,8 @@ function generarGruposKnockout(equipos, torneoId, sedeId) {
 }
 
 // ===== TORNEOS =====
+mountTorneosFinalizadosRoutes(app, { pgPool });
+
 app.post('/api/torneos', async (req, res) => {
   try {
     const { nombre, sede_id, nivel_torneo, tipo_torneo, fecha_inicio, fecha_fin, cantidad_equipos, es_multisede, created_by } = req.body;
@@ -4122,5 +4125,6 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Retorno MP JSON: GET/POST /api/pago-exitoso');
     console.log('✅ QR reserva: POST /api/reservas/:id/generar-qr');
     console.log('✅ Perfil público: GET /api/jugador/perfil-publico/:userId');
+    console.log('✅ Torneos: GET /api/torneos/finalizados');
   });
 })();
