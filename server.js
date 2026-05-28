@@ -38,6 +38,7 @@ import {
 } from './routes/reputacion.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
+import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
@@ -2060,8 +2061,8 @@ async function handlePublicPerfilRequest(req, res) {
   }
 }
 
-// GET /api/jugadores/perfil-publico/:user_id — Public profile (JWT required)
-app.get('/api/jugadores/perfil-publico/:user_id', handlePublicPerfilRequest);
+
+// GET perfil público: /api/jugador/perfil-publico/:userId y /api/jugadores/perfil-publico/:user_id (sin JWT)
 
 app.get('/api/jugadores/:id', async (req, res) => {
   try {
@@ -4080,8 +4081,9 @@ usuariosRouter.post('/foto-perfil', async (req, res) => {
   }
 });
 
-// GET /api/usuarios/perfil-publico/:identifier — Public player profile (JWT required)
-usuariosRouter.get('/perfil-publico/:identifier', handlePublicPerfilRequest);
+// GET /api/usuarios/perfil-publico/:identifier — alias público (ver mountJugadorPerfilPublicoRoutes)
+
+mountJugadorPerfilPublicoRoutes(app, { pgPool, jugadorRouter, usuariosRouter });
 
 app.use('/api/usuarios', usuariosRouter);
 app.use('/api/jugador', jugadorRouter);
@@ -4217,5 +4219,6 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Webhook MP: POST/GET /api/webhooks/mercadopago');
     console.log('✅ Retorno MP JSON: GET/POST /api/pago-exitoso');
     console.log('✅ QR reserva: POST /api/reservas/:id/generar-qr');
+    console.log('✅ Perfil público: GET /api/jugador/perfil-publico/:userId');
   });
 })();
