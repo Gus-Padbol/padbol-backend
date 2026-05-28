@@ -1,14 +1,25 @@
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_COMPACT_REGEX = /^[0-9a-f]{32}$/i;
 
 function pgUnavailable(res) {
   return res.status(503).json({ error: 'DATABASE_URL no configurada — perfil público no disponible' });
+}
+
+function normalizeUuid(raw) {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (UUID_REGEX.test(s)) return s;
+  if (UUID_COMPACT_REGEX.test(s)) {
+    return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
+  }
+  return null;
 }
 
 export function parsePerfilPublicoIdentifier(raw) {
   const s = decodeURIComponent(String(raw ?? '')).trim();
   if (!s) return null;
   if (s.includes('@')) return { kind: 'email', value: s.toLowerCase() };
-  if (UUID_REGEX.test(s)) return { kind: 'user_id', value: s };
+  const uuid = normalizeUuid(s);
+  if (uuid) return { kind: 'user_id', value: uuid };
   if (/^\d+$/.test(s)) return { kind: 'profile_id', value: s };
   return { kind: 'username', value: s };
 }
@@ -90,10 +101,11 @@ async function fetchPerfilPg(pgPool, identifier) {
     const { rows } = await pgPool.query(
       `SELECT id, user_id, nombre, apellido, apodo, username, alias, foto_url, nivel, lateralidad, pais, email, deportes
        FROM jugadores_perfil
-       WHERE user_id::text = $1
+       WHERE user_id = $1::uuid
        LIMIT 1`,
       [parsed.value],
     );
+    console.log('[PERFIL-PUBLICO] query result rows:', rows?.length);
     return rows[0] ?? null;
   }
 
@@ -289,10 +301,15 @@ function createPublicPerfilHandler(pgPool) {
     try {
       if (!pgPool) return pgUnavailable(res);
 
+      console.log('[PERFIL-PUBLICO] userId recibido:', req.params.userId);
+
       const identifier = req.params.userId ?? req.params.user_id ?? req.params.identifier ?? '';
       if (!String(identifier).trim()) {
         return res.status(400).json({ error: 'Identificador de jugador requerido' });
       }
+
+      const parsed = parsePerfilPublicoIdentifier(identifier);
+      console.log('[PERFIL-PUBLICO] identifier parsed:', parsed?.kind, parsed?.value);
 
       const payload = await buildPublicPerfilPayloadPg(pgPool, identifier);
       if (!payload) {
