@@ -2520,8 +2520,28 @@ function logCrearPreferenciaError(phase, err, ctx = {}) {
   });
 }
 
+/** Activo solo durante POST /api/crear-preferencia — traza queries Supabase (PA_UNAUTHORIZED). */
+let crearPreferenciaSupabaseLogActive = false;
+
+function supabaseClientLabelForLog(client) {
+  if (client === supabaseAdmin) return 'supabaseAdmin';
+  if (client === supabase) return 'supabase (anon)';
+  return 'unknown';
+}
+
+function logCrearPreferenciaSupabaseQuery(client, table, operation, params = {}) {
+  if (!crearPreferenciaSupabaseLogActive) return;
+  console.log('[POST /api/crear-preferencia] Supabase query', {
+    table,
+    operation,
+    client: supabaseClientLabelForLog(client),
+    ...(Object.keys(params).length ? { params } : {}),
+  });
+}
+
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', async (req, res) => {
+  crearPreferenciaSupabaseLogActive = true;
   const ctx = { sedeId: req.body?.sedeId ?? null, titulo: req.body?.titulo ?? null };
   const db = supabaseAdmin;
   try {
@@ -2548,6 +2568,10 @@ app.post('/api/crear-preferencia', async (req, res) => {
 
     let client = mpClient;
     if (sedeId) {
+      logCrearPreferenciaSupabaseQuery(db, 'sedes', 'select.maybeSingle', {
+        columns: 'mp_access_token',
+        eq: { id: sedeId },
+      });
       const { data: sedeRow, error: sedeTokErr } = await db
         .from('sedes')
         .select('mp_access_token')
@@ -2605,6 +2629,8 @@ app.post('/api/crear-preferencia', async (req, res) => {
   } catch (err) {
     logCrearPreferenciaError('handler', err, ctx);
     res.status(500).json({ error: err.message || String(err) });
+  } finally {
+    crearPreferenciaSupabaseLogActive = false;
   }
 });
 
