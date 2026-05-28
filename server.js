@@ -38,10 +38,10 @@ import {
 } from './routes/reputacion.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
-import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
+import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 
 globalThis.WebSocket = ws;
 
@@ -1964,105 +1964,7 @@ app.get('/api/jugadores', async (req, res) => {
   }
 });
 
-async function buildPublicPerfilResponse(perfil) {
-  const userId = perfil.user_id ?? null;
-  const deportes = await resolvePerfilDeportes(perfil, userId);
-  const createdAt = await resolvePerfilCreatedAt(perfil);
-  const rankingStats = await getRankingEntryForEmail(perfil.email);
-  const torneosJugados = rankingStats?.torneos ?? 0;
-  const victorias = await countVictoriasForUser({
-    email: perfil.email,
-    supabaseUserId: userId,
-  });
-
-  const [
-    companeroHabitual,
-    rankings,
-    sedesHabituales,
-  ] = await Promise.all([
-    fetchCompaneroHabitualById(perfil.companero_habitual_id ?? null),
-    fetchJugadorRankingsForUserId(userId),
-    getSedesHabituales({
-      email: perfil.email,
-      supabaseUserId: userId,
-      primarySedeId: perfil.sede_id,
-    }),
-  ]);
-
-  const clubHabitual = sedesHabituales[0]?.nombre ?? null;
-  const categoriaRanking = rankingStats?.categoria_ranking ?? perfil.nivel ?? null;
-
-  return {
-    user_id: userId,
-    nombre: perfil.nombre ?? 'Jugador',
-    apellido: perfil.apellido ?? '',
-    apodo: perfil.apodo ?? null,
-    username: perfil.username ?? perfil.apodo ?? null,
-    foto_url: perfil.foto_url ?? null,
-    nivel: perfil.nivel ?? 'Intermedio',
-    lateralidad: perfil.lateralidad ?? null,
-    pais: perfil.pais ?? null,
-    created_at: createdAt,
-    deportes,
-    deporte_principal: deportes[0] ?? null,
-    categoria_ranking: categoriaRanking,
-    club_habitual: clubHabitual,
-    companero_habitual: companeroHabitual,
-    rankings,
-    stats: {
-      torneos: torneosJugados,
-      victorias,
-    },
-  };
-}
-
-async function handlePublicPerfilRequest(req, res) {
-  try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status).json({ error: authError });
-    }
-
-    const identifier = decodeURIComponent(
-      req.params.user_id ?? req.params.identifier ?? '',
-    ).trim();
-    if (!identifier) {
-      return res.status(400).json({ error: 'Identificador de jugador requerido' });
-    }
-
-    let perfilQuery = supabaseAdmin
-      .from('jugadores_perfil')
-      .select(
-        'id, user_id, nombre, apellido, apodo, username, pais, nivel, lateralidad, sede_id, foto_url, companero_habitual_id, email',
-      );
-
-    if (identifier.includes('@')) {
-      perfilQuery = perfilQuery.eq('email', identifier);
-    } else if (UUID_REGEX.test(identifier)) {
-      perfilQuery = perfilQuery.eq('user_id', identifier);
-    } else {
-      const numericId = parseInt(identifier, 10);
-      if (Number.isNaN(numericId)) {
-        return res.status(400).json({ error: 'Identificador de jugador inválido' });
-      }
-      perfilQuery = perfilQuery.eq('id', numericId);
-    }
-
-    const { data: perfil, error: perfilErr } = await perfilQuery.maybeSingle();
-    if (perfilErr) throw perfilErr;
-    if (!perfil) {
-      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
-    }
-
-    res.json(await buildPublicPerfilResponse(perfil));
-  } catch (err) {
-    console.error('❌ Error GET perfil público:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-}
-
-
-// GET perfil público: /api/jugador/perfil-publico/:userId y /api/jugadores/perfil-publico/:user_id (sin JWT)
+// GET perfil público: /api/jugador/perfil-publico/:userId (ver mountJugadorPerfilPublicoRoutes al final)
 
 app.get('/api/jugadores/:id', async (req, res) => {
   try {

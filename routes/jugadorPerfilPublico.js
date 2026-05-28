@@ -229,11 +229,14 @@ async function fetchTorneosStatsPg(pgPool, equipoIds) {
     torneo_id: t.torneo_id,
     nombre: t.nombre ?? null,
     sede: t.sede ?? null,
+    sede_nombre: t.sede ?? null,
     deporte: t.deporte ?? null,
     fecha: t.fecha ?? null,
     posicion_final: posicionFinalLabel(t.posicion),
     posicion: t.posicion != null ? Number(t.posicion) : null,
   }));
+
+  const torneos_recientes = historial_torneos.slice(0, 5);
 
   return {
     torneos_jugados,
@@ -241,6 +244,7 @@ async function fetchTorneosStatsPg(pgPool, equipoIds) {
     partidos_jugados,
     partidos_ganados,
     historial_torneos,
+    torneos_recientes: historial_torneos.slice(0, 5),
   };
 }
 
@@ -270,6 +274,7 @@ export async function buildPublicPerfilPayloadPg(pgPool, identifier) {
       partidos_ganados: stats.partidos_ganados,
     },
     historial_torneos: stats.historial_torneos,
+    torneos_recientes: stats.torneos_recientes ?? stats.historial_torneos?.slice(0, 5) ?? [],
     stats: {
       torneos: stats.torneos_jugados,
       torneos_ganados: stats.torneos_ganados,
