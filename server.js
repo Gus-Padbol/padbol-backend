@@ -141,7 +141,15 @@ async function fetchSedeMpCredentialsPg(sedeId) {
       'SELECT mp_access_token, mp_public_key FROM sedes WHERE id = $1',
       [sid],
     );
-    return rows[0] ?? null;
+    const row = rows[0] ?? null;
+    if (crearPreferenciaSupabaseLogActive) {
+      console.log('[POST /api/crear-preferencia] pg query OK', {
+        sedeId: sid,
+        hasRow: Boolean(row),
+        hasMpToken: Boolean(String(row?.mp_access_token || '').trim()),
+      });
+    }
+    return row;
   } catch (err) {
     console.error('[POST /api/crear-preferencia] pg query error:', {
       message: err?.message,
@@ -2630,6 +2638,7 @@ function logCrearPreferenciaError(phase, err, ctx = {}) {
 
 /** Activo solo durante POST /api/crear-preferencia — traza queries Supabase (PA_UNAUTHORIZED). */
 let crearPreferenciaSupabaseLogActive = false;
+let crearPreferenciaSupabaseLogSeq = 0;
 
 function supabaseClientLabelForLog(client) {
   if (client === supabaseAdmin) return 'supabaseAdmin';
@@ -2639,7 +2648,9 @@ function supabaseClientLabelForLog(client) {
 
 function logCrearPreferenciaSupabaseQuery(client, table, operation, params = {}) {
   if (!crearPreferenciaSupabaseLogActive) return;
+  crearPreferenciaSupabaseLogSeq += 1;
   console.log('[POST /api/crear-preferencia] Supabase query', {
+    seq: crearPreferenciaSupabaseLogSeq,
     table,
     operation,
     client: supabaseClientLabelForLog(client),
@@ -2650,6 +2661,7 @@ function logCrearPreferenciaSupabaseQuery(client, table, operation, params = {})
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', async (req, res) => {
   crearPreferenciaSupabaseLogActive = true;
+  crearPreferenciaSupabaseLogSeq = 0;
   const ctx = { sedeId: req.body?.sedeId ?? null, titulo: req.body?.titulo ?? null };
   const db = supabaseAdmin;
   try {
@@ -2694,6 +2706,8 @@ app.post('/api/crear-preferencia', async (req, res) => {
     } else if (!process.env.MP_ACCESS_TOKEN) {
       return res.status(503).json({ error: 'Mercado Pago no configurado en el servidor (MP_ACCESS_TOKEN)' });
     }
+
+    console.log('[POST /api/crear-preferencia] tras pg mp_access_token: sin más queries Supabase en este handler');
 
     const paymentExtras = extras ?? reservaData?.extras ?? [];
     const paymentPricing = pricing ?? {
