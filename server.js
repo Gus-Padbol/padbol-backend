@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
 import ws from 'ws';
+import pg from 'pg';
 import twilio from 'twilio';
 import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
@@ -87,6 +88,37 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
 function supabaseKeyPrefixForLog(key) {
   const s = String(key ?? '').trim();
   return s ? s.slice(0, 20) : '(not set)';
+}
+
+const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
+const pgPool = DATABASE_URL
+  ? new pg.Pool({
+      connectionString: DATABASE_URL,
+      ssl: DATABASE_URL.includes('sslmode=disable') ? false : { rejectUnauthorized: false },
+    })
+  : null;
+
+/** Lee credenciales MP de sedes vía Postgres (evita PolicyAgent/RLS de Supabase REST). */
+async function fetchSedeMpCredentialsPg(sedeId) {
+  const sid = parseInt(String(sedeId), 10);
+  if (!Number.isFinite(sid) || sid <= 0) return null;
+  if (!pgPool) {
+    const err = new Error('DATABASE_URL no configurada');
+    err.status = 503;
+    throw err;
+  }
+  console.log('[POST /api/crear-preferencia] pg query', {
+    table: 'sedes',
+    operation: 'select',
+    client: 'pgPool',
+    sql: 'SELECT mp_access_token, mp_public_key FROM sedes WHERE id = $1',
+    params: { id: sid },
+  });
+  const { rows } = await pgPool.query(
+    'SELECT mp_access_token, mp_public_key FROM sedes WHERE id = $1',
+    [sid],
+  );
+  return rows[0] ?? null;
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -2612,16 +2644,10 @@ app.post('/api/crear-preferencia', async (req, res) => {
 
     let client = mpClient;
     if (sedeId) {
-      logCrearPreferenciaSupabaseQuery(db, 'sedes', 'select.maybeSingle', {
-        columns: 'mp_access_token',
-        eq: { id: sedeId },
-      });
-      const { data: sedeRow, error: sedeTokErr } = await db
-        .from('sedes')
-        .select('mp_access_token')
-        .eq('id', sedeId)
-        .maybeSingle();
-      if (sedeTokErr) {
+      let sedeRow;
+      try {
+        sedeRow = await fetchSedeMpCredentialsPg(sedeId);
+      } catch (sedeTokErr) {
         logCrearPreferenciaError('sede_mp_token', sedeTokErr, ctx);
         throw sedeTokErr;
       }
@@ -3974,6 +4000,7 @@ app.listen(PORT, () => {
     SUPABASE_KEY: supabaseKeyPrefixForLog(SUPABASE_KEY),
     SUPABASE_SERVICE_ROLE_KEY: supabaseKeyPrefixForLog(SUPABASE_SERVICE_ROLE_KEY),
   });
+  console.log(`🐘 PostgreSQL: ${pgPool ? 'pgPool listo (DATABASE_URL)' : 'DATABASE_URL no configurada'}`);
   console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
   console.log('Hub endpoint ready: GET /api/hub/imagenes');
 });
