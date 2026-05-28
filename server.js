@@ -30,6 +30,12 @@ import { createClasesRouter } from './routes/clases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
 import { mountResenasRoutes } from './routes/resenas.js';
+import {
+  mountReputacionRoutes,
+  procesarReputacionTrasCancelacion,
+  assertJugadorNoSuspendidoPg,
+  resolveUserIdByEmailPg,
+} from './routes/reputacion.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 
 globalThis.WebSocket = ws;
@@ -745,6 +751,12 @@ mountResenasRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
+mountReputacionRoutes(app, {
+  pgPool,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 mountNotificacionesRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 
@@ -976,6 +988,27 @@ app.post('/api/reservas', async (req, res) => {
 
     if (!sedeNombre) {
       return res.status(400).json({ error: 'Sede no encontrada' });
+    }
+
+    const bookingUserId = authUser?.id ?? userIdBody ?? null;
+    if (bookingUserId && pgPool) {
+      try {
+        const susp = await assertJugadorNoSuspendidoPg(pgPool, bookingUserId);
+        if (susp.suspendido) {
+          const hasta = susp.suspendido_hasta
+            ? new Date(susp.suspendido_hasta).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })
+            : null;
+          return res.status(403).json({
+            error: hasta
+              ? `Tenés una suspensión activa por cancelaciones tardías. Podrás reservar nuevamente después del ${hasta}.`
+              : 'Tenés una suspensión activa por cancelaciones tardías y no podés crear reservas en este momento.',
+            suspendido: true,
+            suspendido_hasta: susp.suspendido_hasta ?? null,
+          });
+        }
+      } catch (suspErr) {
+        console.warn('⚠️ verificación suspensión reserva:', suspErr.message);
+      }
     }
 
     const canchaStorage = resolveReservaCanchaStorageText(req.body);
@@ -2545,6 +2578,32 @@ app.post('/api/cancelar-reserva', async (req, res) => {
       .eq('id', reservaId);
     if (updateErr) throw updateErr;
 
+    let reputacionCancel = null;
+    if (pgPool) {
+      try {
+        let userIdReputacion = reserva.user_id ? String(reserva.user_id) : null;
+        if (!userIdReputacion) {
+          userIdReputacion = await resolveUserIdByEmailPg(pgPool, email);
+        }
+        if (userIdReputacion) {
+          reputacionCancel = await procesarReputacionTrasCancelacion(pgPool, {
+            userId: userIdReputacion,
+            reservaId,
+            fecha: reserva.fecha,
+            hora: reserva.hora,
+            horasAnticipacion: horasHasta,
+          });
+          if (reputacionCancel?.suspension_creada) {
+            console.log(`⚠️ Suspensión 7d creada para user ${userIdReputacion} (${reputacionCancel.cancelacion?.id})`);
+          }
+        } else {
+          console.warn(`⚠️ cancelar-reserva ${reservaId}: sin user_id para reputación`);
+        }
+      } catch (repErr) {
+        console.error('❌ reputación tras cancelación:', repErr.message);
+      }
+    }
+
     // Credit if eligible
     let credito = null;
     if (eligibleForCredit && reserva.precio > 0) {
@@ -2598,7 +2657,12 @@ Si necesitás ayuda, escribinos por WhatsApp.
     }
 
     console.log(`✓ Reserva ${reservaId} cancelada — crédito: ${credito ? credito.id : 'no'}`);;
-    res.json({ success: true, eligibleForCredit: credito !== null, credito });
+    res.json({
+      success: true,
+      eligibleForCredit: credito !== null,
+      credito,
+      reputacion: reputacionCancel,
+    });
   } catch (err) {
     console.error('❌ Error POST /api/cancelar-reserva:', err.message);
     res.status(500).json({ error: err.message });
