@@ -2759,7 +2759,9 @@ app.post('/api/crear-preferencia', async (req, res) => {
       extras: paymentExtras,
     });
 
-    const externalReference = reservaData ? JSON.stringify(reservaData) : '';
+    const externalReference = reservaData?.reserva_id
+      ? String(reservaData.reserva_id)
+      : (reservaData?.id ? String(reservaData.id) : '');
 
     const preference = new Preference(client);
     const response = await preference.create({
@@ -2773,6 +2775,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
         auto_return: 'approved',
         external_reference: externalReference,
         statement_descriptor: sedeNombre || 'Padbol Match',
+        notification_url: `${process.env.BACKEND_URL || 'https://padbol-backend.onrender.com'}/api/webhooks/mercadopago`,
       },
     });
 
