@@ -1,6 +1,8 @@
 import {
   parsePositiveInt,
   resolveReservaCanchaStorageText,
+  normalizeHoraInicioReserva,
+  computeHoraFinDesdeDuracion,
 } from './partidos.js';
 
 const BLOCKING_ESTADOS = ['confirmada', 'prereserva', 'pendiente'];
@@ -159,31 +161,41 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
     cancha: input.cancha,
     cancha_id: input.cancha_id,
   });
-  const duracionMinutos = computeDuracionMinutos(input.hora, input.hora_fin, input.duracion_minutos);
+  const horaInicio = normalizeHoraInicioReserva(input.hora);
+  const duracionMinutos = computeDuracionMinutos(horaInicio, input.hora_fin, input.duracion_minutos);
+  const horaFin = input.hora_fin
+    ? String(input.hora_fin).trim().slice(0, 5)
+    : computeHoraFinDesdeDuracion(horaInicio, duracionMinutos);
   const precio = parsePositiveInt(input.precio) ?? 0;
   const contacto = String(input.whatsapp || input.telefono || '').trim();
 
   await assertSlotDisponiblePg(pgPool, {
     sedeNombre,
     fecha: input.fecha,
-    hora: input.hora,
+    hora: horaInicio,
     canchaText,
   });
 
   const { rows } = await pgPool.query(
     `INSERT INTO reservas (
-       sede, fecha, hora, cancha, nombre, email, telefono, whatsapp,
+       sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
+       nombre, email, telefono, whatsapp,
        nivel, precio, estado, pago_estado, duracion_minutos, user_id
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8,
-       $9, $10, 'pendiente', 'pendiente', $11, $12
+       $9, $10, $11, $12,
+       $13, $14, 'pendiente', 'pendiente', $15, $16
      )
      RETURNING id`,
     [
       sedeNombre,
+      input.sede_id ?? null,
       input.fecha,
-      input.hora,
+      horaInicio,
+      horaInicio,
+      horaFin,
       canchaText,
+      input.cancha_id ?? null,
       input.nombre || input.email,
       input.email,
       contacto,

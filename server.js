@@ -1042,7 +1042,7 @@ app.post('/api/reservas', async (req, res) => {
 
     const canchaStorage = resolveReservaCanchaStorageText(req.body);
     const partidoCanchaNombre = resolvePartidoCanchaNombre(req.body);
-    const durationMinutes = parsePositiveInt(duracion_minutos);
+    const durationMinutes = parsePositiveInt(duracion_minutos) ?? 90;
 
     if (!modoPartido && !userIdBody && !contactWhatsapp) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -1062,9 +1062,13 @@ app.post('/api/reservas', async (req, res) => {
 
     const insertRow = buildReservaInsertRow({
       sedeNombre,
+      sedeId,
       fecha,
       hora,
+      hora_inicio: req.body.hora_inicio,
+      hora_fin: req.body.hora_fin,
       canchaText: canchaStorage,
+      cancha_id: cancha_id ?? req.body.cancha_id,
       nombre: contactNombre,
       email: contactEmail,
       telefono: contactWhatsapp,

@@ -181,6 +181,48 @@ export function parsePositiveInt(value) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+/** "HH:MM" o "HH:MM - HH:MM" → inicio HH:MM */
+export function normalizeHoraInicioReserva(raw) {
+  const h = String(raw ?? '').trim();
+  if (!h) return '';
+  if (h.includes(' - ')) return h.split(' - ')[0].trim().slice(0, 5);
+  return h.slice(0, 5);
+}
+
+/** Inicio HH:MM + duración en minutos → fin HH:MM (default 90). */
+export function computeHoraFinDesdeDuracion(horaInicio, duracionMinutos = 90) {
+  const inicio = normalizeHoraInicioReserva(horaInicio);
+  if (!inicio) return null;
+  const dur = parsePositiveInt(duracionMinutos) ?? 90;
+  const [hh, mm] = inicio.split(':').map(Number);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  const totalMinutes = hh * 60 + mm + dur;
+  const endH = Math.floor(totalMinutes / 60) % 24;
+  const endM = totalMinutes % 60;
+  return `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+}
+
+export function resolveHoraInicioYFinReserva({
+  hora,
+  hora_inicio,
+  hora_fin,
+  duracion_minutos,
+}) {
+  const inicio = normalizeHoraInicioReserva(hora_inicio ?? hora);
+  const duracion = parsePositiveInt(duracion_minutos) ?? 90;
+  let fin = hora_fin != null && String(hora_fin).trim() !== ''
+    ? String(hora_fin).trim().slice(0, 5)
+    : null;
+  if (!fin && inicio) {
+    fin = computeHoraFinDesdeDuracion(inicio, duracion);
+  }
+  return {
+    hora_inicio: inicio || null,
+    hora_fin: fin,
+    duracion_minutos: duracion,
+  };
+}
+
 export function logPartidoCanchaBody(body = {}, label = 'partido') {
   console.log(`[${label}] cancha body:`, {
     cancha: body.cancha ?? null,
@@ -250,9 +292,13 @@ function asText(value, fallback = null) {
 
 export function buildReservaInsertRow({
   sedeNombre,
+  sedeId,
   fecha,
   hora,
+  hora_inicio,
+  hora_fin,
   canchaText,
+  cancha_id,
   nombre,
   email,
   telefono,
@@ -264,10 +310,19 @@ export function buildReservaInsertRow({
   duracion_minutos,
   user_id,
 }) {
+  const horas = resolveHoraInicioYFinReserva({
+    hora,
+    hora_inicio,
+    hora_fin,
+    duracion_minutos,
+  });
+
   const row = {
     sede: asText(sedeNombre),
     fecha: asText(fecha),
-    hora: asText(hora),
+    hora: asText(horas.hora_inicio ?? hora),
+    hora_inicio: horas.hora_inicio,
+    hora_fin: horas.hora_fin,
     cancha: asText(canchaText),
     nombre: asText(nombre),
     email: asText(email),
@@ -276,16 +331,20 @@ export function buildReservaInsertRow({
     nivel: asText(nivel),
     precio: parsePositiveInt(precio) ?? 0,
     estado: asText(estado),
-    duracion_minutos: parsePositiveInt(duracion_minutos),
+    duracion_minutos: horas.duracion_minutos,
     user_id: user_id ?? null,
   };
+
+  const sid = parsePositiveInt(sedeId);
+  if (sid != null) row.sede_id = sid;
+
+  const cid = parsePositiveInt(cancha_id);
+  if (cid != null) row.cancha_id = cid;
 
   if (pago_estado != null && pago_estado !== undefined) {
     row.pago_estado = asText(pago_estado);
   }
 
-  delete row.cancha_id;
-  delete row.sede_id;
   delete row.canchaSeleccionada;
   delete row.cancha_nombre;
 
@@ -1188,9 +1247,13 @@ export function createPartidosRouter({
 
       const reservaInsert = buildReservaInsertRow({
         sedeNombre: sedeRow.nombre,
+        sedeId: sedeRow.id,
         fecha,
         hora,
+        hora_inicio: req.body.hora_inicio,
+        hora_fin: req.body.hora_fin,
         canchaText: canchaStorage,
+        cancha_id: req.body.cancha_id,
         nombre: contactNombre,
         email: contactEmail,
         telefono: contactWhatsapp,
@@ -1199,7 +1262,7 @@ export function createPartidosRouter({
         precio: totalPrecio,
         estado: 'prereserva',
         pago_estado: 'pendiente',
-        duracion_minutos: durationMinutes,
+        duracion_minutos: durationMinutes ?? 90,
         user_id: user.id,
       });
       console.log('[DEBUG INSERT reservas]', reservaInsert);
