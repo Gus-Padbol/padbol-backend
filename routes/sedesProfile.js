@@ -1,4 +1,5 @@
 import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
+import { enrichSedeWithHeroPhoto, normalizeSedeFotoUrls, resolveSedeHeroFotoUrl } from '../utils/sedeHero.js';
 import { fetchSedeUpcomingPartidos } from './partidos.js';
 
 function parseSedeId(raw) {
@@ -47,8 +48,18 @@ function buildCoords(sede) {
 function collectSedeFotos(sede, hubImageUrl = null) {
   const urls = [];
 
+  const destacadas = normalizeSedeFotoUrls(sede?.fotos_destacadas);
+  for (const url of destacadas) urls.push(url);
+
+  const hero = resolveSedeHeroFotoUrl(sede);
+  if (hero) urls.push(hero);
+
   if (hubImageUrl) urls.push(hubImageUrl);
   if (sede?.foto_url) urls.push(sede.foto_url);
+
+  for (const url of normalizeSedeFotoUrls(sede?.fotos_urls)) {
+    urls.push(url);
+  }
 
   for (const item of sede?.imagenes ?? []) {
     const url = typeof item === 'string' ? item : item?.url;
@@ -157,26 +168,29 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         return res.status(404).json({ error: 'Sede no encontrada' });
       }
 
-      const deporte = (sede.deportes_disponibles?.[0] ?? 'padbol').toLowerCase();
+      const sedeEnriched = enrichSedeWithHeroPhoto(sede);
+      const deporte = (sedeEnriched.deportes_disponibles?.[0] ?? 'padbol').toLowerCase();
       const hubHero = await fetchHubHeroImage(supabaseAdmin, deporte);
-      const fotos = collectSedeFotos(sede, hubHero);
-      const horarios = buildHorarios(sede);
-      const coords = buildCoords(sede);
-      const deportesDisponibles = await fetchDeportesDisponiblesForSede(supabase, sedeId, sede);
+      const fotos = collectSedeFotos(sedeEnriched, hubHero);
+      const horarios = buildHorarios(sedeEnriched);
+      const coords = buildCoords(sedeEnriched);
+      const deportesDisponibles = await fetchDeportesDisponiblesForSede(supabase, sedeId, sedeEnriched);
       const canchasCount = deportesDisponibles.reduce(
         (sum, item) => sum + (item.canchas_count ?? 0),
         0,
-      ) || (Number(sede.cantidad_canchas) > 0 ? Number(sede.cantidad_canchas) : null);
+      ) || (Number(sedeEnriched.cantidad_canchas) > 0 ? Number(sedeEnriched.cantidad_canchas) : null);
 
-      const tagline = sede.slogan ?? sede.descripcion ?? null;
-      const amenities = normalizeSedeAmenities(sede.amenities ?? []);
-      const historia = sede.historia ?? sede.descripcion_larga ?? null;
+      const tagline = sedeEnriched.slogan ?? sedeEnriched.descripcion ?? null;
+      const amenities = normalizeSedeAmenities(sedeEnriched.amenities ?? []);
+      const historia = sedeEnriched.historia ?? sedeEnriched.descripcion_larga ?? null;
 
       res.json({
-        sede,
+        sede: sedeEnriched,
+        hero_foto_url: sedeEnriched.hero_foto_url ?? null,
+        fotos_destacadas: sedeEnriched.fotos_destacadas ?? [],
         fotos,
         slogan: tagline,
-        logo_url: sede.logo_url ?? null,
+        logo_url: sedeEnriched.logo_url ?? null,
         descripcion: historia,
         historia,
         amenities,
@@ -286,6 +300,10 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         const text = String(body.historia ?? '').trim();
         patch.historia = text ? text.slice(0, 500) : null;
       }
+      if (hop('fotos_destacadas')) {
+        const raw = Array.isArray(body.fotos_destacadas) ? body.fotos_destacadas : [];
+        patch.fotos_destacadas = raw.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 4);
+      }
 
       const passthrough = [
         'nombre', 'direccion', 'ciudad', 'provincia', 'pais', 'telefono', 'email_contacto',
@@ -346,7 +364,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       if (error) throw error;
       if (!updated) return res.status(404).json({ error: 'Sede no encontrada' });
 
-      res.json({ sede: updated });
+      res.json({ sede: enrichSedeWithHeroPhoto(updated) });
     } catch (err) {
       console.error('❌ Error PATCH /api/sedes/:id:', err.message);
       res.status(500).json({ error: err.message });

@@ -43,6 +43,7 @@ import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
 import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
 import { mountTorneoInteresRoutes } from './routes/torneoInteres.js';
+import { enrichSedeWithHeroPhoto } from './utils/sedeHero.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
@@ -820,7 +821,7 @@ app.get('/api/sedes/:id', async (req, res) => {
       return res.status(404).json({ error: 'Sede no encontrada' });
     }
 
-    res.json(data);
+    res.json(enrichSedeWithHeroPhoto(data));
   } catch (err) {
     console.error('❌ Error GET /api/sedes/:id:', err.message);
     res.status(500).json({ error: err.message });
