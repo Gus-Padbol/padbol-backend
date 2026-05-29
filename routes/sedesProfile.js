@@ -58,6 +58,8 @@ function collectSedeFotos(sede, hubImageUrl = null) {
   const destacadas = normalizeSedeFotoUrls(sede?.fotos_destacadas);
   for (const url of destacadas) urls.push(url);
 
+  if (sede?.foto_portada) urls.push(String(sede.foto_portada).trim());
+
   const hero = resolveSedeHeroFotoUrl(sede);
   if (hero) urls.push(hero);
 
@@ -194,6 +196,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       res.json({
         sede: sedeEnriched,
         hero_foto_url: sedeEnriched.hero_foto_url ?? null,
+        foto_portada: sedeEnriched.foto_portada ?? null,
         fotos_destacadas: sedeEnriched.fotos_destacadas ?? [],
         fotos,
         slogan: tagline,
@@ -313,6 +316,17 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       }
       if (hop('fotos_urls')) {
         patch.fotos_urls = capSedeFotoUrls(Array.isArray(body.fotos_urls) ? body.fotos_urls : []);
+      }
+      if (hop('foto_portada')) {
+        if (body.foto_portada == null || body.foto_portada === '') {
+          patch.foto_portada = null;
+        } else {
+          const u = String(body.foto_portada).trim();
+          if (!/^https?:\/\//i.test(u)) {
+            return res.status(400).json({ error: 'foto_portada debe ser una URL http(s) válida' });
+          }
+          patch.foto_portada = u.slice(0, 2048);
+        }
       }
 
       const passthrough = [

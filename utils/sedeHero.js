@@ -19,11 +19,19 @@ export function capSedeFotosDestacadas(raw) {
   return capSedeFotoUrls(raw, MAX_FOTOS_DESTACADAS);
 }
 
+export function normalizeSedeFotoPortada(raw) {
+  if (raw == null || raw === '') return null;
+  const url = String(raw).trim();
+  return url || null;
+}
+
 /**
- * Hero de la sede: `fotos_destacadas[0]` (elegida en admin Mi Sede).
- * Fallback: `foto_url`, luego primera de `fotos_urls`.
+ * Hero de la sede: `foto_portada`, luego `fotos_destacadas[0]`, `foto_url`, `fotos_urls[0]`.
  */
 export function resolveSedeHeroFotoUrl(sede) {
+  const portada = normalizeSedeFotoPortada(sede?.foto_portada);
+  if (portada) return portada;
+
   const gallery = normalizeSedeFotoUrls(sede?.fotos_urls);
   const destacadas = normalizeSedeFotoUrls(sede?.fotos_destacadas);
 
@@ -49,7 +57,8 @@ export function enrichSedeWithHeroPhoto(sede) {
 
   const fotos_urls = normalizeSedeFotoUrls(sede.fotos_urls);
   const fotos_destacadas = capSedeFotosDestacadas(sede.fotos_destacadas);
-  const normalized = { ...sede, fotos_urls, fotos_destacadas };
+  const foto_portada = normalizeSedeFotoPortada(sede.foto_portada);
+  const normalized = { ...sede, fotos_urls, fotos_destacadas, foto_portada };
 
   return {
     ...normalized,
