@@ -1,6 +1,16 @@
 const RESENAS_TABLE = 'resenas';
 const LIST_LIMIT = 50;
 
+const SCHEMA_DIAGNOSTIC_SQL = `
+  SELECT column_name
+  FROM information_schema.columns
+  WHERE table_name = 'resenas'
+  ORDER BY ordinal_position
+`;
+
+let resenasSchemaCache = null;
+let resenasSchemaLoadPromise = null;
+
 function parseSedeId(raw) {
   const sedeId = parseInt(String(raw), 10);
   return Number.isFinite(sedeId) && sedeId > 0 ? sedeId : null;
@@ -21,6 +31,63 @@ function pgUnavailable(res) {
   return res.status(503).json({ error: 'DATABASE_URL no configurada — reseñas no disponibles' });
 }
 
+function pickFirstColumn(columns, candidates) {
+  for (const name of candidates) {
+    if (columns.includes(name)) return name;
+  }
+  return null;
+}
+
+function buildResenasSchema(columnNames) {
+  const columns = [...new Set(columnNames.filter(Boolean))];
+  const has = (name) => columns.includes(name);
+
+  return {
+    columns,
+    has,
+    ratingCol: pickFirstColumn(columns, ['estrellas', 'puntuacion']),
+    respuestaCol: pickFirstColumn(columns, ['respuesta', 'respuesta_admin']),
+    respuestaAtCol: pickFirstColumn(columns, ['fecha_respuesta', 'respuesta_at']),
+    respuestaPorCol: has('respuesta_por') ? 'respuesta_por' : null,
+    nombreCol: has('nombre') ? 'nombre' : null,
+    reservaIdCol: has('reserva_id') ? 'reserva_id' : null,
+  };
+}
+
+async function loadResenasSchema(pgPool) {
+  if (resenasSchemaCache) return resenasSchemaCache;
+  if (!resenasSchemaLoadPromise) {
+    resenasSchemaLoadPromise = (async () => {
+      const { rows } = await pgPool.query(SCHEMA_DIAGNOSTIC_SQL);
+      const loggedColumns = rows.map((row) => row.column_name);
+      console.log('[RESEÑAS-SCHEMA] information_schema.columns (table_name = resenas):', loggedColumns);
+
+      const { rows: publicRows } = await pgPool.query(
+        `SELECT column_name
+         FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1
+         ORDER BY ordinal_position`,
+        [RESENAS_TABLE],
+      );
+      const publicColumns = publicRows.map((row) => row.column_name);
+      const columnNames = publicColumns.length > 0 ? publicColumns : loggedColumns;
+
+      if (!columnNames.length) {
+        throw new Error('Tabla resenas no encontrada o sin columnas en information_schema');
+      }
+
+      resenasSchemaCache = buildResenasSchema(columnNames);
+      console.log('[RESEÑAS-SCHEMA] columnas usadas en queries:', resenasSchemaCache.columns);
+      return resenasSchemaCache;
+    })();
+  }
+  return resenasSchemaLoadPromise;
+}
+
+async function ensureResenasSchema(pgPool) {
+  return loadResenasSchema(pgPool);
+}
+
 function buildDisplayNameFromPerfil(perfil, fallbackNombre = '') {
   if (perfil) {
     const nombre = String(perfil.nombre ?? '').trim();
@@ -35,55 +102,131 @@ function buildDisplayNameFromPerfil(perfil, fallbackNombre = '') {
   return cached || 'Usuario';
 }
 
-function mapResenaRow(row) {
+function mapResenaRow(row, schema) {
   if (!row) return null;
+  const respuestaRaw = schema.respuestaCol ? row.respuesta ?? row[schema.respuestaCol] : null;
+  const respuestaAtRaw = schema.respuestaAtCol
+    ? row.respuesta_at ?? row[schema.respuestaAtCol]
+    : null;
+
   return {
     id: row.id,
     sede_id: row.sede_id,
     user_id: row.user_id,
-    reserva_id: null,
-    puntuacion: Number(row.puntuacion ?? row.estrellas),
+    reserva_id: schema.reservaIdCol ? (row.reserva_id ?? row[schema.reservaIdCol] ?? null) : null,
+    puntuacion: Number(row.puntuacion ?? (schema.ratingCol ? row[schema.ratingCol] : null) ?? 0),
     comentario: row.comentario ?? '',
-    created_at: row.created_at,
-    respuesta_admin: row.respuesta ?? row.respuesta_admin ?? null,
-    respuesta_at: row.respuesta_at ?? row.fecha_respuesta ?? null,
-    respuesta_por: row.respuesta_por ?? null,
+    created_at: row.created_at ?? null,
+    respuesta_admin: respuestaRaw ?? null,
+    respuesta_at: respuestaAtRaw ?? null,
+    respuesta_por: schema.respuestaPorCol ? (row.respuesta_por ?? row[schema.respuestaPorCol] ?? null) : null,
     display_name: row.display_name ?? 'Usuario',
     foto_url: row.foto_url ?? null,
   };
 }
 
-const RESENA_SELECT_SQL = `
-  SELECT
-    r.id,
-    r.sede_id,
-    r.user_id,
-    r.estrellas AS puntuacion,
-    r.comentario,
-    r.created_at,
-    r.respuesta,
-    r.fecha_respuesta AS respuesta_at,
-    COALESCE(
-      NULLIF(TRIM(jp.apodo), ''),
-      NULLIF(TRIM(CONCAT(COALESCE(jp.nombre, ''), ' ', COALESCE(jp.apellido, ''))), ''),
-      NULLIF(TRIM(r.nombre), ''),
-      'Usuario'
-    ) AS display_name,
-    jp.foto_url
-  FROM ${RESENAS_TABLE} r
-  LEFT JOIN jugadores_perfil jp ON jp.user_id = r.user_id
-`;
+function buildDisplayNameSql(schema) {
+  const parts = [
+    "NULLIF(TRIM(jp.apodo), '')",
+    "NULLIF(TRIM(CONCAT(COALESCE(jp.nombre, ''), ' ', COALESCE(jp.apellido, ''))), '')",
+  ];
+  if (schema.nombreCol) {
+    parts.push(`NULLIF(TRIM(r.${schema.nombreCol}), '')`);
+  }
+  parts.push("'Usuario'");
+  return `COALESCE(${parts.join(', ')}) AS display_name`;
+}
+
+function buildSelectSql(schema) {
+  const selectParts = [
+    'r.id',
+    'r.sede_id',
+    'r.user_id',
+  ];
+
+  if (schema.ratingCol) {
+    selectParts.push(`r.${schema.ratingCol} AS puntuacion`);
+  } else {
+    selectParts.push('NULL::int AS puntuacion');
+  }
+
+  if (schema.has('comentario')) selectParts.push('r.comentario');
+  if (schema.has('created_at')) selectParts.push('r.created_at');
+
+  if (schema.respuestaCol) {
+    selectParts.push(`r.${schema.respuestaCol} AS respuesta`);
+  }
+
+  if (schema.respuestaAtCol) {
+    selectParts.push(`r.${schema.respuestaAtCol} AS respuesta_at`);
+  }
+
+  if (schema.respuestaPorCol) {
+    selectParts.push(`r.${schema.respuestaPorCol}`);
+  }
+
+  if (schema.reservaIdCol) {
+    selectParts.push(`r.${schema.reservaIdCol}`);
+  }
+
+  selectParts.push(buildDisplayNameSql(schema));
+  selectParts.push('jp.foto_url');
+
+  return `
+    SELECT
+      ${selectParts.join(',\n      ')}
+    FROM ${RESENAS_TABLE} r
+    LEFT JOIN jugadores_perfil jp ON jp.user_id = r.user_id
+  `;
+}
+
+function buildReturningSql(schema) {
+  const parts = ['id', 'sede_id', 'user_id'];
+
+  if (schema.ratingCol) {
+    parts.push(`${schema.ratingCol} AS puntuacion`);
+  }
+
+  if (schema.has('comentario')) parts.push('comentario');
+  if (schema.has('created_at')) parts.push('created_at');
+
+  if (schema.respuestaCol) {
+    parts.push(`${schema.respuestaCol} AS respuesta`);
+  }
+
+  if (schema.respuestaAtCol) {
+    parts.push(`${schema.respuestaAtCol} AS respuesta_at`);
+  }
+
+  if (schema.respuestaPorCol) parts.push(schema.respuestaPorCol);
+  if (schema.nombreCol) parts.push(schema.nombreCol);
+
+  return parts.join(', ');
+}
+
+function requireColumns(schema, names, context) {
+  const missing = names.filter((name) => !schema.has(name));
+  if (missing.length) {
+    throw new Error(`${context}: faltan columnas en ${RESENAS_TABLE}: ${missing.join(', ')}`);
+  }
+}
 
 async function sedeExistsPg(pgPool, sedeId) {
   const { rows } = await pgPool.query('SELECT id FROM sedes WHERE id = $1 LIMIT 1', [sedeId]);
   return Boolean(rows[0]);
 }
 
-async function fetchResenasStatsPg(pgPool, sedeId) {
+async function fetchResenasStatsPg(pgPool, schema, sedeId) {
+  requireColumns(schema, ['sede_id'], 'fetchResenasStatsPg');
+
+  const avgExpr = schema.ratingCol
+    ? `ROUND(AVG(${schema.ratingCol}::numeric), 1)`
+    : 'NULL::numeric';
+
   const { rows } = await pgPool.query(
     `SELECT
        COUNT(*)::int AS total,
-       ROUND(AVG(estrellas::numeric), 1) AS promedio
+       ${avgExpr} AS promedio
      FROM ${RESENAS_TABLE}
      WHERE sede_id = $1`,
     [sedeId],
@@ -95,7 +238,9 @@ async function fetchResenasStatsPg(pgPool, sedeId) {
   };
 }
 
-async function userHasResenaPg(pgPool, { sedeId, userId }) {
+async function userHasResenaPg(pgPool, schema, { sedeId, userId }) {
+  requireColumns(schema, ['sede_id', 'user_id'], 'userHasResenaPg');
+
   const { rows } = await pgPool.query(
     `SELECT id FROM ${RESENAS_TABLE}
      WHERE sede_id = $1 AND user_id = $2::uuid
@@ -116,64 +261,84 @@ async function fetchNombreAutorPg(pgPool, userId) {
   return buildDisplayNameFromPerfil(rows[0]);
 }
 
-async function insertResenaPg(pgPool, { sedeId, userId, puntuacion, comentario }) {
+async function insertResenaPg(pgPool, schema, { sedeId, userId, puntuacion, comentario }) {
+  requireColumns(schema, ['sede_id', 'user_id'], 'insertResenaPg');
+  if (!schema.ratingCol) {
+    throw new Error('insertResenaPg: la tabla resenas no tiene columna estrellas ni puntuacion');
+  }
+
   const comentarioVal = comentario != null && String(comentario).trim() !== ''
     ? String(comentario).trim().slice(0, 500)
     : null;
-  const nombreAutor = await fetchNombreAutorPg(pgPool, userId);
 
-  try {
-    const { rows } = await pgPool.query(
-      `INSERT INTO ${RESENAS_TABLE} (sede_id, user_id, estrellas, comentario, nombre)
-       VALUES ($1, $2::uuid, $3, $4, $5)
-       RETURNING id, sede_id, user_id,
-         estrellas AS puntuacion,
-         comentario, created_at, respuesta,
-         fecha_respuesta AS respuesta_at,
-         nombre`,
-      [sedeId, userId, puntuacion, comentarioVal, nombreAutor],
-    );
-    return rows[0];
-  } catch (err) {
-    if (err?.code !== '42703') throw err;
-    const { rows } = await pgPool.query(
-      `INSERT INTO ${RESENAS_TABLE} (sede_id, user_id, estrellas, comentario)
-       VALUES ($1, $2::uuid, $3, $4)
-       RETURNING id, sede_id, user_id,
-         estrellas AS puntuacion,
-         comentario, created_at, respuesta,
-         fecha_respuesta AS respuesta_at`,
-      [sedeId, userId, puntuacion, comentarioVal],
-    );
-    return rows[0];
+  const insertCols = ['sede_id', 'user_id', schema.ratingCol];
+  const values = ['$1', '$2::uuid', '$3'];
+  const params = [sedeId, userId, puntuacion];
+
+  if (schema.has('comentario')) {
+    insertCols.push('comentario');
+    values.push(`$${params.length + 1}`);
+    params.push(comentarioVal);
   }
+
+  if (schema.nombreCol) {
+    const nombreAutor = await fetchNombreAutorPg(pgPool, userId);
+    insertCols.push(schema.nombreCol);
+    values.push(`$${params.length + 1}`);
+    params.push(nombreAutor);
+  }
+
+  const { rows } = await pgPool.query(
+    `INSERT INTO ${RESENAS_TABLE} (${insertCols.join(', ')})
+     VALUES (${values.join(', ')})
+     RETURNING ${buildReturningSql(schema)}`,
+    params,
+  );
+  return rows[0];
 }
 
-async function fetchResenaByIdPg(pgPool, resenaId) {
+async function fetchResenaByIdPg(pgPool, schema, resenaId) {
+  requireColumns(schema, ['id'], 'fetchResenaByIdPg');
   const { rows } = await pgPool.query(
-    `${RESENA_SELECT_SQL} WHERE r.id = $1::uuid LIMIT 1`,
+    `${buildSelectSql(schema)} WHERE r.id = $1::uuid LIMIT 1`,
     [resenaId],
   );
   return rows[0] ?? null;
 }
 
-async function updateResenaRespuestaPg(pgPool, { resenaId, respuestaAdmin }) {
+async function updateResenaRespuestaPg(pgPool, schema, { resenaId, respuestaAdmin, respuestaPor }) {
+  requireColumns(schema, ['id'], 'updateResenaRespuestaPg');
+  if (!schema.respuestaCol) {
+    throw new Error('updateResenaRespuestaPg: la tabla resenas no tiene columna respuesta ni respuesta_admin');
+  }
+
   const text = String(respuestaAdmin ?? '').trim();
+  const setParts = [`${schema.respuestaCol} = $1`];
+  const params = [text || null];
+
+  if (schema.respuestaAtCol) {
+    setParts.push(`${schema.respuestaAtCol} = NOW()`);
+  }
+
+  if (schema.respuestaPorCol && respuestaPor) {
+    params.push(respuestaPor);
+    setParts.push(`${schema.respuestaPorCol} = $${params.length}::uuid`);
+  }
+
+  params.push(resenaId);
+
   const { rows } = await pgPool.query(
     `UPDATE ${RESENAS_TABLE}
-     SET respuesta = $1,
-         fecha_respuesta = NOW()
-     WHERE id = $2::uuid
-     RETURNING id, sede_id, user_id,
-       estrellas AS puntuacion,
-       comentario, created_at, respuesta,
-       fecha_respuesta AS respuesta_at`,
-    [text || null, resenaId],
+     SET ${setParts.join(', ')}
+     WHERE id = $${params.length}::uuid
+     RETURNING ${buildReturningSql(schema)}`,
+    params,
   );
   return rows[0] ?? null;
 }
 
-async function deleteResenaPg(pgPool, resenaId) {
+async function deleteResenaPg(pgPool, schema, resenaId) {
+  requireColumns(schema, ['id'], 'deleteResenaPg');
   const { rowCount } = await pgPool.query(
     `DELETE FROM ${RESENAS_TABLE} WHERE id = $1::uuid`,
     [resenaId],
@@ -213,6 +378,9 @@ export function mountResenasRoutes(app, {
     try {
       if (!pgPool) return pgUnavailable(res);
 
+      const schema = await ensureResenasSchema(pgPool);
+      requireColumns(schema, ['sede_id', 'created_at'], 'GET /api/sedes/:id/resenas');
+
       const sedeId = parseSedeId(req.params.id);
       if (sedeId == null) {
         return res.status(400).json({ error: 'ID de sede inválido' });
@@ -223,15 +391,15 @@ export function mountResenasRoutes(app, {
       }
 
       const { rows } = await pgPool.query(
-        `${RESENA_SELECT_SQL}
+        `${buildSelectSql(schema)}
          WHERE r.sede_id = $1
          ORDER BY r.created_at DESC
          LIMIT ${LIST_LIMIT}`,
         [sedeId],
       );
 
-      const stats = await fetchResenasStatsPg(pgPool, sedeId);
-      const resenas = rows.map(mapResenaRow);
+      const stats = await fetchResenasStatsPg(pgPool, schema, sedeId);
+      const resenas = rows.map((row) => mapResenaRow(row, schema));
 
       res.json({
         resenas,
@@ -250,6 +418,8 @@ export function mountResenasRoutes(app, {
   const handlePostResena = async (req, res) => {
     try {
       if (!pgPool) return pgUnavailable(res);
+
+      const schema = await ensureResenasSchema(pgPool);
 
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) {
@@ -271,7 +441,7 @@ export function mountResenasRoutes(app, {
         return res.status(404).json({ error: 'Sede no encontrada' });
       }
 
-      const duplicate = await userHasResenaPg(pgPool, {
+      const duplicate = await userHasResenaPg(pgPool, schema, {
         sedeId,
         userId: user.id,
       });
@@ -279,7 +449,7 @@ export function mountResenasRoutes(app, {
         return res.status(409).json({ error: 'Ya reseñaste esta sede' });
       }
 
-      const inserted = await insertResenaPg(pgPool, {
+      const inserted = await insertResenaPg(pgPool, schema, {
         sedeId,
         userId: user.id,
         puntuacion,
@@ -287,10 +457,10 @@ export function mountResenasRoutes(app, {
       });
 
       const enriched = inserted?.id
-        ? await fetchResenaByIdPg(pgPool, inserted.id)
+        ? await fetchResenaByIdPg(pgPool, schema, inserted.id)
         : inserted;
 
-      res.status(201).json({ resena: mapResenaRow(enriched ?? inserted) });
+      res.status(201).json({ resena: mapResenaRow(enriched ?? inserted, schema) });
     } catch (err) {
       if (err?.code === '23505') {
         return res.status(409).json({ error: 'Ya existe una reseña para esta sede' });
@@ -307,6 +477,8 @@ export function mountResenasRoutes(app, {
     try {
       if (!pgPool) return pgUnavailable(res);
 
+      const schema = await ensureResenasSchema(pgPool);
+
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) {
         return res.status(status).json({ error: authError });
@@ -317,7 +489,7 @@ export function mountResenasRoutes(app, {
         return res.status(400).json({ error: 'ID de reseña inválido' });
       }
 
-      const existing = await fetchResenaByIdPg(pgPool, resenaId);
+      const existing = await fetchResenaByIdPg(pgPool, schema, resenaId);
       if (!existing) {
         return res.status(404).json({ error: 'Reseña no encontrada' });
       }
@@ -335,16 +507,17 @@ export function mountResenasRoutes(app, {
         return res.status(400).json({ error: 'respuesta es requerido' });
       }
 
-      const updated = await updateResenaRespuestaPg(pgPool, {
+      const updated = await updateResenaRespuestaPg(pgPool, schema, {
         resenaId,
         respuestaAdmin: respuestaTexto,
+        respuestaPor: schema.respuestaPorCol ? user.id : null,
       });
       if (!updated) {
         return res.status(404).json({ error: 'Reseña no encontrada' });
       }
 
-      const enriched = await fetchResenaByIdPg(pgPool, resenaId);
-      res.json({ resena: mapResenaRow(enriched ?? updated) });
+      const enriched = await fetchResenaByIdPg(pgPool, schema, resenaId);
+      res.json({ resena: mapResenaRow(enriched ?? updated, schema) });
     } catch (err) {
       console.error('❌ PATCH /api/admin/resenas/:id/respuesta:', err.message);
       res.status(500).json({ error: err.message || 'Error al actualizar respuesta' });
@@ -354,6 +527,8 @@ export function mountResenasRoutes(app, {
   app.delete('/api/admin/resenas/:id', async (req, res) => {
     try {
       if (!pgPool) return pgUnavailable(res);
+
+      const schema = await ensureResenasSchema(pgPool);
 
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) {
@@ -370,7 +545,7 @@ export function mountResenasRoutes(app, {
         return res.status(403).json({ error: 'Solo super_admin puede eliminar reseñas' });
       }
 
-      const deleted = await deleteResenaPg(pgPool, resenaId);
+      const deleted = await deleteResenaPg(pgPool, schema, resenaId);
       if (!deleted) {
         return res.status(404).json({ error: 'Reseña no encontrada' });
       }
