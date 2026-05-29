@@ -40,6 +40,7 @@ import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
 import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
+import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
@@ -769,6 +770,12 @@ mountReputacionRoutes(app, {
 });
 mountReservasDiagnosticoRoutes(app, {
   pgPool,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountSedeExtrasRoutes(app, {
+  supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
@@ -4134,5 +4141,6 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Perfil público: GET /api/jugador/perfil-publico/:userId');
     console.log('✅ Torneos: GET /api/torneos/finalizados');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');
+    console.log('✅ Extras sede: GET /api/sedes/:id/extras-admin + CRUD /api/sedes/:id/extras');
   });
 })();

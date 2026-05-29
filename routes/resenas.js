@@ -45,7 +45,7 @@ function mapResenaRow(row) {
     puntuacion: Number(row.puntuacion ?? row.estrellas),
     comentario: row.comentario ?? '',
     created_at: row.created_at,
-    respuesta_admin: row.respuesta_admin ?? null,
+    respuesta_admin: row.respuesta ?? row.respuesta_admin ?? null,
     respuesta_at: row.respuesta_at ?? row.fecha_respuesta ?? null,
     respuesta_por: row.respuesta_por ?? null,
     display_name: row.display_name ?? 'Usuario',
@@ -61,7 +61,7 @@ const RESENA_SELECT_SQL = `
     r.estrellas AS puntuacion,
     r.comentario,
     r.created_at,
-    r.respuesta_admin,
+    r.respuesta,
     r.fecha_respuesta AS respuesta_at,
     COALESCE(
       NULLIF(TRIM(jp.apodo), ''),
@@ -128,7 +128,7 @@ async function insertResenaPg(pgPool, { sedeId, userId, puntuacion, comentario }
        VALUES ($1, $2::uuid, $3, $4, $5)
        RETURNING id, sede_id, user_id,
          estrellas AS puntuacion,
-         comentario, created_at, respuesta_admin,
+         comentario, created_at, respuesta,
          fecha_respuesta AS respuesta_at,
          nombre`,
       [sedeId, userId, puntuacion, comentarioVal, nombreAutor],
@@ -141,7 +141,7 @@ async function insertResenaPg(pgPool, { sedeId, userId, puntuacion, comentario }
        VALUES ($1, $2::uuid, $3, $4)
        RETURNING id, sede_id, user_id,
          estrellas AS puntuacion,
-         comentario, created_at, respuesta_admin,
+         comentario, created_at, respuesta,
          fecha_respuesta AS respuesta_at`,
       [sedeId, userId, puntuacion, comentarioVal],
     );
@@ -161,12 +161,12 @@ async function updateResenaRespuestaPg(pgPool, { resenaId, respuestaAdmin }) {
   const text = String(respuestaAdmin ?? '').trim();
   const { rows } = await pgPool.query(
     `UPDATE ${RESENAS_TABLE}
-     SET respuesta_admin = $1,
+     SET respuesta = $1,
          fecha_respuesta = NOW()
      WHERE id = $2::uuid
      RETURNING id, sede_id, user_id,
        estrellas AS puntuacion,
-       comentario, created_at, respuesta_admin,
+       comentario, created_at, respuesta,
        fecha_respuesta AS respuesta_at`,
     [text || null, resenaId],
   );
@@ -327,17 +327,17 @@ export function mountResenasRoutes(app, {
         return res.status(403).json({ error: 'No tenés permiso para responder esta reseña' });
       }
 
-      const respuestaAdmin = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'respuesta_admin')
-        ? req.body.respuesta_admin
-        : req.body?.respuesta;
+      const respuestaTexto = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'respuesta')
+        ? req.body.respuesta
+        : req.body?.respuesta_admin;
 
-      if (respuestaAdmin == null || String(respuestaAdmin).trim() === '') {
-        return res.status(400).json({ error: 'respuesta_admin es requerido' });
+      if (respuestaTexto == null || String(respuestaTexto).trim() === '') {
+        return res.status(400).json({ error: 'respuesta es requerido' });
       }
 
       const updated = await updateResenaRespuestaPg(pgPool, {
         resenaId,
-        respuestaAdmin,
+        respuestaAdmin: respuestaTexto,
       });
       if (!updated) {
         return res.status(404).json({ error: 'Reseña no encontrada' });
