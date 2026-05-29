@@ -1,4 +1,4 @@
-const RESENAS_TABLE = 'resenas_sedes';
+const RESENAS_TABLE = 'resenas';
 const LIST_LIMIT = 50;
 
 function parseSedeId(raw) {
@@ -17,14 +17,22 @@ function parsePuntuacion(raw) {
   return n;
 }
 
-function parseReservaId(raw) {
-  if (raw == null || raw === '') return null;
-  const n = parseInt(String(raw), 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
 function pgUnavailable(res) {
   return res.status(503).json({ error: 'DATABASE_URL no configurada — reseñas no disponibles' });
+}
+
+function buildDisplayNameFromPerfil(perfil, fallbackNombre = '') {
+  if (perfil) {
+    const nombre = String(perfil.nombre ?? '').trim();
+    const apellido = String(perfil.apellido ?? '').trim();
+    const full = [nombre, apellido].filter(Boolean).join(' ');
+    if (full) return full;
+    const apodo = String(perfil.apodo ?? '').trim();
+    if (apodo) return apodo;
+    if (perfil.username) return String(perfil.username).trim();
+  }
+  const cached = String(fallbackNombre ?? '').trim();
+  return cached || 'Usuario';
 }
 
 function mapResenaRow(row) {
@@ -33,7 +41,7 @@ function mapResenaRow(row) {
     id: row.id,
     sede_id: row.sede_id,
     user_id: row.user_id,
-    reserva_id: row.reserva_id ?? null,
+    reserva_id: null,
     puntuacion: Number(row.puntuacion ?? row.estrellas),
     comentario: row.comentario ?? '',
     created_at: row.created_at,
@@ -50,21 +58,20 @@ const RESENA_SELECT_SQL = `
     r.id,
     r.sede_id,
     r.user_id,
-    r.reserva_id,
-    COALESCE(r.puntuacion, r.estrellas) AS puntuacion,
+    r.estrellas AS puntuacion,
     r.comentario,
     r.created_at,
     r.respuesta_admin,
-    COALESCE(r.respuesta_at, r.fecha_respuesta) AS respuesta_at,
-    r.respuesta_por,
+    r.fecha_respuesta AS respuesta_at,
     COALESCE(
       NULLIF(TRIM(jp.apodo), ''),
       NULLIF(TRIM(CONCAT(COALESCE(jp.nombre, ''), ' ', COALESCE(jp.apellido, ''))), ''),
+      NULLIF(TRIM(r.nombre), ''),
       'Usuario'
     ) AS display_name,
     jp.foto_url
   FROM ${RESENAS_TABLE} r
-  LEFT JOIN jugadores_perfil jp ON jp.user_id::text = r.user_id::text
+  LEFT JOIN jugadores_perfil jp ON jp.user_id = r.user_id
 `;
 
 async function sedeExistsPg(pgPool, sedeId) {
@@ -76,7 +83,7 @@ async function fetchResenasStatsPg(pgPool, sedeId) {
   const { rows } = await pgPool.query(
     `SELECT
        COUNT(*)::int AS total,
-       ROUND(AVG(COALESCE(puntuacion, estrellas)::numeric), 1) AS promedio
+       ROUND(AVG(estrellas::numeric), 1) AS promedio
      FROM ${RESENAS_TABLE}
      WHERE sede_id = $1`,
     [sedeId],
@@ -88,48 +95,43 @@ async function fetchResenasStatsPg(pgPool, sedeId) {
   };
 }
 
-async function userHasResenaPg(pgPool, { sedeId, userId, reservaId }) {
-  try {
-    const { rows } = await pgPool.query(
-      `SELECT id FROM ${RESENAS_TABLE}
-       WHERE sede_id = $1 AND user_id = $2::uuid
-         AND (
-           ($3::integer IS NULL AND reserva_id IS NULL)
-           OR reserva_id = $3
-         )
-       LIMIT 1`,
-      [sedeId, userId, reservaId],
-    );
-    return Boolean(rows[0]);
-  } catch (err) {
-    if (err?.code !== '42703') throw err;
-    const { rows } = await pgPool.query(
-      `SELECT id FROM ${RESENAS_TABLE}
-       WHERE sede_id = $1 AND user_id = $2::uuid
-       LIMIT 1`,
-      [sedeId, userId],
-    );
-    return Boolean(rows[0]);
-  }
+async function userHasResenaPg(pgPool, { sedeId, userId }) {
+  const { rows } = await pgPool.query(
+    `SELECT id FROM ${RESENAS_TABLE}
+     WHERE sede_id = $1 AND user_id = $2::uuid
+     LIMIT 1`,
+    [sedeId, userId],
+  );
+  return Boolean(rows[0]);
 }
 
-async function insertResenaPg(pgPool, { sedeId, userId, puntuacion, comentario, reservaId }) {
+async function fetchNombreAutorPg(pgPool, userId) {
+  const { rows } = await pgPool.query(
+    `SELECT nombre, apellido, apodo, username
+     FROM jugadores_perfil
+     WHERE user_id = $1::uuid
+     LIMIT 1`,
+    [userId],
+  );
+  return buildDisplayNameFromPerfil(rows[0]);
+}
+
+async function insertResenaPg(pgPool, { sedeId, userId, puntuacion, comentario }) {
   const comentarioVal = comentario != null && String(comentario).trim() !== ''
     ? String(comentario).trim().slice(0, 500)
     : null;
-
-  const params = [sedeId, userId, puntuacion, comentarioVal, reservaId];
+  const nombreAutor = await fetchNombreAutorPg(pgPool, userId);
 
   try {
     const { rows } = await pgPool.query(
-      `INSERT INTO ${RESENAS_TABLE} (sede_id, user_id, puntuacion, comentario, reserva_id)
+      `INSERT INTO ${RESENAS_TABLE} (sede_id, user_id, estrellas, comentario, nombre)
        VALUES ($1, $2::uuid, $3, $4, $5)
-       RETURNING id, sede_id, user_id, reserva_id,
-         COALESCE(puntuacion, estrellas) AS puntuacion,
+       RETURNING id, sede_id, user_id,
+         estrellas AS puntuacion,
          comentario, created_at, respuesta_admin,
-         COALESCE(respuesta_at, fecha_respuesta) AS respuesta_at,
-         respuesta_por`,
-      params,
+         fecha_respuesta AS respuesta_at,
+         nombre`,
+      [sedeId, userId, puntuacion, comentarioVal, nombreAutor],
     );
     return rows[0];
   } catch (err) {
@@ -155,38 +157,20 @@ async function fetchResenaByIdPg(pgPool, resenaId) {
   return rows[0] ?? null;
 }
 
-async function updateResenaRespuestaPg(pgPool, { resenaId, respuestaAdmin, respuestaPor }) {
+async function updateResenaRespuestaPg(pgPool, { resenaId, respuestaAdmin }) {
   const text = String(respuestaAdmin ?? '').trim();
-  try {
-    const { rows } = await pgPool.query(
-      `UPDATE ${RESENAS_TABLE}
-       SET respuesta_admin = $1,
-           respuesta_at = NOW(),
-           respuesta_por = $2::uuid
-       WHERE id = $3::uuid
-       RETURNING id, sede_id, user_id, reserva_id,
-         COALESCE(puntuacion, estrellas) AS puntuacion,
-         comentario, created_at, respuesta_admin,
-         COALESCE(respuesta_at, fecha_respuesta) AS respuesta_at,
-         respuesta_por`,
-      [text || null, respuestaPor, resenaId],
-    );
-    return rows[0] ?? null;
-  } catch (err) {
-    if (err?.code !== '42703') throw err;
-    const { rows } = await pgPool.query(
-      `UPDATE ${RESENAS_TABLE}
-       SET respuesta_admin = $1,
-           fecha_respuesta = NOW()
-       WHERE id = $2::uuid
-       RETURNING id, sede_id, user_id,
-         COALESCE(puntuacion, estrellas) AS puntuacion,
-         comentario, created_at, respuesta_admin,
-         fecha_respuesta AS respuesta_at`,
-      [text || null, resenaId],
-    );
-    return rows[0] ?? null;
-  }
+  const { rows } = await pgPool.query(
+    `UPDATE ${RESENAS_TABLE}
+     SET respuesta_admin = $1,
+         fecha_respuesta = NOW()
+     WHERE id = $2::uuid
+     RETURNING id, sede_id, user_id,
+       estrellas AS puntuacion,
+       comentario, created_at, respuesta_admin,
+       fecha_respuesta AS respuesta_at`,
+    [text || null, resenaId],
+  );
+  return rows[0] ?? null;
 }
 
 async function deleteResenaPg(pgPool, resenaId) {
@@ -277,13 +261,11 @@ export function mountResenasRoutes(app, {
         return res.status(400).json({ error: 'ID de sede inválido' });
       }
 
-      const { puntuacion: rawPuntuacion, estrellas, comentario, reserva_id: rawReservaId } = req.body ?? {};
+      const { puntuacion: rawPuntuacion, estrellas, comentario } = req.body ?? {};
       const puntuacion = parsePuntuacion(rawPuntuacion ?? estrellas);
       if (puntuacion == null) {
         return res.status(400).json({ error: 'puntuacion debe ser un entero entre 1 y 5' });
       }
-
-      const reservaId = parseReservaId(rawReservaId);
 
       if (!(await sedeExistsPg(pgPool, sedeId))) {
         return res.status(404).json({ error: 'Sede no encontrada' });
@@ -292,14 +274,9 @@ export function mountResenasRoutes(app, {
       const duplicate = await userHasResenaPg(pgPool, {
         sedeId,
         userId: user.id,
-        reservaId,
       });
       if (duplicate) {
-        return res.status(409).json({
-          error: reservaId
-            ? 'Ya reseñaste esta sede para esa reserva'
-            : 'Ya reseñaste esta sede',
-        });
+        return res.status(409).json({ error: 'Ya reseñaste esta sede' });
       }
 
       const inserted = await insertResenaPg(pgPool, {
@@ -307,7 +284,6 @@ export function mountResenasRoutes(app, {
         userId: user.id,
         puntuacion,
         comentario,
-        reservaId,
       });
 
       const enriched = inserted?.id
@@ -317,7 +293,7 @@ export function mountResenasRoutes(app, {
       res.status(201).json({ resena: mapResenaRow(enriched ?? inserted) });
     } catch (err) {
       if (err?.code === '23505') {
-        return res.status(409).json({ error: 'Ya existe una reseña para esta sede y reserva' });
+        return res.status(409).json({ error: 'Ya existe una reseña para esta sede' });
       }
       console.error('❌ POST /api/sedes/:id/resenas:', err.message);
       res.status(500).json({ error: err.message || 'Error al crear reseña' });
@@ -351,14 +327,17 @@ export function mountResenasRoutes(app, {
         return res.status(403).json({ error: 'No tenés permiso para responder esta reseña' });
       }
 
-      if (!Object.prototype.hasOwnProperty.call(req.body ?? {}, 'respuesta_admin')) {
+      const respuestaAdmin = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'respuesta_admin')
+        ? req.body.respuesta_admin
+        : req.body?.respuesta;
+
+      if (respuestaAdmin == null || String(respuestaAdmin).trim() === '') {
         return res.status(400).json({ error: 'respuesta_admin es requerido' });
       }
 
       const updated = await updateResenaRespuestaPg(pgPool, {
         resenaId,
-        respuestaAdmin: req.body.respuesta_admin,
-        respuestaPor: user.id,
+        respuestaAdmin,
       });
       if (!updated) {
         return res.status(404).json({ error: 'Reseña no encontrada' });
