@@ -1,3 +1,9 @@
+import {
+  reservaHoraInicioFromRow,
+  sqlReservaHoraInicio,
+  sqlReservaSedeMatch,
+} from '../utils/reservasColumns.js';
+
 const SEDE_DIAGNOSTICO_ID = 1;
 const DIAGNOSTICO_LIMIT = 50;
 
@@ -27,42 +33,38 @@ function mapReservaDiagnosticoRow(row) {
   return {
     id: row.id,
     fecha: row.fecha ?? null,
-    hora_inicio: row.hora_inicio ?? row.hora ?? null,
+    hora: row.hora ?? null,
+    hora_inicio: reservaHoraInicioFromRow(row),
     hora_fin: row.hora_fin ?? null,
     estado: row.estado ?? null,
     monto: row.monto ?? row.monto_pagado ?? row.precio ?? null,
     user_id: row.user_id ?? null,
     created_at: row.created_at ?? null,
+    sede: row.sede ?? null,
+    sede_id: row.sede_id ?? null,
     cancha_id: row.cancha_id ?? null,
+    duracion_minutos: row.duracion_minutos ?? null,
   };
 }
 
 async function fetchReservasDiagnosticoPg(pgPool, sedeId, sedeNombre) {
-  try {
-    const { rows } = await pgPool.query(
-      `SELECT *
-       FROM reservas
-       WHERE sede_id = $1
-          OR lower(trim(COALESCE(sede, ''))) = lower(trim($2))
-       ORDER BY created_at DESC NULLS LAST
-       LIMIT $3`,
-      [sedeId, sedeNombre, DIAGNOSTICO_LIMIT],
-    );
-    return rows;
-  } catch (err) {
-    if (/column "sede_id" does not exist/i.test(String(err.message || ''))) {
-      const { rows } = await pgPool.query(
-        `SELECT *
-         FROM reservas
-         WHERE lower(trim(COALESCE(sede, ''))) = lower(trim($1))
-         ORDER BY created_at DESC NULLS LAST
-         LIMIT $2`,
-        [sedeNombre, DIAGNOSTICO_LIMIT],
-      );
-      return rows;
-    }
-    throw err;
-  }
+  const horaInicioExpr = sqlReservaHoraInicio('');
+  const sedeExpr = sqlReservaSedeMatch('', '$1', '$2');
+
+  const { rows } = await pgPool.query(
+    `SELECT *,
+            ${horaInicioExpr} AS hora_inicio_resuelta
+     FROM reservas
+     WHERE ${sedeExpr}
+     ORDER BY created_at DESC NULLS LAST
+     LIMIT $3`,
+    [sedeId, sedeNombre, DIAGNOSTICO_LIMIT],
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    hora_inicio: row.hora_inicio_resuelta ?? row.hora_inicio,
+  }));
 }
 
 export function mountReservasDiagnosticoRoutes(app, {

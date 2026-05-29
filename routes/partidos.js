@@ -2,6 +2,20 @@ import express from 'express';
 import { sendPushToUser } from '../utils/push.js';
 import { createNotificacion } from '../utils/notificaciones.js';
 import { generarIniciosMinutosSlotReserva, minutosAHoraReserva } from '../lib/reservaSlotsHorarios.js';
+import {
+  normalizeHoraInicioReserva,
+  computeHoraFinDesdeDuracion,
+  resolveHoraInicioYFinReserva,
+  reservaLegacyHoraText,
+} from '../utils/reservasTime.js';
+import { reservaHoraInicioFromRow } from '../utils/reservasColumns.js';
+
+export {
+  normalizeHoraInicioReserva,
+  computeHoraFinDesdeDuracion,
+  resolveHoraInicioYFinReserva,
+  reservaLegacyHoraText,
+} from '../utils/reservasTime.js';
 
 function getTodayArgentinaDate() {
   const nowAR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
@@ -181,48 +195,6 @@ export function parsePositiveInt(value) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-/** "HH:MM" o "HH:MM - HH:MM" → inicio HH:MM */
-export function normalizeHoraInicioReserva(raw) {
-  const h = String(raw ?? '').trim();
-  if (!h) return '';
-  if (h.includes(' - ')) return h.split(' - ')[0].trim().slice(0, 5);
-  return h.slice(0, 5);
-}
-
-/** Inicio HH:MM + duración en minutos → fin HH:MM (default 90). */
-export function computeHoraFinDesdeDuracion(horaInicio, duracionMinutos = 90) {
-  const inicio = normalizeHoraInicioReserva(horaInicio);
-  if (!inicio) return null;
-  const dur = parsePositiveInt(duracionMinutos) ?? 90;
-  const [hh, mm] = inicio.split(':').map(Number);
-  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
-  const totalMinutes = hh * 60 + mm + dur;
-  const endH = Math.floor(totalMinutes / 60) % 24;
-  const endM = totalMinutes % 60;
-  return `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
-}
-
-export function resolveHoraInicioYFinReserva({
-  hora,
-  hora_inicio,
-  hora_fin,
-  duracion_minutos,
-}) {
-  const inicio = normalizeHoraInicioReserva(hora_inicio ?? hora);
-  const duracion = parsePositiveInt(duracion_minutos) ?? 90;
-  let fin = hora_fin != null && String(hora_fin).trim() !== ''
-    ? String(hora_fin).trim().slice(0, 5)
-    : null;
-  if (!fin && inicio) {
-    fin = computeHoraFinDesdeDuracion(inicio, duracion);
-  }
-  return {
-    hora_inicio: inicio || null,
-    hora_fin: fin,
-    duracion_minutos: duracion,
-  };
-}
-
 export function logPartidoCanchaBody(body = {}, label = 'partido') {
   console.log(`[${label}] cancha body:`, {
     cancha: body.cancha ?? null,
@@ -320,7 +292,7 @@ export function buildReservaInsertRow({
   const row = {
     sede: asText(sedeNombre),
     fecha: asText(fecha),
-    hora: asText(horas.hora_inicio ?? hora),
+    hora: reservaLegacyHoraText(horas.hora_inicio, horas.hora_fin) ?? asText(horas.hora_inicio ?? hora),
     hora_inicio: horas.hora_inicio,
     hora_fin: horas.hora_fin,
     cancha: asText(canchaText),
@@ -506,7 +478,7 @@ export function parseCourtNumberFromStorage(cancha) {
 
 export function isReservaBlockingSlot(reserva, { hora, canchaNum }, nowMs = Date.now()) {
   if (!isBlockingReserva(reserva, nowMs)) return false;
-  if (formatHora(reserva.hora) !== formatHora(hora)) return false;
+  if (formatHora(reservaHoraInicioFromRow(reserva)) !== formatHora(hora)) return false;
   return Number(resolveReservaCanchaQueryText(reserva.cancha)) === canchaNum;
 }
 
@@ -605,14 +577,41 @@ function slotBlockingInfo({ hora, canchaNum }, blockingReservas, blockingPartido
   return { blocked: false, motivo: null };
 }
 
-export async function fetchDisponibilidadOccupancy(supabaseAdmin, { sedeId, sedeNombre, fecha }) {
-  const { data: reservas, error: reservasErr } = await supabaseAdmin
-    .from('reservas')
-    .select('id, hora, cancha, estado, created_at')
-    .eq('sede', sedeNombre)
-    .eq('fecha', fecha);
+function mergeReservasById(rowsA, rowsB) {
+  const map = new Map();
+  for (const row of [...(rowsA ?? []), ...(rowsB ?? [])]) {
+    if (row?.id != null) map.set(String(row.id), row);
+  }
+  return [...map.values()];
+}
 
-  if (reservasErr) throw reservasErr;
+export async function fetchDisponibilidadOccupancy(supabaseAdmin, { sedeId, sedeNombre, fecha }) {
+  const selectCols = 'id, hora, hora_inicio, hora_fin, cancha, cancha_id, estado, created_at, sede, sede_id, duracion_minutos';
+  const queries = [];
+
+  if (sedeId != null) {
+    queries.push(
+      supabaseAdmin.from('reservas').select(selectCols).eq('fecha', fecha).eq('sede_id', sedeId),
+    );
+  }
+  if (sedeNombre) {
+    queries.push(
+      supabaseAdmin.from('reservas').select(selectCols).eq('fecha', fecha).eq('sede', sedeNombre),
+    );
+  }
+
+  if (!queries.length) {
+    return { reservas: [], partidos: [] };
+  }
+
+  const results = await Promise.all(queries);
+  for (const r of results) {
+    if (r.error) throw r.error;
+  }
+
+  const reservas = mergeReservasById(
+    results.flatMap((r) => r.data ?? []),
+  );
 
   const { data: partidos, error: partidosErr } = await supabaseAdmin
     .from('partidos_abiertos')
@@ -742,22 +741,36 @@ async function isCourtBlocked(supabaseAdmin, { sedeNombre, sedeId, fecha, hora, 
 
   const canchaValue = resolveReservaCanchaQueryText(cancha);
   const canchaNum = Number(canchaValue);
+  const horaSlot = formatHora(hora);
+  const resolvedSedeId = sedeId ?? await resolveSedeIdFromNombre(supabaseAdmin, sedeNombre);
 
-  if (sedeNombre) {
-    const { data, error } = await supabaseAdmin
-      .from('reservas')
-      .select('id, hora, cancha, estado, created_at')
-      .eq('sede', sedeNombre)
-      .eq('fecha', fecha)
-      .eq('hora', hora)
-      .eq('cancha', canchaValue)
-      .in('estado', ['confirmada', 'prereserva']);
+  if (sedeNombre || resolvedSedeId != null) {
+    const selectCols = 'id, hora, hora_inicio, hora_fin, cancha, estado, created_at, sede, sede_id, duracion_minutos';
+    const queries = [];
+    if (resolvedSedeId != null) {
+      queries.push(
+        supabaseAdmin.from('reservas').select(selectCols).eq('fecha', fecha).eq('sede_id', resolvedSedeId).in('estado', ['confirmada', 'prereserva', 'pendiente']),
+      );
+    }
+    if (sedeNombre) {
+      queries.push(
+        supabaseAdmin.from('reservas').select(selectCols).eq('fecha', fecha).eq('sede', sedeNombre).in('estado', ['confirmada', 'prereserva', 'pendiente']),
+      );
+    }
 
-    if (error) throw error;
-    if (filterBlockingReservas(data).length > 0) return true;
+    const results = await Promise.all(queries);
+    for (const r of results) {
+      if (r.error) throw r.error;
+    }
+
+    const merged = mergeReservasById(results.flatMap((r) => r.data ?? []));
+    const hit = filterBlockingReservas(merged).some(
+      (reserva) => formatHora(reservaHoraInicioFromRow(reserva)) === horaSlot
+        && Number(resolveReservaCanchaQueryText(reserva.cancha)) === canchaNum,
+    );
+    if (hit) return true;
   }
 
-  const resolvedSedeId = sedeId ?? await resolveSedeIdFromNombre(supabaseAdmin, sedeNombre);
   if (resolvedSedeId == null) return false;
 
   const { data: partidos, error: partidosErr } = await supabaseAdmin
@@ -2256,14 +2269,15 @@ export function createPartidosRouter({
         let reservaId = partido.reserva_id;
         const capitanUserId = getCapitanUserId(partido);
         if (!reservaId && capitanUserId) {
-          const { data: linkedReserva } = await supabaseAdmin
+          const { data: candidates } = await supabaseAdmin
             .from('reservas')
             .select('*')
             .eq('user_id', capitanUserId)
             .eq('fecha', partido.fecha)
-            .eq('hora', partido.hora)
-            .in('estado', ['prereserva', 'confirmada'])
-            .maybeSingle();
+            .in('estado', ['prereserva', 'confirmada']);
+          const linkedReserva = (candidates ?? []).find(
+            (r) => formatHora(reservaHoraInicioFromRow(r)) === formatHora(partido.hora),
+          );
           if (linkedReserva) {
             reservaId = linkedReserva.id;
             await supabaseAdmin

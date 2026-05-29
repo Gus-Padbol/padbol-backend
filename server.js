@@ -26,6 +26,7 @@ import {
   resolvePartidoCanchaNombre,
   resolveReservaCanchaStorageText,
 } from './routes/partidos.js';
+import { reservaHoraInicioFromRow, reservaHoraFinFromRow, reservaMatchesSede } from './utils/reservasColumns.js';
 import { createClasesRouter } from './routes/clases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
@@ -636,14 +637,18 @@ function buildUserEmailOrIdFilters(user, { emailField = 'email', userIdFields = 
 
 function mapMisReservaRow(row) {
   const sedeNombre = row.sedes?.nombre ?? row.sede ?? null;
+  const horaInicio = reservaHoraInicioFromRow(row);
+  const horaFin = reservaHoraFinFromRow(row, row.duracion_minutos);
 
   return {
     id: row.id,
     sede_nombre: sedeNombre,
     sede: sedeNombre,
-    sede_id: null,
+    sede_id: row.sede_id ?? null,
     fecha: row.fecha,
-    hora: row.hora,
+    hora: row.hora ?? horaInicio,
+    hora_inicio: horaInicio,
+    hora_fin: horaFin,
     duracion_minutos: row.duracion_minutos ?? null,
     cancha: row.cancha ?? null,
     estado: row.estado ?? null,
@@ -709,7 +714,7 @@ async function reservaMatchesSedeId(reserva, sedeId) {
     .maybeSingle();
 
   if (!sedeRow) return false;
-  return reserva.sede === sedeRow.nombre || String(reserva.sede) === String(sedeId);
+  return reservaMatchesSede(reserva, { sedeId, sedeNombre: sedeRow.nombre });
 }
 
 async function getSedeNombre(reserva, sedeId) {
@@ -924,15 +929,34 @@ app.get('/api/disponibilidad/bloqueos', async (req, res) => {
 app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
   try {
     const { sede, fecha } = req.params;
+    const selectCols = 'id, hora, hora_inicio, hora_fin, cancha, cancha_id, estado, created_at, sede, sede_id, duracion_minutos';
 
-    const { data, error } = await supabase
-      .from('reservas')
-      .select('id, hora, cancha, estado, created_at')
-      .eq('sede', sede)
-      .eq('fecha', fecha);
+    const { data: sedeRow } = await supabaseAdmin
+      .from('sedes')
+      .select('id')
+      .eq('nombre', sede)
+      .maybeSingle();
 
-    if (error) throw error;
-    res.json(filterBlockingReservas(data || []));
+    const queries = [
+      supabase.from('reservas').select(selectCols).eq('sede', sede).eq('fecha', fecha),
+    ];
+    if (sedeRow?.id != null) {
+      queries.push(
+        supabase.from('reservas').select(selectCols).eq('sede_id', sedeRow.id).eq('fecha', fecha),
+      );
+    }
+
+    const results = await Promise.all(queries);
+    for (const r of results) {
+      if (r.error) throw r.error;
+    }
+
+    const merged = new Map();
+    for (const row of results.flatMap((r) => r.data ?? [])) {
+      if (row?.id != null) merged.set(String(row.id), row);
+    }
+
+    res.json(filterBlockingReservas([...merged.values()]));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2511,7 +2535,8 @@ app.post('/api/cancelar-reserva', async (req, res) => {
     if (reserva.estado === 'cancelada') return res.status(409).json({ error: 'La reserva ya está cancelada' });
 
     // Check if reservation is more than 24h away (Argentina UTC-3)
-    const reservaDt = new Date(`${reserva.fecha}T${reserva.hora}:00-03:00`);
+    const horaInicio = reservaHoraInicioFromRow(reserva);
+    const reservaDt = new Date(`${reserva.fecha}T${horaInicio}:00-03:00`);
     const nowAR     = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
     const horasHasta = (reservaDt - nowAR) / (1000 * 60 * 60);
     const eligibleForCredit = horasHasta > 24;
@@ -2535,7 +2560,7 @@ app.post('/api/cancelar-reserva', async (req, res) => {
             userId: userIdReputacion,
             reservaId,
             fecha: reserva.fecha,
-            hora: reserva.hora,
+            hora: horaInicio,
             horasAnticipacion: horasHasta,
           });
           if (reputacionCancel?.suspension_creada) {
@@ -2900,11 +2925,10 @@ cron.schedule('*/5 * * * *', async () => {
     const targetFecha = target.toISOString().slice(0, 10); // YYYY-MM-DD
     const targetHora  = target.toTimeString().slice(0, 5);  // HH:MM
 
-    const { data: reservas, error } = await supabase
+    const { data: allDay, error } = await supabase
       .from('reservas')
       .select('*')
       .eq('fecha', targetFecha)
-      .eq('hora', targetHora)
       .eq('estado', 'confirmada')
       .eq('recordatorio_enviado', false);
 
@@ -2912,6 +2936,10 @@ cron.schedule('*/5 * * * *', async () => {
       console.error('❌ Cron recordatorio - error Supabase:', error.message);
       return;
     }
+
+    const reservas = (allDay || []).filter(
+      (r) => reservaHoraInicioFromRow(r) === targetHora,
+    );
 
     if (!reservas || reservas.length === 0) return;
 
@@ -2926,11 +2954,12 @@ cron.schedule('*/5 * * * *', async () => {
           .eq('nombre', r.sede)
           .maybeSingle();
 
+        const horaDisplay = reservaHoraInicioFromRow(r);
         const body =
 `🎾 *¡Te esperamos en ${r.sede}!*
 
 Tu reserva es en 1 hora:
-⏰ ${r.hora}hs${sedeRow?.direccion ? `\n📍 ${sedeRow.direccion}` : ''}
+⏰ ${horaDisplay}hs${sedeRow?.direccion ? `\n📍 ${sedeRow.direccion}` : ''}
 
 Recordá llegar 10 minutos antes.
 💬 Ante cualquier consulta escribinos por WhatsApp.
@@ -3323,11 +3352,13 @@ async function getSedesHabituales({ email, supabaseUserId, primarySedeId }) {
   if (email) {
     const { data: reservas } = await supabaseAdmin
       .from('reservas')
-      .select('sede')
+      .select('sede, sede_id')
       .eq('email', email);
 
     for (const reserva of reservas || []) {
-      if (reserva.sede) {
+      if (reserva.sede_id != null) {
+        addSede(reserva.sede_id);
+      } else if (reserva.sede) {
         const { data: sedeRow } = await supabaseAdmin
           .from('sedes')
           .select('id')

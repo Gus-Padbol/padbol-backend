@@ -13,7 +13,7 @@ export function parseReservaRouteId(raw) {
 
 async function fetchReservaForQrPg(pgPool, parsedId) {
   const { rows } = await pgPool.query(
-    `SELECT id, user_id, email, sede, estado, qr_token
+    `SELECT id, user_id, email, sede, sede_id, estado, qr_token
      FROM reservas
      WHERE id::text = $1
      LIMIT 1`,
@@ -38,7 +38,7 @@ function applySupabaseReservaIdFilter(query, parsedId) {
 async function fetchReservaForQrSupabase(supabaseAdmin, parsedId) {
   let query = supabaseAdmin
     .from('reservas')
-    .select('id, user_id, email, sede, estado, qr_token');
+    .select('id, user_id, email, sede, sede_id, estado, qr_token');
 
   query = applySupabaseReservaIdFilter(query, parsedId);
 
@@ -117,6 +117,9 @@ async function assertPuedeGenerarQrReserva({
   }
 
   if (rol === 'admin_club' && roleRow?.sede_id != null) {
+    if (reserva.sede_id != null && Number(reserva.sede_id) === Number(roleRow.sede_id)) {
+      return;
+    }
     let sedeNombre = null;
     if (pgPool) {
       const { rows } = await pgPool.query('SELECT nombre FROM sedes WHERE id = $1 LIMIT 1', [roleRow.sede_id]);

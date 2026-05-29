@@ -3,7 +3,9 @@ import {
   resolveReservaCanchaStorageText,
   normalizeHoraInicioReserva,
   computeHoraFinDesdeDuracion,
+  reservaLegacyHoraText,
 } from './partidos.js';
+import { sqlReservaHoraInicio, sqlReservaSedeMatch } from '../utils/reservasColumns.js';
 
 const BLOCKING_ESTADOS = ['confirmada', 'prereserva', 'pendiente'];
 
@@ -48,7 +50,7 @@ export function normalizeCrearPreferenciaReservaInput(body = {}) {
   }
 
   const horaRaw = src.hora_inicio ?? src.hora ?? '';
-  const hora = String(horaRaw).trim().split(' - ')[0].slice(0, 5);
+  const hora = normalizeHoraInicioReserva(horaRaw);
 
   return {
     reserva_id: parsePositiveInt(src.reserva_id ?? src.id),
@@ -56,6 +58,7 @@ export function normalizeCrearPreferenciaReservaInput(body = {}) {
     sede: src.sede ? String(src.sede).trim() : (body.sedeNombre ? String(body.sedeNombre).trim() : null),
     fecha: String(src.fecha || '').trim().slice(0, 10),
     hora,
+    hora_inicio: hora,
     hora_fin: src.hora_fin ? String(src.hora_fin).trim().slice(0, 5) : null,
     cancha_id: parsePositiveInt(src.cancha_id),
     cancha: src.cancha,
@@ -92,13 +95,31 @@ async function resolveSedeNombrePg(pgPool, { sede_id, sede }) {
   return rows[0]?.nombre ? String(rows[0].nombre).trim() : null;
 }
 
-async function assertSlotDisponiblePg(pgPool, { sedeNombre, fecha, hora, canchaText }) {
+async function resolveSedeIdPg(pgPool, { sede_id, sedeNombre }) {
+  const sid = parsePositiveInt(sede_id);
+  if (sid != null) return sid;
+  if (!sedeNombre || !pgPool) return null;
+  const { rows } = await pgPool.query(
+    'SELECT id FROM sedes WHERE lower(trim(nombre)) = lower(trim($1)) LIMIT 1',
+    [sedeNombre],
+  );
+  return rows[0]?.id != null ? Number(rows[0].id) : null;
+}
+
+async function assertSlotDisponiblePg(pgPool, { sedeNombre, sedeId, fecha, horaInicio, canchaText }) {
+  const hi = normalizeHoraInicioReserva(horaInicio);
+  const horaExpr = sqlReservaHoraInicio('');
+  const sedeExpr = sqlReservaSedeMatch('', '$1', '$2');
+
   const { rows } = await pgPool.query(
     `SELECT id, estado FROM reservas
-     WHERE sede = $1 AND fecha = $2 AND hora = $3 AND cancha = $4
-       AND estado = ANY($5::text[])
+     WHERE ${sedeExpr}
+       AND fecha = $3
+       AND left(${horaExpr}, 5) = $4
+       AND cancha = $5
+       AND estado = ANY($6::text[])
      LIMIT 1`,
-    [sedeNombre, fecha, hora, canchaText, BLOCKING_ESTADOS],
+    [sedeId ?? null, sedeNombre, fecha, hi, canchaText, BLOCKING_ESTADOS],
   );
   if (rows[0]) {
     const err = new Error('Este horario ya está reservado');
@@ -146,6 +167,8 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
     err.status = 400;
     throw err;
   }
+  const sedeId = await resolveSedeIdPg(pgPool, { sede_id: input.sede_id, sedeNombre });
+
   if (!input.fecha || !input.hora) {
     const err = new Error('Faltan fecha y hora para crear la reserva');
     err.status = 400;
@@ -161,18 +184,20 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
     cancha: input.cancha,
     cancha_id: input.cancha_id,
   });
-  const horaInicio = normalizeHoraInicioReserva(input.hora);
+  const horaInicio = normalizeHoraInicioReserva(input.hora_inicio ?? input.hora);
   const duracionMinutos = computeDuracionMinutos(horaInicio, input.hora_fin, input.duracion_minutos);
   const horaFin = input.hora_fin
     ? String(input.hora_fin).trim().slice(0, 5)
     : computeHoraFinDesdeDuracion(horaInicio, duracionMinutos);
+  const horaLegacy = reservaLegacyHoraText(horaInicio, horaFin);
   const precio = parsePositiveInt(input.precio) ?? 0;
   const contacto = String(input.whatsapp || input.telefono || '').trim();
 
   await assertSlotDisponiblePg(pgPool, {
     sedeNombre,
+    sedeId,
     fecha: input.fecha,
-    hora: horaInicio,
+    horaInicio,
     canchaText,
   });
 
@@ -189,9 +214,9 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
      RETURNING id`,
     [
       sedeNombre,
-      input.sede_id ?? null,
+      sedeId,
       input.fecha,
-      horaInicio,
+      horaLegacy,
       horaInicio,
       horaFin,
       canchaText,
@@ -212,6 +237,6 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
     throw new Error('No se pudo crear la reserva pendiente');
   }
 
-  console.log(`✓ Reserva pendiente creada id=${reservaId} (${sedeNombre} ${input.fecha} ${input.hora})`);
+  console.log(`✓ Reserva pendiente creada id=${reservaId} (${sedeNombre} ${input.fecha} ${horaInicio}-${horaFin})`);
   return { reserva_id: reservaId, created: true };
 }
