@@ -4186,5 +4186,6 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');
     console.log('✅ Extras sede: GET /api/sedes/:id/extras-admin + CRUD /api/sedes/:id/extras');
     console.log('✅ Torneo interés: POST/DELETE /api/sedes/:id/torneo-interes, GET /api/admin/sedes/:id/torneo-interes');
+    console.log(`✅ Fotos sede: POST /api/sedes/:id/fotos (máx. ${20} por sede)`);
   });
 })();

@@ -1,5 +1,12 @@
 import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
-import { enrichSedeWithHeroPhoto, normalizeSedeFotoUrls, resolveSedeHeroFotoUrl } from '../utils/sedeHero.js';
+import {
+  enrichSedeWithHeroPhoto,
+  capSedeFotoUrls,
+  capSedeFotosDestacadas,
+  MAX_FOTOS_SEDE,
+  normalizeSedeFotoUrls,
+  resolveSedeHeroFotoUrl,
+} from '../utils/sedeHero.js';
 import { fetchSedeUpcomingPartidos } from './partidos.js';
 
 function parseSedeId(raw) {
@@ -302,7 +309,10 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       }
       if (hop('fotos_destacadas')) {
         const raw = Array.isArray(body.fotos_destacadas) ? body.fotos_destacadas : [];
-        patch.fotos_destacadas = raw.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 4);
+        patch.fotos_destacadas = capSedeFotosDestacadas(raw);
+      }
+      if (hop('fotos_urls')) {
+        patch.fotos_urls = capSedeFotoUrls(Array.isArray(body.fotos_urls) ? body.fotos_urls : []);
       }
 
       const passthrough = [
@@ -368,6 +378,105 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
     } catch (err) {
       console.error('❌ Error PATCH /api/sedes/:id:', err.message);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/sedes/:id/fotos', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const sedeId = parseSedeId(req.params.id);
+      if (sedeId == null) {
+        return res.status(400).json({ error: 'ID de sede inválido' });
+      }
+
+      const { foto_base64, mime_type } = req.body ?? {};
+      if (!foto_base64) {
+        return res.status(400).json({ error: 'foto_base64 es requerido' });
+      }
+
+      const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      const normalizedMime = String(mime_type || 'image/jpeg').toLowerCase();
+      if (!allowedMimeTypes.includes(normalizedMime)) {
+        return res.status(400).json({ error: 'mime_type de imagen no soportado' });
+      }
+
+      const { data: sedeRow, error: fetchErr } = await supabaseAdmin
+        .from('sedes')
+        .select('id, fotos_urls')
+        .eq('id', sedeId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!sedeRow) {
+        return res.status(404).json({ error: 'Sede no encontrada' });
+      }
+
+      const currentFotos = normalizeSedeFotoUrls(sedeRow.fotos_urls);
+      if (currentFotos.length >= MAX_FOTOS_SEDE) {
+        return res.status(409).json({
+          error: `La sede ya tiene el máximo de ${MAX_FOTOS_SEDE} fotos`,
+          max_fotos: MAX_FOTOS_SEDE,
+        });
+      }
+
+      const base64Data = String(foto_base64).replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+      if (!buffer.length) {
+        return res.status(400).json({ error: 'Imagen inválida' });
+      }
+
+      const maxBytes = 2 * 1024 * 1024;
+      if (buffer.length > maxBytes) {
+        return res.status(400).json({ error: 'La imagen supera el tamaño máximo permitido (2 MB)' });
+      }
+
+      const ext = normalizedMime.includes('png')
+        ? 'png'
+        : normalizedMime.includes('webp')
+          ? 'webp'
+          : 'jpg';
+      const storagePath = `${sedeId}/fotos/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from('sedes')
+        .upload(storagePath, buffer, {
+          contentType: normalizedMime,
+          upsert: false,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabaseAdmin.storage.from('sedes').getPublicUrl(storagePath);
+      const fotoUrl = publicUrlData?.publicUrl;
+      if (!fotoUrl) {
+        return res.status(500).json({ error: 'No se pudo obtener la URL pública de la foto' });
+      }
+
+      const fotos_urls = capSedeFotoUrls([...currentFotos, fotoUrl]);
+
+      const { data: updated, error: updateErr } = await supabaseAdmin
+        .from('sedes')
+        .update({ fotos_urls })
+        .eq('id', sedeId)
+        .select('*')
+        .single();
+
+      if (updateErr) throw updateErr;
+
+      console.log(`✓ POST /api/sedes/${sedeId}/fotos — ${fotos_urls.length}/${MAX_FOTOS_SEDE}`);
+      return res.status(201).json({
+        ok: true,
+        foto_url: fotoUrl,
+        fotos_urls,
+        sede: enrichSedeWithHeroPhoto(updated),
+      });
+    } catch (err) {
+      console.error('❌ POST /api/sedes/:id/fotos:', err.message);
+      return res.status(500).json({ error: err.message || 'Error al subir foto' });
     }
   });
 }
