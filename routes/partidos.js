@@ -1,5 +1,5 @@
 import express from 'express';
-import { sendPushToUser } from '../utils/push.js';
+import { notifyPartidoJugadorUnido, sendPushToUser } from '../utils/push.js';
 import { createNotificacion } from '../utils/notificaciones.js';
 import { generarIniciosMinutosSlotReserva, minutosAHoraReserva } from '../lib/reservaSlotsHorarios.js';
 import {
@@ -2312,6 +2312,19 @@ export function createPartidosRouter({
       }
 
       const hostNombre = await resolveHostName(partido, supabaseAdmin);
+      const jugadorPerfil = await fetchJugadorPerfilPublic(supabaseAdmin, user.id, user.email);
+      const jugadorNombre =
+        jugadorPerfil?.nombre_saludo
+        ?? jugadorPerfil?.apodo
+        ?? jugadorPerfil?.nombre
+        ?? emailLocalPart(user.email)
+        ?? 'Un jugador';
+
+      await notifyPartidoJugadorUnido(
+        supabaseAdmin,
+        { ...partido, id: partidoId },
+        jugadorNombre,
+      );
 
       console.log(`✓ POST /api/partidos/${partidoId}/unirse — ${user.email ?? user.id}`);
       res.json({

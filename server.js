@@ -48,6 +48,12 @@ import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
+import { mountPushRoutes } from './routes/push.js';
+import {
+  notifyReservaConfirmada,
+  notifyTorneoInscripcionConfirmada,
+  notifyTorneoSorteoPublicado,
+} from './utils/push.js';
 
 globalThis.WebSocket = ws;
 
@@ -1199,6 +1205,12 @@ app.post('/api/reservas', async (req, res) => {
           direccion: sedeRow?.direccion,
         }).catch((err) => console.warn('⚠️ WhatsApp no enviado:', err.message));
       }
+
+      if (reserva.estado === 'confirmada' && reserva.user_id) {
+        notifyReservaConfirmada(supabaseAdmin, reserva).catch((err) =>
+          console.warn('⚠️ Push reserva confirmada:', err.message),
+        );
+      }
     }
 
     const mappedReserva = mapMisReservaRow({ ...reserva, sedes: { nombre: sedeNombre } });
@@ -1280,6 +1292,12 @@ app.post('/api/reservas/:id/confirmar', async (req, res) => {
         cancha: updated.cancha,
         direccion: sedeRow?.direccion,
       }).catch((err) => console.warn('⚠️ WhatsApp no enviado:', err.message));
+    }
+
+    if (updated?.user_id) {
+      notifyReservaConfirmada(supabaseAdmin, updated).catch((err) =>
+        console.warn('⚠️ Push reserva confirmada:', err.message),
+      );
     }
 
     console.log(`✓ POST /api/reservas/${reservaId}/confirmar — confirmada, pago_estado=pagado`);
@@ -1485,6 +1503,7 @@ function generarGruposKnockout(equipos, torneoId, sedeId) {
 
 // ===== TORNEOS =====
 mountTorneosFinalizadosRoutes(app, { pgPool });
+mountPushRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 
 app.post('/api/torneos', async (req, res) => {
   try {
@@ -1618,6 +1637,11 @@ app.post('/api/torneos/confirmar-inscripcion', async (req, res) => {
       .eq('id', eid);
 
     if (errUp) throw errUp;
+
+    notifyTorneoInscripcionConfirmada(supabaseAdmin, eid, tid).catch((err) =>
+      console.warn('⚠️ Push inscripción torneo:', err.message),
+    );
+
     res.json({ ok: true });
   } catch (err) {
     console.error('❌ POST /api/torneos/confirmar-inscripcion:', err.message);
@@ -1715,6 +1739,10 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
     if (errPartidos) throw errPartidos;
 
     await supabase.from('torneos').update({ estado: 'en_curso' }).eq('id', id);
+
+    notifyTorneoSorteoPublicado(supabaseAdmin, parseInt(id, 10)).catch((err) =>
+      console.warn('⚠️ Push sorteo torneo:', err.message),
+    );
 
     console.log(`✅ ${partidos.length} partidos generados para torneo ${id} (${torneo.tipo_torneo})`);
     res.json({ partidos, total: partidos.length, formato: torneo.tipo_torneo });
@@ -4183,6 +4211,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ QR reserva: POST /api/reservas/:id/generar-qr');
     console.log('✅ Perfil público: GET /api/jugador/perfil-publico/:userId');
     console.log('✅ Torneos: GET /api/torneos/finalizados');
+    console.log('✅ Push: POST /api/push-tokens, POST /api/push/send');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');
     console.log('✅ Extras sede: GET /api/sedes/:id/extras-admin + CRUD /api/sedes/:id/extras');
     console.log('✅ Torneo interés: POST/DELETE /api/sedes/:id/torneo-interes, GET /api/admin/sedes/:id/torneo-interes');
