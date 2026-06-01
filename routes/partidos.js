@@ -909,38 +909,84 @@ async function userCanAccessPartido(partidoId, user, supabaseAdmin) {
   return { allowed: true, partido };
 }
 
-async function enrichPartidoJugadoresRows(jugadoresRows, supabaseAdmin) {
+function mapJugadorRowFromPerfil(row, perfil) {
+  const mapped = mapSolicitanteFromPerfil(perfil);
+
+  return {
+    user_id: row.user_id,
+    email: row.email ?? perfil?.email ?? null,
+    joined_at: row.joined_at ?? null,
+    nombre: mapped.nombre,
+    apodo: mapped.apodo,
+    username: mapped.username,
+    nombre_saludo: mapped.nombre_saludo,
+    foto_url: mapped.foto_url,
+  };
+}
+
+async function fetchPerfilesByUserIds(supabaseAdmin, userIds) {
+  const uniqueIds = [...new Set((userIds ?? []).filter(Boolean))];
+  if (uniqueIds.length === 0) return {};
+
+  const { data, error } = await supabaseAdmin
+    .from('jugadores_perfil')
+    .select('nombre, nombre_saludo, apodo, username, foto_url, nivel, email, user_id')
+    .in('user_id', uniqueIds);
+
+  if (error) throw error;
+
+  const map = {};
+  (data ?? []).forEach((perfil) => {
+    if (perfil?.user_id) map[perfil.user_id] = perfil;
+  });
+  return map;
+}
+
+async function enrichPartidoJugadoresRows(jugadoresRows, supabaseAdmin, { capitanUserId, capitanEmail } = {}) {
   const sorted = [...(jugadoresRows ?? [])].sort(
     (a, b) => new Date(a.joined_at ?? 0) - new Date(b.joined_at ?? 0),
   );
 
-  return Promise.all(
-    sorted.map(async (row) => {
-      const perfil = await fetchJugadorPerfilPublic(supabaseAdmin, row.user_id, row.email);
-      const mapped = mapSolicitanteFromPerfil(perfil);
+  if (
+    capitanUserId
+    && !sorted.some((row) => row.user_id && String(row.user_id) === String(capitanUserId))
+  ) {
+    sorted.unshift({
+      user_id: capitanUserId,
+      email: capitanEmail ?? null,
+      joined_at: null,
+    });
+  }
 
-      return {
-        user_id: row.user_id,
-        email: row.email ?? perfil?.email ?? null,
-        joined_at: row.joined_at ?? null,
-        nombre: mapped.nombre,
-        apodo: mapped.apodo,
-        username: mapped.username,
-        nombre_saludo: mapped.nombre_saludo,
-        foto_url: mapped.foto_url,
-      };
+  const userIds = sorted.map((row) => row.user_id).filter(Boolean);
+  const perfilByUserId = await fetchPerfilesByUserIds(supabaseAdmin, userIds);
+
+  const enriched = await Promise.all(
+    sorted.map(async (row) => {
+      let perfil = row.user_id ? perfilByUserId[row.user_id] ?? null : null;
+
+      if (!perfil) {
+        perfil = await fetchJugadorPerfilPublic(supabaseAdmin, row.user_id, row.email);
+      }
+
+      return mapJugadorRowFromPerfil(row, perfil);
     }),
   );
+
+  return enriched;
 }
 
 async function mapPartidoRow(partido, supabaseAdmin, user = null) {
   const hostNombre = await resolveHostName(partido, supabaseAdmin);
   const capitanFotoUrl = await resolveCapitanFotoUrl(partido, supabaseAdmin);
   const jugadoresRows = [...(partido.partidos_abiertos_jugadores ?? [])];
-  const enrichedJugadores = await enrichPartidoJugadoresRows(jugadoresRows, supabaseAdmin);
-  const participantUserIds = enrichedJugadores.map((row) => row.user_id).filter(Boolean);
   const capitanUserId = getCapitanUserId(partido);
   const capitanEmail = getCapitanEmail(partido);
+  const enrichedJugadores = await enrichPartidoJugadoresRows(jugadoresRows, supabaseAdmin, {
+    capitanUserId,
+    capitanEmail,
+  });
+  const participantUserIds = enrichedJugadores.map((row) => row.user_id).filter(Boolean);
   const jugadoresActuales = getJugadoresConfirmados(partido, jugadoresRows.length) ?? jugadoresRows.length;
   const maxJugadores = getJugadoresRequeridos(partido);
 
