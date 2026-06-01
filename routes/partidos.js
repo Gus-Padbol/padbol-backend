@@ -909,12 +909,36 @@ async function userCanAccessPartido(partidoId, user, supabaseAdmin) {
   return { allowed: true, partido };
 }
 
+async function enrichPartidoJugadoresRows(jugadoresRows, supabaseAdmin) {
+  const sorted = [...(jugadoresRows ?? [])].sort(
+    (a, b) => new Date(a.joined_at ?? 0) - new Date(b.joined_at ?? 0),
+  );
+
+  return Promise.all(
+    sorted.map(async (row) => {
+      const perfil = await fetchJugadorPerfilPublic(supabaseAdmin, row.user_id, row.email);
+      const mapped = mapSolicitanteFromPerfil(perfil);
+
+      return {
+        user_id: row.user_id,
+        email: row.email ?? perfil?.email ?? null,
+        joined_at: row.joined_at ?? null,
+        nombre: mapped.nombre,
+        apodo: mapped.apodo,
+        username: mapped.username,
+        nombre_saludo: mapped.nombre_saludo,
+        foto_url: mapped.foto_url,
+      };
+    }),
+  );
+}
+
 async function mapPartidoRow(partido, supabaseAdmin, user = null) {
   const hostNombre = await resolveHostName(partido, supabaseAdmin);
   const capitanFotoUrl = await resolveCapitanFotoUrl(partido, supabaseAdmin);
-  const jugadoresRows = [...(partido.partidos_abiertos_jugadores ?? [])]
-    .sort((a, b) => new Date(a.joined_at ?? 0) - new Date(b.joined_at ?? 0));
-  const participantUserIds = jugadoresRows.map((row) => row.user_id).filter(Boolean);
+  const jugadoresRows = [...(partido.partidos_abiertos_jugadores ?? [])];
+  const enrichedJugadores = await enrichPartidoJugadoresRows(jugadoresRows, supabaseAdmin);
+  const participantUserIds = enrichedJugadores.map((row) => row.user_id).filter(Boolean);
   const capitanUserId = getCapitanUserId(partido);
   const capitanEmail = getCapitanEmail(partido);
   const jugadoresActuales = getJugadoresConfirmados(partido, jugadoresRows.length) ?? jugadoresRows.length;
@@ -947,6 +971,7 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
     host_email: capitanEmail,
     host_user_id: capitanUserId,
     participant_user_ids: participantUserIds,
+    partidos_abiertos_jugadores: enrichedJugadores,
     es_anfitrion: user ? capitanUserId === user.id : false,
     soy_participante: user
       ? participantUserIds.includes(user.id) || capitanUserId === user.id

@@ -272,7 +272,11 @@ export async function buildPublicPerfilPayloadPg(pgPool, identifier) {
   return {
     user_id: perfil.user_id ?? null,
     display_name: buildDisplayName(perfil),
-    username: perfil.username ?? perfil.apodo ?? perfil.alias ?? null,
+    nombre: perfil.nombre ?? null,
+    apellido: perfil.apellido ?? null,
+    apodo: perfil.apodo ?? null,
+    nombre_saludo: perfil.nombre_saludo ?? null,
+    username: perfil.username ?? perfil.alias ?? null,
     foto_url: perfil.foto_url ?? null,
     nivel: perfil.nivel ?? null,
     lateralidad: perfil.lateralidad ?? null,
