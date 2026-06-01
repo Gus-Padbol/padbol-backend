@@ -48,6 +48,51 @@ function buildDisplayName(perfil) {
   return String(perfil?.username ?? '').trim() || 'Jugador';
 }
 
+const PERFIL_PUBLICO_COLUMNS = [
+  'id',
+  'user_id',
+  'nombre',
+  'apellido',
+  'apodo',
+  'username',
+  'alias',
+  'foto_url',
+  'nivel',
+  'lateralidad',
+  'posicion_cancha',
+  'pais',
+  'email',
+  'deportes',
+].join(', ');
+
+/** Diestro / Zurdo / Ambas — from mano_preferida or legacy lateralidad (Derecho). */
+function mapManoPreferida(perfil) {
+  const explicit = String(perfil?.mano_preferida ?? '').trim();
+  if (explicit) {
+    const key = explicit.toLowerCase();
+    if (key === 'diestro' || key === 'derecho') return 'Diestro';
+    if (key === 'zurdo') return 'Zurdo';
+    if (key === 'ambas' || key === 'ambidiestro') return 'Ambas';
+    return explicit;
+  }
+
+  const lat = String(perfil?.lateralidad ?? '').trim().toLowerCase();
+  if (lat === 'diestro' || lat === 'derecho') return 'Diestro';
+  if (lat === 'zurdo') return 'Zurdo';
+  if (lat === 'ambas' || lat === 'ambidiestro') return 'Ambas';
+  return null;
+}
+
+function mapPosicionCancha(perfil) {
+  const raw = String(perfil?.posicion_cancha ?? '').trim();
+  if (!raw) return null;
+  const key = raw.toLowerCase();
+  if (key === 'derecha') return 'Derecha';
+  if (key === 'izquierda') return 'Izquierda';
+  if (key === 'ambas' || key === 'ambos') return 'Ambas';
+  return raw;
+}
+
 function posicionFinalLabel(posicion) {
   const n = Number(posicion);
   if (n === 1) return '1ro';
@@ -88,7 +133,7 @@ async function fetchPerfilPg(pgPool, identifier) {
 
   if (parsed.kind === 'email') {
     const { rows } = await pgPool.query(
-      `SELECT id, user_id, nombre, apellido, apodo, username, alias, foto_url, nivel, lateralidad, pais, email, deportes
+      `SELECT ${PERFIL_PUBLICO_COLUMNS}
        FROM jugadores_perfil
        WHERE lower(trim(email)) = $1
        LIMIT 1`,
@@ -99,7 +144,7 @@ async function fetchPerfilPg(pgPool, identifier) {
 
   if (parsed.kind === 'user_id') {
     const { rows } = await pgPool.query(
-      `SELECT id, user_id, nombre, apellido, apodo, username, alias, foto_url, nivel, lateralidad, pais, email, deportes
+      `SELECT ${PERFIL_PUBLICO_COLUMNS}
        FROM jugadores_perfil
        WHERE user_id = $1::uuid
        LIMIT 1`,
@@ -111,7 +156,7 @@ async function fetchPerfilPg(pgPool, identifier) {
 
   if (parsed.kind === 'profile_id') {
     const { rows } = await pgPool.query(
-      `SELECT id, user_id, nombre, apellido, apodo, username, alias, foto_url, nivel, lateralidad, pais, email, deportes
+      `SELECT ${PERFIL_PUBLICO_COLUMNS}
        FROM jugadores_perfil
        WHERE id::text = $1
        LIMIT 1`,
@@ -122,7 +167,7 @@ async function fetchPerfilPg(pgPool, identifier) {
 
   const username = parsed.value.toLowerCase();
   const { rows } = await pgPool.query(
-    `SELECT id, user_id, nombre, apellido, apodo, username, alias, foto_url, nivel, lateralidad, pais, email, deportes
+    `SELECT ${PERFIL_PUBLICO_COLUMNS}
      FROM jugadores_perfil
      WHERE lower(trim(username)) = $1
         OR lower(trim(apodo)) = $1
@@ -280,6 +325,8 @@ export async function buildPublicPerfilPayloadPg(pgPool, identifier) {
     foto_url: perfil.foto_url ?? null,
     nivel: perfil.nivel ?? null,
     lateralidad: perfil.lateralidad ?? null,
+    mano_preferida: mapManoPreferida(perfil),
+    posicion_cancha: mapPosicionCancha(perfil),
     pais: perfil.pais ?? null,
     deportes,
     deporte_principal: deportes[0] ?? null,
