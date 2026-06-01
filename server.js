@@ -3540,6 +3540,7 @@ async function buildAuthenticatedPerfilPayload(perfil, user, deportes) {
     telefono: perfil.telefono ?? '',
     nivel: perfil.nivel ?? '',
     lateralidad: perfil.lateralidad ?? '',
+    posicion_cancha: perfil.posicion_cancha ?? null,
     pais: perfil.pais ?? '',
     email: perfil.email ?? user.email ?? '',
     foto_url: perfil.foto_url ?? null,
@@ -3607,6 +3608,7 @@ async function handlePutAuthenticatedPerfil(req, res) {
       telefono,
       nivel,
       lateralidad,
+      posicion_cancha: posicionCancha,
       pais,
       username,
       apodo,
@@ -3625,6 +3627,10 @@ async function handlePutAuthenticatedPerfil(req, res) {
     if (telefono != null) updatePayload.telefono = telefono;
     if (nivel != null) updatePayload.nivel = nivel;
     if (lateralidad != null) updatePayload.lateralidad = lateralidad;
+    if (posicionCancha != null) {
+      const trimmed = String(posicionCancha).trim();
+      updatePayload.posicion_cancha = trimmed || null;
+    }
     if (pais != null) updatePayload.pais = pais;
     if (apodo !== undefined) {
       const trimmedApodo = String(apodo ?? '').trim();
