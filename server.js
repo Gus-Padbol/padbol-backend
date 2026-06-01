@@ -3679,6 +3679,37 @@ jugadorRouter.get('/perfil', handleGetAuthenticatedPerfil);
 // PUT /api/jugador/perfil — Update authenticated player profile
 jugadorRouter.put('/perfil', handlePutAuthenticatedPerfil);
 
+// GET /api/jugador/perfiles?user_ids=uuid1,uuid2 — Batch jugadores_perfil for partido slots
+jugadorRouter.get('/perfiles', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status).json({ error: authError });
+    }
+
+    const userIds = String(req.query.user_ids ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+
+    if (userIds.length === 0) {
+      return res.json([]);
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .select('user_id, nombre, nombre_saludo, apodo, username, foto_url, email')
+      .in('user_id', userIds);
+
+    if (error) throw error;
+
+    return res.json(data ?? []);
+  } catch (err) {
+    console.error('❌ Error GET /api/jugador/perfiles:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/jugador/rankings — Authenticated player's earned ranking positions
 jugadorRouter.get('/rankings', async (req, res) => {
   try {
