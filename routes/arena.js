@@ -1,4 +1,11 @@
 import express from 'express';
+import {
+  LOGROS_COMPORTAMIENTO,
+  evaluaComportamientoLogro,
+  fetchComportamientoLogrosMetrics,
+  sincronizarLogrosArena,
+} from '../src/arena/logrosSyncService.js';
+import { actualizarRango } from '../src/rangos/rangosService.js';
 
 const LOGROS_DEFINITIONS = [
   { slug: 'primer_partido', meta: 1, metric: 'partidos_jugados' },
@@ -271,25 +278,27 @@ export function mountArenaRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
         return res.status(status).json({ error: authError });
       }
 
-      const metrics = await fetchUserMetrics(supabaseAdmin, user);
+      const [metrics, comportamientoBase] = await Promise.all([
+        fetchUserMetrics(supabaseAdmin, user),
+        fetchComportamientoLogrosMetrics(supabaseAdmin, user),
+      ]);
 
-      let unlockedRows = [];
-      const { data: dbLogros, error: logrosErr } = await supabaseAdmin
-        .from('logros_jugador')
-        .select('slug, desbloqueado_en')
-        .eq('user_id', user.id);
+      const comportamientoMetrics = {
+        ...comportamientoBase,
+        partidos_jugados: metrics.partidos_jugados,
+      };
 
-      if (logrosErr) {
-        if (!isMissingTable(logrosErr)) throw logrosErr;
-      } else {
-        unlockedRows = dbLogros ?? [];
-      }
+      const sync = await sincronizarLogrosArena(supabaseAdmin, user, {
+        metricDefinitions: LOGROS_DEFINITIONS,
+        metrics,
+        comportamientoMetrics,
+      });
 
       const unlockedBySlug = Object.fromEntries(
-        unlockedRows.map((row) => [row.slug, row.desbloqueado_en ?? null]),
+        [...sync.existentes.entries()].map(([slug, desbloqueadoEn]) => [slug, desbloqueadoEn]),
       );
 
-      const logros = LOGROS_DEFINITIONS.map((def) => {
+      const logrosMetricas = LOGROS_DEFINITIONS.map((def) => {
         const { progreso, desbloqueado } = resolveProgress(def, metrics);
         const dbUnlockedAt = unlockedBySlug[def.slug] ?? null;
         return {
@@ -303,13 +312,35 @@ export function mountArenaRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
         };
       });
 
+      const logrosComportamiento = LOGROS_COMPORTAMIENTO.map((def) => {
+        const desbloqueado = evaluaComportamientoLogro(def.slug, comportamientoMetrics)
+          || Boolean(unlockedBySlug[def.slug]);
+        return {
+          slug: def.slug,
+          nombre: def.nombre,
+          tipo: 'comportamiento',
+          desbloqueado,
+          desbloqueado_en: unlockedBySlug[def.slug] ?? null,
+        };
+      });
+
+      const logros = [...logrosMetricas, ...logrosComportamiento];
       const unlockedCount = logros.filter((l) => l.desbloqueado).length;
+
+      const rango = await actualizarRango(supabaseAdmin, user.id).catch((err) => {
+        console.warn('⚠️ actualizarRango logros:', err.message);
+        return null;
+      });
 
       res.json({
         logros,
         unlockedCount,
-        total: LOGROS_DEFINITIONS.length,
+        total: LOGROS_DEFINITIONS.length + LOGROS_COMPORTAMIENTO.length,
         metrics,
+        comportamientoMetrics,
+        logros_nuevos: sync.insertados,
+        xp: sync.xp,
+        rango,
       });
     } catch (err) {
       console.error('❌ GET /api/arena/logros', err.message);
