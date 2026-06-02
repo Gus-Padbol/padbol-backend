@@ -1,4 +1,8 @@
-import { sumarXP, getXPJugador } from '../xp/xpService.js';
+import { getXPJugador } from '../xp/xpService.js';
+import { LIGAS, XP_VALORES } from '../xp/xpConfig.js';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const XP_LOGRO_DESBLOQUEADO = XP_VALORES.LOGRO_DESBLOQUEADO ?? 150;
 
 export const LOGROS_COMPORTAMIENTO = [
   { slug: 'en_cancha', nombre: 'En cancha' },
@@ -22,6 +26,158 @@ function isMissingTable(error) {
 function isDuplicateError(error) {
   const message = String(error?.message ?? '').toLowerCase();
   return error?.code === '23505' || message.includes('duplicate') || message.includes('unique');
+}
+
+function isValidUserId(userId) {
+  return Boolean(userId) && UUID_REGEX.test(String(userId));
+}
+
+function calcularLiga(xpTotal) {
+  let liga = 'INIT';
+  for (const row of LIGAS) {
+    if (xpTotal >= row.min) liga = row.nombre;
+  }
+  return liga;
+}
+
+function isMissingRpc(error) {
+  const message = String(error?.message ?? '').toLowerCase();
+  return (
+    error?.code === 'PGRST202'
+    || error?.code === '42883'
+    || message.includes('sumar_xp')
+    || message.includes('could not find the function')
+    || message.includes('function') && message.includes('does not exist')
+  );
+}
+
+async function sumarXPDirectoFallback(supabaseAdmin, userId, {
+  tipo,
+  xp,
+  descripcion,
+  referenciaId = null,
+}) {
+  const { data: perfil, error: readErr } = await supabaseAdmin
+    .from('jugadores_perfil')
+    .select('xp, user_id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (readErr) {
+    console.error('[logrosSync] fallback read jugadores_perfil:', readErr.message);
+    throw readErr;
+  }
+
+  const xpAnterior = Number(perfil?.xp ?? 0);
+  const xpTotal = xpAnterior + xp;
+  const liga = calcularLiga(xpTotal);
+
+  if (perfil?.user_id) {
+    const { error: updateErr } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .update({ xp: xpTotal, liga })
+      .eq('user_id', userId);
+
+    if (updateErr) {
+      console.error('[logrosSync] fallback UPDATE jugadores_perfil:', updateErr.message);
+      throw updateErr;
+    }
+  } else {
+    const { error: insertErr } = await supabaseAdmin
+      .from('jugadores_perfil')
+      .insert({ user_id: userId, xp: xpTotal, liga });
+
+    if (insertErr) {
+      console.error('[logrosSync] fallback INSERT jugadores_perfil:', insertErr.message);
+      throw insertErr;
+    }
+  }
+
+  const { error: txErr } = await supabaseAdmin
+    .from('xp_transacciones')
+    .insert({
+      user_id: userId,
+      tipo,
+      xp,
+      descripcion,
+      referencia_id: referenciaId,
+      xp_total_despues: xpTotal,
+      liga_despues: liga,
+    });
+
+  if (txErr && !isMissingTable(txErr)) {
+    console.warn('[logrosSync] fallback xp_transacciones insert:', txErr.message);
+  }
+
+  console.log('[logrosSync] sumarXP fallback OK', { userId, xpTotal, liga, xpSumado: xp });
+  return { xp_sumado: xp, xp_total: xpTotal, liga, via: 'fallback' };
+}
+
+async function sumarXPLogroDesbloqueado(supabaseAdmin, userId, slug) {
+  if (!isValidUserId(userId)) {
+    console.error('[logrosSync] sumarXP omitido — user_id inválido o null:', userId);
+    return null;
+  }
+
+  const tipo = 'LOGRO_DESBLOQUEADO';
+  const descripcion = `Logro desbloqueado: ${slug}`;
+  const xp = XP_LOGRO_DESBLOQUEADO;
+
+  console.log('[logrosSync] sumarXP RPC intento', {
+    userId,
+    slug,
+    tipo,
+    xp,
+    referencia_id: slug,
+  });
+
+  const { data, error } = await supabaseAdmin.rpc('sumar_xp', {
+    p_user_id: userId,
+    p_tipo: tipo,
+    p_xp: xp,
+    p_descripcion: descripcion,
+    p_referencia_id: slug,
+  });
+
+  if (!error) {
+    const row = Array.isArray(data) ? data[0] : data;
+    console.log('[logrosSync] sumarXP RPC OK', { userId, slug, result: row });
+    return {
+      xp_sumado: row?.xp_sumado ?? xp,
+      xp_total: row?.xp_total ?? null,
+      liga: row?.liga ?? null,
+      via: 'rpc',
+    };
+  }
+
+  console.warn('[logrosSync] sumarXP RPC falló', {
+    userId,
+    slug,
+    code: error.code,
+    message: error.message,
+    details: error.details,
+    hint: error.hint,
+  });
+
+  if (!isMissingRpc(error) && !isMissingTable(error)) {
+    console.warn('[logrosSync] RPC error no reconocido como missing — intentando fallback igualmente');
+  }
+
+  try {
+    return await sumarXPDirectoFallback(supabaseAdmin, userId, {
+      tipo,
+      xp,
+      descripcion,
+      referenciaId: slug,
+    });
+  } catch (fallbackErr) {
+    console.error('[logrosSync] sumarXP fallback falló', {
+      userId,
+      slug,
+      message: fallbackErr.message,
+    });
+    return null;
+  }
 }
 
 function buildUserReservaFilters(user) {
@@ -201,26 +357,41 @@ async function insertLogroJugador(supabaseAdmin, userId, slug) {
 }
 
 export async function sincronizarLogrosDesbloqueados(supabaseAdmin, userId, slugsNuevos) {
+  if (!isValidUserId(userId)) {
+    console.error('[logrosSync] sync omitido — user_id inválido:', userId);
+    return { insertados: [], existentes: new Map() };
+  }
+
   const nuevos = [...new Set((slugsNuevos ?? []).map((s) => String(s).trim().toLowerCase()).filter(Boolean))];
   const existentes = await fetchExistingLogroSlugs(supabaseAdmin, userId);
   const insertados = [];
+
+  console.log('[logrosSync] sincronizarLogrosDesbloqueados', {
+    userId,
+    candidatos: nuevos.length,
+    yaEnDb: existentes.size,
+  });
 
   for (const slug of nuevos) {
     if (existentes.has(slug)) continue;
 
     const inserted = await insertLogroJugador(supabaseAdmin, userId, slug);
-    if (!inserted) continue;
+    if (!inserted) {
+      console.warn('[logrosSync] no se insertó logro_jugador', { userId, slug });
+      continue;
+    }
 
     existentes.set(slug, new Date().toISOString());
     insertados.push(slug);
 
-    await sumarXP(
-      supabaseAdmin,
-      userId,
-      'LOGRO_DESBLOQUEADO',
-      `Logro desbloqueado: ${slug}`,
-      slug,
-    ).catch((err) => console.warn(`⚠️ XP logro ${slug}:`, err.message));
+    const xpResult = await sumarXPLogroDesbloqueado(supabaseAdmin, userId, slug);
+    if (!xpResult) {
+      console.warn('[logrosSync] sumarXP sin resultado para logro', { userId, slug });
+    }
+  }
+
+  if (insertados.length) {
+    console.log('[logrosSync] logros insertados', { userId, insertados });
   }
 
   return { insertados, existentes };
@@ -231,6 +402,17 @@ export async function sincronizarLogrosArena(supabaseAdmin, user, {
   metrics = {},
   comportamientoMetrics = null,
 } = {}) {
+  const userId = user?.id ?? null;
+  if (!isValidUserId(userId)) {
+    console.error('[logrosSync] sincronizarLogrosArena — user.id inválido:', userId, user?.email);
+    return {
+      insertados: [],
+      existentes: new Map(),
+      xp: { xp: 0, liga: 'INIT' },
+      comportamientoMetrics: comportamientoMetrics ?? {},
+    };
+  }
+
   const compMetrics = comportamientoMetrics
     ?? await fetchComportamientoLogrosMetrics(supabaseAdmin, user);
 
@@ -253,8 +435,8 @@ export async function sincronizarLogrosArena(supabaseAdmin, user, {
     }
   }
 
-  const sync = await sincronizarLogrosDesbloqueados(supabaseAdmin, user.id, slugsCalculados);
-  const xp = await getXPJugador(supabaseAdmin, user.id);
+  const sync = await sincronizarLogrosDesbloqueados(supabaseAdmin, userId, slugsCalculados);
+  const xp = await getXPJugador(supabaseAdmin, userId);
 
   return {
     ...sync,
