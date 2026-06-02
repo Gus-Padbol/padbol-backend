@@ -44,6 +44,7 @@ import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js'
 import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
 import { mountTorneoInteresRoutes } from './routes/torneoInteres.js';
 import { mountListaEsperaGeneralRoutes } from './routes/listaEsperaGeneral.js';
+import { mountLogrosPremiosRoutes } from './routes/logrosPremios.js';
 import { enrichSedeWithHeroPhoto } from './utils/sedeHero.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
@@ -805,6 +806,12 @@ mountTorneoInteresRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountListaEsperaGeneralRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountLogrosPremiosRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
@@ -4277,6 +4284,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ XP ARENA: GET /api/xp/mi-xp, GET /api/xp/historial');
     console.log('✅ Partidos: POST /api/partidos/:id/resultado');
     console.log('✅ Arena: POST /api/arena/logros');
+    console.log('✅ Logros premios: GET /api/logros-premios/:sede_id, POST/DELETE /api/admin/logros-premios');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');
     console.log('✅ Extras sede: GET /api/sedes/:id/extras-admin + CRUD /api/sedes/:id/extras');
     console.log('✅ Torneo interés: POST/DELETE /api/sedes/:id/torneo-interes, GET /api/admin/sedes/:id/torneo-interes');
