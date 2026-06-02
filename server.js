@@ -3655,9 +3655,11 @@ async function handlePutAuthenticatedPerfil(req, res) {
       updatePayload.posicion_cancha = trimmed || null;
     }
     if (pais != null) updatePayload.pais = pais;
-    if (apodo !== undefined) {
-      const trimmedApodo = String(apodo ?? '').trim();
-      updatePayload.apodo = trimmedApodo || null;
+    if (apodo !== undefined && apodo !== '') {
+      const trimmedApodo = String(apodo).trim();
+      if (trimmedApodo) {
+        updatePayload.apodo = trimmedApodo;
+      }
     }
     if (normalizedUsername) {
       updatePayload.username = normalizedUsername;
