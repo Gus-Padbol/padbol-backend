@@ -1,5 +1,6 @@
 import express from 'express';
 import { verificarLogrosArena } from '../arena/arenaLogrosService.js';
+import { actualizarRango } from '../rangos/rangosService.js';
 
 export function createArenaRouter({ supabaseAdmin, getAuthenticatedUser }) {
   const router = express.Router();
@@ -15,7 +16,8 @@ export function createArenaRouter({ supabaseAdmin, getAuthenticatedUser }) {
       const context = req.body?.context ?? {};
 
       const desbloqueados = await verificarLogrosArena(supabaseAdmin, targetUserId, context);
-      res.json({ desbloqueados });
+      const rango = await actualizarRango(supabaseAdmin, targetUserId);
+      res.json({ desbloqueados, rango });
     } catch (err) {
       console.error('❌ Error POST /api/arena/logros:', err.message);
       res.status(500).json({ error: err.message });

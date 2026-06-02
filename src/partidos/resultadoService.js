@@ -1,5 +1,6 @@
 import { sumarXP } from '../xp/xpService.js';
 import { verificarLogrosArena } from '../arena/arenaLogrosService.js';
+import { actualizarRango } from '../rangos/rangosService.js';
 import { sendPushToUser } from '../../utils/push.js';
 import { createNotificacion } from '../../utils/notificaciones.js';
 
@@ -115,6 +116,10 @@ async function otorgarXpPartidoConfirmado(supabaseAdmin, partido, capitanes, gan
       partido_id: partido.id,
       ganador: capitanGanador,
     });
+
+    await actualizarRango(supabaseAdmin, capitanId).catch((err) =>
+      console.warn('⚠️ actualizarRango partido:', err.message),
+    );
   }
 
   return xpResults;
@@ -214,6 +219,10 @@ export async function procesarResultadoPartidoCasual({
       evento: 'partido_resultado_cargado',
       partido_id: partidoId,
     });
+
+    await actualizarRango(supabaseAdmin, user.id).catch((err) =>
+      console.warn('⚠️ actualizarRango partido carga:', err.message),
+    );
 
     return {
       status: 200,

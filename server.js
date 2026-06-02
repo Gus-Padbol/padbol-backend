@@ -59,7 +59,12 @@ import {
 } from './utils/push.js';
 import { createXpRouter } from './src/routes/xp.js';
 import { createArenaRouter } from './src/routes/arena.js';
+import { createRangosRouter } from './src/routes/rangos.js';
 import { runReservasCompletadasCron } from './src/reservas/reservasCompletadasService.js';
+import {
+  actualizarRango,
+  collectUserIdsFromEquipos,
+} from './src/rangos/rangosService.js';
 
 globalThis.WebSocket = ws;
 
@@ -2006,6 +2011,15 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       .single();
     if (errFinal) throw errFinal;
 
+    const jugadorUserIds = collectUserIdsFromEquipos(equipos);
+    await Promise.all(
+      jugadorUserIds.map((userId) =>
+        actualizarRango(supabaseAdmin, userId).catch((err) =>
+          console.warn(`⚠️ actualizarRango torneo ${id} user ${userId}:`, err.message),
+        ),
+      ),
+    );
+
     // TODO: Auto-set jugadores_perfil.companero_habitual_id to the tournament doubles partner
     // when a match is completed (use the partner from that match for each player).
 
@@ -2276,6 +2290,7 @@ app.get('/api/partidos-abiertos', (req, res, next) => {
 app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/xp', createXpRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/arena', createArenaRouter({ supabaseAdmin, getAuthenticatedUser }));
+app.use('/api/rangos', createRangosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser }));
@@ -4285,6 +4300,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Partidos: POST /api/partidos/:id/resultado');
     console.log('✅ Arena: POST /api/arena/logros');
     console.log('✅ Logros premios: GET /api/logros-premios/:sede_id, POST/DELETE /api/admin/logros-premios');
+    console.log('✅ Rangos ARENA: GET /api/rangos/mi-rango');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');
     console.log('✅ Extras sede: GET /api/sedes/:id/extras-admin + CRUD /api/sedes/:id/extras');
     console.log('✅ Torneo interés: POST/DELETE /api/sedes/:id/torneo-interes, GET /api/admin/sedes/:id/torneo-interes');
