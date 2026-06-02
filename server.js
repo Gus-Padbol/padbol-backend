@@ -61,7 +61,7 @@ import {
 import { createXpRouter } from './src/routes/xp.js';
 import { createArenaRouter } from './src/routes/arena.js';
 import { createRangosRouter } from './src/routes/rangos.js';
-import { runReservasCompletadasCron } from './src/reservas/reservasCompletadasService.js';
+import { initReservasCron } from './src/cron/reservasCron.js';
 import {
   actualizarRango,
   collectUserIdsFromEquipos,
@@ -3065,14 +3065,12 @@ Recordá llegar 10 minutos antes.
   }
 }, { timezone: 'America/Argentina/Buenos_Aires' });
 
-// ─── Cron: reservas completadas (hora_fin < now) → XP + push cargar resultado ─
-cron.schedule('*/5 * * * *', async () => {
-  try {
-    await runReservasCompletadasCron(supabaseAdmin);
-  } catch (err) {
-    console.error('❌ Cron reservas completadas - error inesperado:', err.message);
-  }
-}, { timezone: 'America/Argentina/Buenos_Aires' });
+// ─── Cron: reservas completadas → XP + push post-partido ─────────────────────
+initReservasCron({
+  supabaseAdmin,
+  cron,
+  timezone: 'America/Argentina/Buenos_Aires',
+});
 
 // ─── Auto-cancel incomplete partidos past deadline (every 15 min) ───────────
 const PARTIDO_AUTO_CANCEL_MS = 15 * 60 * 1000;

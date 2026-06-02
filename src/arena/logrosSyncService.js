@@ -233,7 +233,8 @@ export async function fetchComportamientoLogrosMetrics(supabaseAdmin, user) {
 
   const rows = reservas ?? [];
   const confirmadas = rows.filter((r) => ['confirmada', 'completada', 'pendiente'].includes(String(r.estado)));
-  const completadas = rows.filter((r) => ['confirmada', 'completada'].includes(String(r.estado)));
+  const completadas = rows.filter((r) => String(r.estado) === 'completada');
+  const reservasCompletadas = completadas.length;
   const checkins = rows.filter((r) => r.checkin_realizado);
   const checkinsPuntuales = checkins.filter(isCheckinPuntual).length;
   const cancelaciones30d = rows.filter((r) => {
@@ -255,7 +256,7 @@ export async function fetchComportamientoLogrosMetrics(supabaseAdmin, user) {
   return {
     checkins_count: checkins.length,
     reservas_confirmadas: confirmadas.length,
-    reservas_completadas: completadas.length,
+    reservas_completadas: reservasCompletadas,
     checkins_puntuales: checkinsPuntuales,
     cancelaciones_30d: cancelaciones30d,
     max_reservas_misma_sede: maxReservasMismaSede,
@@ -433,6 +434,10 @@ export async function sincronizarLogrosArena(supabaseAdmin, user, {
     if (evaluaComportamientoLogro(def.slug, compMetrics)) {
       slugsCalculados.push(def.slug);
     }
+  }
+
+  if ((compMetrics.reservas_completadas ?? 0) >= 1) {
+    slugsCalculados.push('primer_partido');
   }
 
   const sync = await sincronizarLogrosDesbloqueados(supabaseAdmin, userId, slugsCalculados);
