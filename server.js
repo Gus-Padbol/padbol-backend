@@ -50,6 +50,7 @@ import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountPushRoutes } from './routes/push.js';
+import { mountArenaRoutes } from './routes/arena.js';
 import {
   notifyReservaConfirmada,
   notifyTorneoInscripcionConfirmada,
@@ -814,6 +815,7 @@ mountMercadoPagoWebhookRoutes(app, {
   defaultMpToken: process.env.MP_ACCESS_TOKEN || '',
 });
 mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
+mountArenaRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 
 // GET /api/sedes/:id — datos públicos de la sede (reserva, horarios, precios; sin JWT)
 app.get('/api/sedes/:id', async (req, res) => {
