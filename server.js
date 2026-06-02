@@ -56,6 +56,9 @@ import {
   notifyTorneoInscripcionConfirmada,
   notifyTorneoSorteoPublicado,
 } from './utils/push.js';
+import { createXpRouter } from './src/routes/xp.js';
+import { createArenaRouter } from './src/routes/arena.js';
+import { runReservasCompletadasCron } from './src/reservas/reservasCompletadasService.js';
 
 globalThis.WebSocket = ws;
 
@@ -2264,6 +2267,8 @@ app.get('/api/partidos-abiertos', (req, res, next) => {
   return partidosRouter(req, res, next);
 });
 app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUser }));
+app.use('/api/xp', createXpRouter({ supabaseAdmin, getAuthenticatedUser }));
+app.use('/api/arena', createArenaRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser }));
@@ -3028,6 +3033,15 @@ Recordá llegar 10 minutos antes.
     }
   } catch (err) {
     console.error('❌ Cron recordatorio - error inesperado:', err.message);
+  }
+}, { timezone: 'America/Argentina/Buenos_Aires' });
+
+// ─── Cron: reservas completadas (hora_fin < now) → XP + push cargar resultado ─
+cron.schedule('*/5 * * * *', async () => {
+  try {
+    await runReservasCompletadasCron(supabaseAdmin);
+  } catch (err) {
+    console.error('❌ Cron reservas completadas - error inesperado:', err.message);
   }
 }, { timezone: 'America/Argentina/Buenos_Aires' });
 
@@ -4258,6 +4272,9 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Perfil público: GET /api/jugador/perfil-publico/:userId');
     console.log('✅ Torneos: GET /api/torneos/finalizados');
     console.log('✅ Push: POST /api/push-tokens, POST /api/push/send');
+    console.log('✅ XP ARENA: GET /api/xp/mi-xp, GET /api/xp/historial');
+    console.log('✅ Partidos: POST /api/partidos/:id/resultado');
+    console.log('✅ Arena: POST /api/arena/logros');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');
     console.log('✅ Extras sede: GET /api/sedes/:id/extras-admin + CRUD /api/sedes/:id/extras');
     console.log('✅ Torneo interés: POST/DELETE /api/sedes/:id/torneo-interes, GET /api/admin/sedes/:id/torneo-interes');

@@ -1,6 +1,7 @@
 import express from 'express';
 import { notifyPartidoJugadorUnido, sendPushToUser } from '../utils/push.js';
 import { createNotificacion } from '../utils/notificaciones.js';
+import { procesarResultadoPartidoCasual } from '../src/partidos/resultadoService.js';
 import { generarIniciosMinutosSlotReserva, minutosAHoraReserva } from '../lib/reservaSlotsHorarios.js';
 import {
   normalizeHoraInicioReserva,
@@ -2612,6 +2613,35 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error POST /api/partidos:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/:id/resultado', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const result = await procesarResultadoPartidoCasual({
+        supabaseAdmin,
+        partidoId,
+        user,
+        body: req.body,
+      });
+
+      console.log(
+        `✓ POST /api/partidos/${partidoId}/resultado — ${result.body?.estado_confirmacion ?? 'ok'}`,
+      );
+      res.status(result.status).json(result.body);
+    } catch (err) {
+      console.error('❌ Error POST /api/partidos/:id/resultado:', err.message);
       res.status(500).json({ error: err.message });
     }
   });
