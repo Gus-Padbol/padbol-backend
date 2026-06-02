@@ -3595,6 +3595,8 @@ async function buildAuthenticatedPerfilPayload(perfil, user, deportes) {
     companero_habitual: companero,
     deporte_principal: deportes[0] ?? null,
     deportes,
+    xp: perfil.xp ?? 0,
+    liga: perfil.liga ?? 'INIT',
   };
 }
 
@@ -3618,7 +3620,10 @@ async function handleGetAuthenticatedPerfil(req, res) {
 
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
-      .select('*')
+      .select(`
+        user_id, nombre, apellido, telefono, nivel, lateralidad, posicion_cancha,
+        pais, email, foto_url, username, apodo, companero_habitual_id, xp, liga
+      `)
       .or(filters.join(','))
       .maybeSingle();
 
@@ -3703,7 +3708,10 @@ async function handlePutAuthenticatedPerfil(req, res) {
       .from('jugadores_perfil')
       .update(updatePayload)
       .eq('email', email)
-      .select('*');
+      .select(`
+        user_id, nombre, apellido, telefono, nivel, lateralidad, posicion_cancha,
+        pais, email, foto_url, username, apodo, companero_habitual_id, xp, liga
+      `);
 
     if (error) throw error;
     if (!data?.length) {
