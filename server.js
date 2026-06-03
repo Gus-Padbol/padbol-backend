@@ -3586,6 +3586,7 @@ async function buildAuthenticatedPerfilPayload(perfil, user, deportes) {
 
   return {
     nombre: perfil.nombre ?? '',
+    nombre_saludo: perfil.nombre_saludo ?? null,
     apellido: perfil.apellido ?? '',
     telefono: perfil.telefono ?? '',
     nivel: perfil.nivel ?? '',
@@ -3626,7 +3627,7 @@ async function handleGetAuthenticatedPerfil(req, res) {
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
       .select(`
-        user_id, nombre, apellido, telefono, nivel, lateralidad, posicion_cancha,
+        user_id, nombre, nombre_saludo, apellido, telefono, nivel, lateralidad, posicion_cancha,
         pais, email, foto_url, username, apodo, companero_habitual_id, xp, liga
       `)
       .or(filters.join(','))
@@ -3714,7 +3715,7 @@ async function handlePutAuthenticatedPerfil(req, res) {
       .update(updatePayload)
       .eq('email', email)
       .select(`
-        user_id, nombre, apellido, telefono, nivel, lateralidad, posicion_cancha,
+        user_id, nombre, nombre_saludo, apellido, telefono, nivel, lateralidad, posicion_cancha,
         pais, email, foto_url, username, apodo, companero_habitual_id, xp, liga
       `);
 
