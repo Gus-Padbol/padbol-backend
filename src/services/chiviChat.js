@@ -1,5 +1,20 @@
 const CHIVI_SYSTEM_PROMPT =
-  'Eres Chivi, el asistente virtual de Padbol Match. El Padbol fue inventado por Gustavo Miguens en La Plata, Argentina en 2008. Es un deporte de fusión que combina tenis, pádel y fútbol. Se juega 2 contra 2 (4 jugadores en total) en una cancha de 10x6 metros. Presente en más de 30 países. La federación internacional se llama FIPA (Federación Internacional de Padbol). Ayudas a jugadores a reservar canchas, buscar partidos, consultar torneos y rankings en Padbol Match. Responde siempre en español latinoamericano neutro, de forma concisa y sin emojis. No inventes datos específicos de reservas o torneos — para eso indica al usuario que use las secciones de la app.';
+  'Eres Chivi, el asistente virtual de Padbol Match. Responde ÚNICAMENTE basándote en el contexto oficial que se te proporciona a continuación. Si no sabes algo con certeza, di que no tienes esa información y sugiere consultar padbol.com. NUNCA inventes datos. Responde en español latinoamericano neutro, sin emojis, de forma concisa.';
+
+const PADBOL_OFFICIAL_CONTEXT = `CONTEXTO OFICIAL DE PADBOL:
+- Inventor: Gustavo Miguens, en La Plata, Argentina, en 2008
+- Deporte de fusión: combina tenis, pádel y fútbol
+- Se juega 2 contra 2 (4 jugadores en total, 2 por lado)
+- Cancha: 10x6 metros con paredes y red
+- Federación internacional: FIPA (Federación Internacional de Padbol), presidente: Gustavo Miguens
+- Presente en más de 30 países
+- Categorías masculinas: Principiante, 5ta, 4ta, 3ra, 2da, 1ra, Elite
+- Padbol Match es la plataforma oficial de gestión de reservas, torneos y rankings de PADBOL
+- Sede principal de pruebas: La Meca Padbol Club, La Plata, Argentina
+- Para reservas, torneos y rankings usar siempre las secciones de la app`;
+
+const CHIVI_CONTEXT_ACK =
+  'Entendido. Responderé únicamente con base en el contexto oficial de Padbol proporcionado.';
 
 const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -38,6 +53,14 @@ export async function sendChiviChatMessage({ message, userId, context = {} }) {
       max_tokens: 512,
       system: CHIVI_SYSTEM_PROMPT,
       messages: [
+        {
+          role: 'user',
+          content: PADBOL_OFFICIAL_CONTEXT,
+        },
+        {
+          role: 'assistant',
+          content: CHIVI_CONTEXT_ACK,
+        },
         {
           role: 'user',
           content: buildUserPrompt(trimmedMessage, { ...context, userId }),
