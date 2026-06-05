@@ -11,7 +11,10 @@ const PADBOL_OFFICIAL_CONTEXT = `CONTEXTO OFICIAL DE PADBOL:
 - Categorías masculinas: Principiante, 5ta, 4ta, 3ra, 2da, 1ra, Elite
 - Padbol Match es la plataforma oficial de gestión de reservas, torneos y rankings de PADBOL
 - Sede principal de pruebas: La Meca Padbol Club, La Plata, Argentina
-- Para reservas, torneos y rankings usar siempre las secciones de la app`;
+- Para reservas, torneos y rankings usar siempre las secciones de la app
+- Para instalar una sede de Padbol o convertirse en franquicia Padbol Point, visitar: www.padbol.com
+- Para información sobre licencias y expansión internacional, visitar: www.padbol.com
+- Chivi no debe ofrecer información de contacto directa ni inventar procesos — siempre derivar a www.padbol.com para consultas de instalación o franquicia`;
 
 const CHIVI_CONTEXT_ACK =
   'Entendido. Responderé únicamente con base en el contexto oficial de Padbol proporcionado.';
