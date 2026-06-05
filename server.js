@@ -59,6 +59,7 @@ import {
   notifyTorneoSorteoPublicado,
 } from './utils/push.js';
 import { createXpRouter } from './src/routes/xp.js';
+import { createChiviRouter } from './src/routes/chivi.js';
 import { createArenaRouter } from './src/routes/arena.js';
 import { createRangosRouter } from './src/routes/rangos.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
@@ -224,6 +225,9 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 // Mercado Pago
 if (!process.env.MP_ACCESS_TOKEN) {
   console.warn('⚠️  MP_ACCESS_TOKEN no está configurado — los pagos fallarán en producción');
+}
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.warn('⚠️  ANTHROPIC_API_KEY no está configurado — Chivi chat no funcionará (cargar en Render dashboard)');
 }
 const mpClient = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN || '',
@@ -2296,6 +2300,7 @@ app.get('/api/partidos-abiertos', (req, res, next) => {
 });
 app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/xp', createXpRouter({ supabaseAdmin, getAuthenticatedUser }));
+app.use('/api/chivi', createChiviRouter({ getAuthenticatedUser }));
 app.use('/api/arena', createArenaRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/rangos', createRangosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
