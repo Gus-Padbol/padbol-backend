@@ -1,6 +1,8 @@
+import http from 'http';
 import ws from 'ws';
 import express from 'express';
 import cors from 'cors';
+import { Server as SocketIOServer } from 'socket.io';
 import { createClient } from '@supabase/supabase-js';
 import pg from 'pg';
 import twilio from 'twilio';
@@ -63,6 +65,7 @@ import { createChiviRouter } from './src/routes/chivi.js';
 import { createArenaRouter } from './src/routes/arena.js';
 import { createRangosRouter } from './src/routes/rangos.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
+import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
 import {
   actualizarRango,
   collectUserIdsFromEquipos,
@@ -73,6 +76,22 @@ globalThis.WebSocket = ws;
 dotenv.config();
 
 const app = express();
+const httpServer = http.createServer(app);
+const io = new SocketIOServer(httpServer, {
+  cors: {
+    origin: [
+      'https://padbolmatch.com',
+      'https://www.padbolmatch.com',
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'http://localhost:8081',
+      'https://padbol-match.netlify.app',
+      'https://padbol-match-9abn.vercel.app',
+    ],
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
+});
 const PORT = 3001;
 
 // CORS
@@ -809,6 +828,14 @@ mountSedeExtrasRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
+mountScoreboardRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+  io,
+});
+initScoreboardSocket(io);
 mountTorneoInteresRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
@@ -4298,7 +4325,7 @@ app.use((err, _req, res, _next) => {
 
 (async () => {
   await verifyPgPoolConnection();
-  app.listen(PORT, () => {
+  httpServer.listen(PORT, () => {
     console.log(`🚀 Padbol Match API running on port ${PORT}`);
     console.log('✅ Rutas rol: GET /api/auth/mi-rol');
     console.log('✅ Rutas rol: GET /api/usuarios/mi-rol');
@@ -4326,5 +4353,6 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Torneo interés: POST/DELETE /api/sedes/:id/torneo-interes, GET /api/admin/sedes/:id/torneo-interes');
     console.log('✅ Lista espera general: POST/DELETE/GET check /api/lista-espera-general, GET /api/admin/lista-espera-general/:sede_id');
     console.log(`✅ Fotos sede: POST /api/sedes/:id/fotos (máx. ${20} por sede)`);
+    console.log('✅ Scoreboard: POST/GET /api/scoreboard/partidos, WebSocket scoreboard:update');
   });
 })();
