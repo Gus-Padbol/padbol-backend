@@ -170,10 +170,6 @@ function winRegularPoint(partido, equipo) {
 
   partido.score_a = scoreA;
   partido.score_b = scoreB;
-
-  if (newScore === 40 && oppScore < 40) {
-    winGame(partido, equipo);
-  }
 }
 
 export function registrarPunto(partido, equipo) {
@@ -195,6 +191,8 @@ export function registrarPunto(partido, equipo) {
   console.log('[scoreboard] punto antes:', {
     score_a: partido.score_a,
     score_b: partido.score_b,
+    score_a_norm: normalizePointScore(partido.score_a),
+    score_b_norm: normalizePointScore(partido.score_b),
     equipo,
   });
 
