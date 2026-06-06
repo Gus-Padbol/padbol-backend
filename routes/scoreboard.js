@@ -5,6 +5,7 @@ import {
   iniciarTiebreak,
   resetPartidoCompleto,
   enrichPartidoResponse,
+  resolveJerseyNumber,
   getCronometroSegundos,
 } from '../utils/scoreboardLogic.js';
 
@@ -99,6 +100,14 @@ export function mountScoreboardRoutes(app, {
         saque_actual = 'A',
         color_a = '#1a3a6e',
         color_b = '#6e1a1a',
+        jersey_a1,
+        jersey_a2,
+        jersey_a3,
+        jersey_a4,
+        jersey_b1,
+        jersey_b2,
+        jersey_b3,
+        jersey_b4,
       } = req.body || {};
 
       const sid = parseSedeId(sede_id);
@@ -110,6 +119,17 @@ export function mountScoreboardRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, sid);
 
+      const jugadoresA = Array.isArray(equipo_a_jugadores) ? equipo_a_jugadores : [];
+      const jugadoresB = Array.isArray(equipo_b_jugadores) ? equipo_b_jugadores : [];
+      const resolvedJerseysA = [1, 2, 3, 4].map((slot, idx) => resolveJerseyNumber(
+        [jersey_a1, jersey_a2, jersey_a3, jersey_a4][idx] ?? jugadoresA[idx]?.jersey ?? jugadoresA[idx]?.numero,
+        slot,
+      ));
+      const resolvedJerseysB = [1, 2, 3, 4].map((slot, idx) => resolveJerseyNumber(
+        [jersey_b1, jersey_b2, jersey_b3, jersey_b4][idx] ?? jugadoresB[idx]?.jersey ?? jugadoresB[idx]?.numero,
+        slot,
+      ));
+
       const row = {
         sede_id: sid,
         torneo_id: torneo_id || null,
@@ -117,8 +137,26 @@ export function mountScoreboardRoutes(app, {
         cancha,
         equipo_a_nombre: String(equipo_a_nombre).trim(),
         equipo_b_nombre: String(equipo_b_nombre).trim(),
-        equipo_a_jugadores: Array.isArray(equipo_a_jugadores) ? equipo_a_jugadores : [],
-        equipo_b_jugadores: Array.isArray(equipo_b_jugadores) ? equipo_b_jugadores : [],
+        equipo_a_jugadores: jugadoresA.map((j, idx) => ({
+          ...j,
+          numero: resolvedJerseysA[idx],
+          jersey: resolvedJerseysA[idx],
+          nombre: String(j?.nombre ?? j?.name ?? `Jugador ${idx + 1}`).trim() || `Jugador ${idx + 1}`,
+        })),
+        equipo_b_jugadores: jugadoresB.map((j, idx) => ({
+          ...j,
+          numero: resolvedJerseysB[idx],
+          jersey: resolvedJerseysB[idx],
+          nombre: String(j?.nombre ?? j?.name ?? `Jugador ${idx + 1}`).trim() || `Jugador ${idx + 1}`,
+        })),
+        jersey_a1: resolvedJerseysA[0],
+        jersey_a2: resolvedJerseysA[1],
+        jersey_a3: resolvedJerseysA[2],
+        jersey_a4: resolvedJerseysA[3],
+        jersey_b1: resolvedJerseysB[0],
+        jersey_b2: resolvedJerseysB[1],
+        jersey_b3: resolvedJerseysB[2],
+        jersey_b4: resolvedJerseysB[3],
         saque_actual: saque_actual === 'B' ? 'B' : 'A',
         color_a: String(color_a || '#1a3a6e').trim(),
         color_b: String(color_b || '#6e1a1a').trim(),

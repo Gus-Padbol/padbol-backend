@@ -302,11 +302,48 @@ export function formatCronometro(seconds) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
+export function resolveJerseyNumber(value, fallback) {
+  if (value === null || value === undefined || value === '') return fallback;
+  const n = parseInt(value, 10);
+  if (Number.isFinite(n) && n >= 1 && n <= 99) return n;
+  return fallback;
+}
+
+function applyJerseysToJugadores(jugadores, jerseyValues) {
+  const list = Array.isArray(jugadores) ? jugadores.slice(0, 4) : [];
+  while (list.length < 4) list.push({ nombre: '—' });
+
+  return list.map((jugador, idx) => {
+    const fallback = idx + 1;
+    const jersey = resolveJerseyNumber(jerseyValues[idx], fallback);
+    return {
+      ...jugador,
+      numero: jersey,
+      jersey,
+    };
+  });
+}
+
 export function enrichPartidoResponse(partido) {
   const score = formatScoreDisplay(partido.score_a, partido.score_b, partido.es_tiebreak);
   const cronometroSegundos = getCronometroSegundos(partido);
+  const equipo_a_jugadores = applyJerseysToJugadores(partido.equipo_a_jugadores, [
+    partido.jersey_a1,
+    partido.jersey_a2,
+    partido.jersey_a3,
+    partido.jersey_a4,
+  ]);
+  const equipo_b_jugadores = applyJerseysToJugadores(partido.equipo_b_jugadores, [
+    partido.jersey_b1,
+    partido.jersey_b2,
+    partido.jersey_b3,
+    partido.jersey_b4,
+  ]);
+
   return {
     ...partido,
+    equipo_a_jugadores,
+    equipo_b_jugadores,
     display: {
       ...score,
       cronometro: formatCronometro(cronometroSegundos),
