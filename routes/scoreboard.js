@@ -3,6 +3,7 @@ import {
   deshacerPunto,
   cambiarSaque,
   iniciarTiebreak,
+  resetPartidoCompleto,
   enrichPartidoResponse,
   getCronometroSegundos,
 } from '../utils/scoreboardLogic.js';
@@ -273,9 +274,7 @@ export function mountScoreboardRoutes(app, {
           partido.cronometro_inicio = null;
         }
       } else if (accion === 'reset') {
-        partido.cronometro_segundos = 0;
-        partido.cronometro_pausado = true;
-        partido.cronometro_inicio = null;
+        resetPartidoCompleto(partido);
       }
 
       partido = await savePartido(supabaseAdmin, partido);

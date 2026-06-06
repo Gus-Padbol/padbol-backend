@@ -247,6 +247,26 @@ export function iniciarTiebreak(partido) {
   return partido;
 }
 
+export function resetPartidoCompleto(partido) {
+  partido.score_a = 0;
+  partido.score_b = 0;
+  partido.games_a = 0;
+  partido.games_b = 0;
+  partido.sets_a = 0;
+  partido.sets_b = 0;
+  partido.historial_sets = [];
+  partido.historial_puntos = [];
+  partido.es_tiebreak = false;
+  partido.ultimo_punto = null;
+  partido.estado = 'pendiente';
+  partido.cronometro_inicio = null;
+  partido.cronometro_pausado = false;
+  partido.cronometro_segundos = 0;
+  partido.saque_actual = 'A';
+  partido.updated_at = new Date().toISOString();
+  return partido;
+}
+
 export function formatScoreDisplay(scoreA, scoreB, esTiebreak) {
   if (esTiebreak) {
     return { displayA: String(scoreA), displayB: String(scoreB), mode: 'tiebreak' };
