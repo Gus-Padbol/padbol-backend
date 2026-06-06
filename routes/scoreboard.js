@@ -150,6 +150,34 @@ export function mountScoreboardRoutes(app, {
     }
   });
 
+  app.get('/api/scoreboard/cancha/:sedeId/:cancha', async (req, res) => {
+    try {
+      const sid = parseSedeId(req.params.sedeId);
+      if (!sid) return res.status(400).json({ error: 'sede_id inválido' });
+
+      const cancha = decodeURIComponent(String(req.params.cancha || '').trim());
+      if (!cancha) return res.status(400).json({ error: 'cancha inválida' });
+
+      const { data, error } = await supabaseAdmin
+        .from('scoreboard_partidos')
+        .select('*')
+        .eq('sede_id', sid)
+        .eq('cancha', cancha)
+        .in('estado', ['en_curso', 'pendiente'])
+        .order('updated_at', { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+
+      const partido = data?.[0] ?? null;
+      return res.json(partido ? enrichPartidoResponse(partido) : null);
+    } catch (err) {
+      const st = err.status || 500;
+      console.error('❌ GET /api/scoreboard/cancha/:sedeId/:cancha:', err.message);
+      return res.status(st).json({ error: err.message || 'Error al obtener partido por cancha' });
+    }
+  });
+
   app.post('/api/scoreboard/partidos/:id/punto/:equipo', async (req, res) => {
     try {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
