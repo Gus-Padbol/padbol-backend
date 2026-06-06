@@ -805,7 +805,7 @@ app.get('/api/sedes', async (req, res) => {
 });
 
 mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser });
-mountSurgeRoutes(app, { supabaseAdmin });
+mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountResenasRoutes(app, {
   pgPool,
   getAuthenticatedUser,
