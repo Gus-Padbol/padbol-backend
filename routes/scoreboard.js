@@ -260,6 +260,7 @@ export function mountScoreboardRoutes(app, {
         }
         partido.cronometro_pausado = false;
         partido.cronometro_inicio = new Date().toISOString();
+        if (partido.estado === 'pendiente') partido.estado = 'en_curso';
       } else if (accion === 'pause') {
         if (partido.cronometro_pausado || !partido.cronometro_inicio) {
           partido.cronometro_pausado = true;
