@@ -6,7 +6,8 @@ import {
   resetPartidoCompleto,
   enrichPartidoResponse,
   resolveJerseyNumber,
-  getCronometroSegundos,
+  pauseCronometro,
+  startCronometro,
 } from '../utils/scoreboardLogic.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
@@ -328,21 +329,9 @@ export function mountScoreboardRoutes(app, {
       assertCanControlScoreboard(role, partido.sede_id);
 
       if (accion === 'start') {
-        if (!partido.cronometro_pausado && partido.cronometro_inicio) {
-          return res.status(400).json({ error: 'El cronómetro ya está en marcha' });
-        }
-        partido.cronometro_pausado = false;
-        partido.cronometro_inicio = new Date().toISOString();
-        if (partido.estado === 'pendiente') partido.estado = 'en_curso';
+        startCronometro(partido);
       } else if (accion === 'pause') {
-        if (partido.cronometro_pausado || !partido.cronometro_inicio) {
-          partido.cronometro_pausado = true;
-          partido.cronometro_inicio = null;
-        } else {
-          partido.cronometro_segundos = getCronometroSegundos(partido);
-          partido.cronometro_pausado = true;
-          partido.cronometro_inicio = null;
-        }
+        pauseCronometro(partido);
       } else if (accion === 'reset') {
         resetPartidoCompleto(partido);
       }

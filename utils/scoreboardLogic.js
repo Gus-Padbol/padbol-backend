@@ -285,13 +285,47 @@ export function formatScoreDisplay(scoreA, scoreB, esTiebreak) {
   return { displayA: map(scoreA), displayB: map(scoreB), mode: 'normal' };
 }
 
+function isCronometroPausado(partido) {
+  const raw = partido?.cronometro_pausado;
+  if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
+  if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+  return Boolean(raw);
+}
+
+export function isCronometroRunning(partido) {
+  return !isCronometroPausado(partido) && Boolean(partido?.cronometro_inicio);
+}
+
 export function getCronometroSegundos(partido) {
-  let total = Number(partido.cronometro_segundos) || 0;
-  if (!partido.cronometro_pausado && partido.cronometro_inicio) {
+  let total = Math.max(0, Math.floor(Number(partido.cronometro_segundos) || 0));
+  if (isCronometroRunning(partido)) {
     const inicio = new Date(partido.cronometro_inicio).getTime();
-    total += Math.floor((Date.now() - inicio) / 1000);
+    if (Number.isFinite(inicio)) {
+      total += Math.max(0, Math.floor((Date.now() - inicio) / 1000));
+    }
   }
   return total;
+}
+
+export function pauseCronometro(partido) {
+  if (partido.cronometro_inicio && !isCronometroPausado(partido)) {
+    partido.cronometro_segundos = getCronometroSegundos(partido);
+  }
+  partido.cronometro_pausado = true;
+  partido.cronometro_inicio = null;
+  partido.updated_at = new Date().toISOString();
+  return partido;
+}
+
+export function startCronometro(partido) {
+  if (isCronometroRunning(partido)) {
+    throw Object.assign(new Error('El cronómetro ya está en marcha'), { status: 400 });
+  }
+  partido.cronometro_pausado = false;
+  partido.cronometro_inicio = new Date().toISOString();
+  if (partido.estado === 'pendiente') partido.estado = 'en_curso';
+  partido.updated_at = new Date().toISOString();
+  return partido;
 }
 
 export function formatCronometro(seconds) {
@@ -348,7 +382,7 @@ export function enrichPartidoResponse(partido) {
       ...score,
       cronometro: formatCronometro(cronometroSegundos),
       cronometroSegundos,
-      cronometroActivo: !partido.cronometro_pausado && !!partido.cronometro_inicio,
+      cronometroActivo: isCronometroRunning(partido),
     },
   };
 }
