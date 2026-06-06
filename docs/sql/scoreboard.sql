@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS scoreboard_partidos (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   sede_id INTEGER REFERENCES sedes(id),
   torneo_id INTEGER REFERENCES torneos(id),
+  torneo_nombre TEXT,
   cancha TEXT,
   equipo_a_nombre TEXT NOT NULL,
   equipo_b_nombre TEXT NOT NULL,

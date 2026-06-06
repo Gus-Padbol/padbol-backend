@@ -89,6 +89,7 @@ export function mountScoreboardRoutes(app, {
       const {
         sede_id,
         torneo_id = null,
+        torneo_nombre = null,
         cancha = null,
         equipo_a_nombre,
         equipo_b_nombre,
@@ -109,6 +110,7 @@ export function mountScoreboardRoutes(app, {
       const row = {
         sede_id: sid,
         torneo_id: torneo_id || null,
+        torneo_nombre: torneo_nombre ? String(torneo_nombre).trim() : null,
         cancha,
         equipo_a_nombre: String(equipo_a_nombre).trim(),
         equipo_b_nombre: String(equipo_b_nombre).trim(),
