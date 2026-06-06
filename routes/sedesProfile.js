@@ -374,6 +374,24 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         patch.precio_turno = patch.precio_90min;
       }
 
+      if (hop('surge_activo')) {
+        patch.surge_activo = body.surge_activo === true || body.surge_activo === 'true' || body.surge_activo === 1;
+      }
+      for (const surgeKey of ['surge_precio_minimo', 'surge_precio_maximo']) {
+        if (!hop(surgeKey)) continue;
+        const raw = body[surgeKey];
+        if (raw === null || raw === '') {
+          patch[surgeKey] = null;
+          continue;
+        }
+        try {
+          patch[surgeKey] = parsePrecioDuracion(raw, surgeKey);
+        } catch (e) {
+          const st = e.statusCode || 400;
+          return res.status(st).json({ error: e.message || String(e) });
+        }
+      }
+
       if (Object.keys(patch).length === 0) {
         return res.status(400).json({ error: 'Ningún campo reconocido para actualizar' });
       }
