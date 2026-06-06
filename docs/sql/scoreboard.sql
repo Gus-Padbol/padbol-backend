@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS scoreboard_partidos (
   sede_id INTEGER REFERENCES sedes(id),
   torneo_id INTEGER REFERENCES torneos(id),
   torneo_nombre TEXT,
+  color_a TEXT DEFAULT '#1a3a6e',
+  color_b TEXT DEFAULT '#6e1a1a',
   cancha TEXT,
   equipo_a_nombre TEXT NOT NULL,
   equipo_b_nombre TEXT NOT NULL,

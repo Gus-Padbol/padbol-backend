@@ -97,6 +97,8 @@ export function mountScoreboardRoutes(app, {
         equipo_a_jugadores = [],
         equipo_b_jugadores = [],
         saque_actual = 'A',
+        color_a = '#1a3a6e',
+        color_b = '#6e1a1a',
       } = req.body || {};
 
       const sid = parseSedeId(sede_id);
@@ -118,6 +120,8 @@ export function mountScoreboardRoutes(app, {
         equipo_a_jugadores: Array.isArray(equipo_a_jugadores) ? equipo_a_jugadores : [],
         equipo_b_jugadores: Array.isArray(equipo_b_jugadores) ? equipo_b_jugadores : [],
         saque_actual: saque_actual === 'B' ? 'B' : 'A',
+        color_a: String(color_a || '#1a3a6e').trim(),
+        color_b: String(color_b || '#6e1a1a').trim(),
         estado: 'pendiente',
       };
 
