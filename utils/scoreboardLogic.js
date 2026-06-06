@@ -1,5 +1,10 @@
 const SCORE_ADVANTAGE = 45;
 
+function normalizePointScore(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export function snapshotPartido(partido) {
   return {
     estado: partido.estado,
@@ -21,20 +26,23 @@ function toggleSaque(saque) {
 }
 
 function isDeuce(scoreA, scoreB) {
-  return scoreA === 40 && scoreB === 40;
+  return normalizePointScore(scoreA) === 40 && normalizePointScore(scoreB) === 40;
 }
 
 function hasAdvantage(scoreA, scoreB) {
-  if (scoreA === SCORE_ADVANTAGE && scoreB === 40) return 'A';
-  if (scoreB === SCORE_ADVANTAGE && scoreA === 40) return 'B';
+  const a = normalizePointScore(scoreA);
+  const b = normalizePointScore(scoreB);
+  if (a === SCORE_ADVANTAGE && b === 40) return 'A';
+  if (b === SCORE_ADVANTAGE && a === 40) return 'B';
   return null;
 }
 
 function incrementScore(current) {
-  if (current === 0) return 15;
-  if (current === 15) return 30;
-  if (current === 30) return 40;
-  return current;
+  const s = normalizePointScore(current);
+  if (s === 0) return 15;
+  if (s === 15) return 30;
+  if (s === 30) return 40;
+  return s;
 }
 
 function resetGame(partido) {
@@ -120,35 +128,51 @@ function winTiebreakPoint(partido, equipo) {
 }
 
 function winRegularPoint(partido, equipo) {
-  const adv = hasAdvantage(partido.score_a, partido.score_b);
+  let scoreA = normalizePointScore(partido.score_a);
+  let scoreB = normalizePointScore(partido.score_b);
 
+  const adv = hasAdvantage(scoreA, scoreB);
   if (adv) {
     if (adv === equipo) {
+      partido.score_a = scoreA;
+      partido.score_b = scoreB;
       winGame(partido, equipo);
       return;
     }
-    partido.score_a = 40;
-    partido.score_b = 40;
+    scoreA = 40;
+    scoreB = 40;
+    partido.score_a = scoreA;
+    partido.score_b = scoreB;
     return;
   }
 
-  if (isDeuce(partido.score_a, partido.score_b)) {
-    if (equipo === 'A') partido.score_a = SCORE_ADVANTAGE;
-    else partido.score_b = SCORE_ADVANTAGE;
+  if (isDeuce(scoreA, scoreB)) {
+    if (equipo === 'A') scoreA = SCORE_ADVANTAGE;
+    else scoreB = SCORE_ADVANTAGE;
+    partido.score_a = scoreA;
+    partido.score_b = scoreB;
     return;
   }
 
-  const myScore = equipo === 'A' ? partido.score_a : partido.score_b;
-  const oppScore = equipo === 'A' ? partido.score_b : partido.score_a;
+  const myScore = equipo === 'A' ? scoreA : scoreB;
+  const oppScore = equipo === 'A' ? scoreB : scoreA;
+
+  if (myScore === 40 && oppScore < 40) {
+    partido.score_a = scoreA;
+    partido.score_b = scoreB;
+    winGame(partido, equipo);
+    return;
+  }
+
   const newScore = incrementScore(myScore);
+  if (equipo === 'A') scoreA = newScore;
+  else scoreB = newScore;
 
-  if (equipo === 'A') partido.score_a = newScore;
-  else partido.score_b = newScore;
+  partido.score_a = scoreA;
+  partido.score_b = scoreB;
 
   if (newScore === 40 && oppScore < 40) {
     winGame(partido, equipo);
-  } else if (newScore === 40 && oppScore === 40) {
-    // deuce — scores already 40-40
   }
 }
 
@@ -168,11 +192,25 @@ export function registrarPunto(partido, equipo) {
 
   if (partido.estado === 'pendiente') partido.estado = 'en_curso';
 
+  console.log('[scoreboard] punto antes:', {
+    score_a: partido.score_a,
+    score_b: partido.score_b,
+    equipo,
+  });
+
   if (partido.es_tiebreak) {
+    partido.score_a = normalizePointScore(partido.score_a);
+    partido.score_b = normalizePointScore(partido.score_b);
     winTiebreakPoint(partido, equipo);
   } else {
     winRegularPoint(partido, equipo);
   }
+
+  console.log('[scoreboard] punto después:', {
+    score_a: partido.score_a,
+    score_b: partido.score_b,
+    equipo,
+  });
 
   partido.ultimo_punto = equipo;
   partido.updated_at = new Date().toISOString();
