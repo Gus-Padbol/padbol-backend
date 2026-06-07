@@ -19,6 +19,7 @@ export function mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
         req.params.sedeId,
         req.params.deporte,
         req.params.duracion,
+        { slot_inicio: req.query.slot_inicio ?? null },
       );
       return res.json(result);
     } catch (err) {
