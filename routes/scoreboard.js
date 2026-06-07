@@ -77,6 +77,43 @@ function pickColorUniformes(body) {
   return out;
 }
 
+const JUGADOR_TEMP_SELECT = [
+  'id', 'partido_id', 'equipo', 'slot', 'nombre', 'numero', 'foto_url', 'user_id',
+  'created_at', 'updated_at',
+].join(', ');
+
+function parseEquipoQr(raw) {
+  const eq = String(raw ?? '').trim().toLowerCase();
+  if (eq !== 'a' && eq !== 'b') {
+    throw Object.assign(new Error('equipo debe ser a o b'), { status: 400 });
+  }
+  return eq;
+}
+
+function parseSlotQr(raw) {
+  const slot = parseInt(String(raw ?? '').trim(), 10);
+  if (!Number.isFinite(slot) || slot < 1 || slot > 4) {
+    throw Object.assign(new Error('slot debe ser un entero entre 1 y 4'), { status: 400 });
+  }
+  return slot;
+}
+
+function isPartidoActivo(estado) {
+  return String(estado ?? '').toLowerCase() !== 'terminado';
+}
+
+async function fetchJugadoresTempByPartido(supabaseAdmin, partidoId) {
+  const { data, error } = await supabaseAdmin
+    .from('scoreboard_jugadores_temp')
+    .select(JUGADOR_TEMP_SELECT)
+    .eq('partido_id', partidoId)
+    .order('equipo', { ascending: true })
+    .order('slot', { ascending: true });
+
+  if (error) throw error;
+  return data ?? [];
+}
+
 function emitScoreboardUpdate(io, partidoId, partido) {
   if (!io) return;
   const payload = enrichPartidoResponse(partido);
@@ -298,6 +335,117 @@ export function mountScoreboardRoutes(app, {
       const st = err.status || 500;
       console.error('❌ PATCH /api/scoreboard/partidos/:id:', err.message);
       return res.status(st).json({ error: err.message || 'Error al actualizar partido' });
+    }
+  });
+
+  app.get('/api/scoreboard/cancha-activa/:sedeId/:cancha', async (req, res) => {
+    try {
+      const sid = parseSedeId(req.params.sedeId);
+      if (!sid) return res.status(400).json({ error: 'sede_id inválido' });
+
+      const cancha = decodeURIComponent(String(req.params.cancha || '').trim());
+      if (!cancha) return res.status(400).json({ error: 'cancha inválida' });
+
+      const { data, error } = await supabaseAdmin
+        .from('scoreboard_partidos')
+        .select('id, equipo_a_nombre, equipo_b_nombre, estado')
+        .eq('sede_id', sid)
+        .eq('cancha', cancha)
+        .neq('estado', 'terminado')
+        .order('updated_at', { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+
+      const partido = data?.[0] ?? null;
+      if (!partido || !isPartidoActivo(partido.estado)) {
+        return res.json({ activo: false });
+      }
+
+      const jugadores = await fetchJugadoresTempByPartido(supabaseAdmin, partido.id);
+
+      return res.json({
+        partido_id: partido.id,
+        nombre_a: partido.equipo_a_nombre,
+        nombre_b: partido.equipo_b_nombre,
+        jugadores,
+      });
+    } catch (err) {
+      const st = err.status || 500;
+      console.error('❌ GET /api/scoreboard/cancha-activa/:sedeId/:cancha:', err.message);
+      return res.status(st).json({ error: err.message || 'Error al obtener cancha activa' });
+    }
+  });
+
+  app.post('/api/scoreboard/jugador-temp', async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const partidoId = String(body.partido_id ?? '').trim();
+      if (!partidoId) {
+        return res.status(400).json({ error: 'partido_id es requerido' });
+      }
+
+      const equipo = parseEquipoQr(body.equipo);
+      const slot = parseSlotQr(body.slot);
+      const nombre = String(body.nombre ?? '').trim();
+      if (!nombre) {
+        return res.status(400).json({ error: 'nombre es requerido' });
+      }
+
+      const partido = await fetchPartido(supabaseAdmin, partidoId);
+      if (!isPartidoActivo(partido.estado)) {
+        return res.status(400).json({ error: 'El partido ya terminó' });
+      }
+
+      const numero = body.numero != null && body.numero !== ''
+        ? resolveJerseyNumber(body.numero, slot)
+        : null;
+      const fotoUrl = body.foto_url != null && String(body.foto_url).trim() !== ''
+        ? String(body.foto_url).trim().slice(0, 2048)
+        : null;
+      const userId = body.user_id != null && String(body.user_id).trim() !== ''
+        ? String(body.user_id).trim()
+        : null;
+
+      const row = {
+        partido_id: partidoId,
+        equipo,
+        slot,
+        nombre: nombre.slice(0, 120),
+        numero,
+        foto_url: fotoUrl,
+        user_id: userId,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data, error } = await supabaseAdmin
+        .from('scoreboard_jugadores_temp')
+        .upsert(row, { onConflict: 'partido_id,equipo,slot' })
+        .select(JUGADOR_TEMP_SELECT)
+        .limit(1);
+
+      if (error) throw error;
+      const saved = Array.isArray(data) ? data[0] : data;
+      return res.status(201).json({ jugador: saved ?? row });
+    } catch (err) {
+      const st = err.status || 500;
+      console.error('❌ POST /api/scoreboard/jugador-temp:', err.message);
+      return res.status(st).json({ error: err.message || 'Error al guardar jugador temporal' });
+    }
+  });
+
+  app.get('/api/scoreboard/jugadores-temp/:partidoId', async (req, res) => {
+    try {
+      const partidoId = String(req.params.partidoId ?? '').trim();
+      if (!partidoId) {
+        return res.status(400).json({ error: 'partidoId inválido' });
+      }
+
+      const jugadores = await fetchJugadoresTempByPartido(supabaseAdmin, partidoId);
+      return res.json({ jugadores });
+    } catch (err) {
+      console.error('❌ GET /api/scoreboard/jugadores-temp/:partidoId:', err.message);
+      return res.status(500).json({ error: err.message || 'Error al obtener jugadores temporales' });
     }
   });
 
