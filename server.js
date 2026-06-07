@@ -518,7 +518,7 @@ async function authUserFromBearer(req) {
   const token = m[1].trim();
   if (!token) return null;
   const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data?.user?.email) return null;
+  if (error || !data?.user?.id) return null;
   return data.user;
 }
 
@@ -596,26 +596,62 @@ function buildMiRolJsonPayload(email, row) {
   };
 }
 
+/** Rol en `user_roles` solo por `user_id` (JWT UUID). */
+async function fetchUserRoleRowByJwtUserId(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return { data: null, error: null };
+  let q = await supabaseAdmin
+    .from('user_roles')
+    .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados, user_id')
+    .eq('user_id', uid)
+    .maybeSingle();
+  if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
+    q = await supabaseAdmin
+      .from('user_roles')
+      .select('role, sede_id, nombre, pais, email, user_id')
+      .eq('user_id', uid)
+      .maybeSingle();
+  }
+  return q;
+}
+
+function buildDefaultJugadorMiRolPayload(email) {
+  const em = String(email || '').trim().toLowerCase();
+  return {
+    email: em,
+    rol: 'jugador',
+    role: 'jugador',
+    sede_id: null,
+    sedeId: null,
+    nombre: null,
+    pais: null,
+    torneosOficialesHabilitados: false,
+  };
+}
+
 /** GET /api/auth/mi-rol y GET /api/usuarios/mi-rol — JWT; lectura `user_roles`. */
 async function handleGetMiRol(req, res) {
   try {
     const authUser = await authUserFromBearer(req);
-    if (!authUser?.email) return res.status(401).json({ error: 'No autorizado' });
-    const email = String(authUser.email).trim().toLowerCase();
-    const row = await fetchUserRoleRowForAuthUser(authUser);
-    if (!row && LEGACY_SUPER_ADMIN_EMAILS_API.includes(email)) {
-      return res.json({
-        email,
-        rol: 'super_admin',
-        role: 'super_admin',
-        sede_id: null,
-        sedeId: null,
-        nombre: null,
-        pais: null,
-        torneosOficialesHabilitados: true,
-        legacy: true,
-      });
+    if (!authUser?.id) return res.status(401).json({ error: 'No autorizado' });
+
+    const userId = String(authUser.id).trim();
+    const email = String(authUser.email || '').trim().toLowerCase();
+
+    console.log('[mi-rol] lookup:', { userId, email });
+
+    const { data: row, error: roleError } = await fetchUserRoleRowByJwtUserId(userId);
+
+    console.log('[mi-rol] user_roles query result:', {
+      userId,
+      row: row ?? null,
+      error: roleError?.message ?? null,
+    });
+
+    if (roleError || !row) {
+      return res.json(buildDefaultJugadorMiRolPayload(email));
     }
+
     return res.json(buildMiRolJsonPayload(email, row));
   } catch (err) {
     console.error('❌ GET mi-rol:', err.message);
