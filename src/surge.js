@@ -241,6 +241,19 @@ function precioFromCombined(combined, minimo, maximo) {
   return max;
 }
 
+function computeSurgePriceRangeFromPct(precioBase, descuentoMaxPct, aumentoMaxPct) {
+  const base = Number(precioBase) || 0;
+  const descPct = Number(descuentoMaxPct);
+  const aumPct = Number(aumentoMaxPct);
+  if (base <= 0 || !Number.isFinite(descPct) || !Number.isFinite(aumPct)) return null;
+  if (descPct < 0 || descPct > 100 || aumPct < 0) return null;
+
+  const minimo = Math.round(base * (1 - descPct / 100));
+  const maximo = Math.round(base * (1 + aumPct / 100));
+  if (maximo < minimo) return null;
+  return { minimo, maximo };
+}
+
 function parseSlotInicio(raw, tz) {
   if (raw == null || String(raw).trim() === '') return null;
   const ms = new Date(String(raw).trim()).getTime();
@@ -287,7 +300,7 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
 
   const { data: config, error: cfgErr } = await supabaseAdmin
     .from('surge_config')
-    .select('precio_minimo, precio_maximo, activo')
+    .select('descuento_max_pct, aumento_max_pct, activo')
     .eq('sede_id', sid)
     .eq('deporte', dep)
     .maybeSingle();
@@ -297,11 +310,16 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
     return { precio: precioBase, surge_activo: false };
   }
 
-  const minimo = Number(config.precio_minimo) || 0;
-  const maximo = Number(config.precio_maximo) || 0;
-  if (minimo <= 0 || maximo <= 0 || maximo < minimo) {
+  const priceRange = computeSurgePriceRangeFromPct(
+    precioBase,
+    config.descuento_max_pct,
+    config.aumento_max_pct,
+  );
+  if (!priceRange) {
     return { precio: precioBase, surge_activo: false };
   }
+
+  const { minimo, maximo } = priceRange;
 
   const nowMs = Date.now();
   const windowEndMs = nowMs + SURGE_WINDOW_MS;

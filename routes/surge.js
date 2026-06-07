@@ -1,14 +1,14 @@
 import { calculateSurgePrice, normalizeSurgeDeporte } from '../src/surge.js';
 
-function parsePrecioSurge(raw, fieldName) {
+function parsePctSurge(raw, fieldName) {
   if (raw === null || raw === undefined || raw === '') {
     throw Object.assign(new Error(`${fieldName} es requerido`), { status: 400 });
   }
-  const n = Number(String(raw).replace(/\./g, '').replace(',', '.'));
+  const n = Number(String(raw).replace(',', '.'));
   if (!Number.isFinite(n) || n < 0) {
     throw Object.assign(new Error(`${fieldName} inválido`), { status: 400 });
   }
-  return Math.round(n);
+  return n;
 }
 
 export function mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
@@ -43,7 +43,7 @@ export function mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
 
       const { data, error } = await supabaseAdmin
         .from('surge_config')
-        .select('id, sede_id, deporte, precio_minimo, precio_maximo, activo, updated_at')
+        .select('id, sede_id, deporte, descuento_max_pct, aumento_max_pct, activo, updated_at')
         .eq('sede_id', sedeId)
         .order('deporte', { ascending: true });
 
@@ -70,18 +70,18 @@ export function mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
 
       const deporte = normalizeSurgeDeporte(body.deporte);
       const activo = body.activo === true || body.activo === 'true' || body.activo === 1;
-      const precioMinimo = parsePrecioSurge(body.precio_minimo, 'precio_minimo');
-      const precioMaximo = parsePrecioSurge(body.precio_maximo, 'precio_maximo');
+      const descuentoMaxPct = parsePctSurge(body.descuento_max_pct, 'descuento_max_pct');
+      const aumentoMaxPct = parsePctSurge(body.aumento_max_pct, 'aumento_max_pct');
 
-      if (activo && (precioMinimo <= 0 || precioMaximo <= 0 || precioMaximo < precioMinimo)) {
-        return res.status(400).json({ error: 'precio_maximo debe ser mayor o igual a precio_minimo' });
+      if (activo && descuentoMaxPct > 100) {
+        return res.status(400).json({ error: 'descuento_max_pct debe ser entre 0 y 100' });
       }
 
       const row = {
         sede_id: sedeId,
         deporte,
-        precio_minimo: precioMinimo,
-        precio_maximo: precioMaximo,
+        descuento_max_pct: descuentoMaxPct,
+        aumento_max_pct: aumentoMaxPct,
         activo,
         updated_at: new Date().toISOString(),
       };
@@ -89,11 +89,12 @@ export function mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
       const { data, error } = await supabaseAdmin
         .from('surge_config')
         .upsert(row, { onConflict: 'sede_id,deporte' })
-        .select('id, sede_id, deporte, precio_minimo, precio_maximo, activo, updated_at')
-        .single();
+        .select('id, sede_id, deporte, descuento_max_pct, aumento_max_pct, activo, updated_at')
+        .limit(1);
 
       if (error) throw error;
-      return res.json({ config: data });
+      const config = Array.isArray(data) ? data[0] : data;
+      return res.json({ config: config ?? null });
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ POST /api/surge-config:', err.message);
