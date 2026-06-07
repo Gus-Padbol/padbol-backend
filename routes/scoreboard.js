@@ -220,6 +220,29 @@ export function mountScoreboardRoutes(app, {
     }
   });
 
+  app.get('/api/scoreboard/partidos', async (req, res) => {
+    try {
+      const sedeId = parseSedeId(req.query.sede_id);
+      if (!sedeId) {
+        return res.status(400).json({ error: 'sede_id query param es requerido' });
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('scoreboard_partidos')
+        .select(SCOREBOARD_PARTIDO_SELECT)
+        .eq('sede_id', sedeId)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const partidos = (data ?? []).map((row) => enrichPartidoResponse(row));
+      return res.json({ partidos });
+    } catch (err) {
+      console.error('❌ GET /api/scoreboard/partidos:', err.message);
+      return res.status(500).json({ error: err.message || 'Error al listar partidos' });
+    }
+  });
+
   app.get('/api/scoreboard/partidos/:id', async (req, res) => {
     try {
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
