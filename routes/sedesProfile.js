@@ -15,6 +15,20 @@ function parseSedeId(raw) {
   return sedeId;
 }
 
+/** Update sede by PK; avoid .single() when PostgREST may return multiple rows. */
+async function updateSedeById(supabaseAdmin, sedeId, patch) {
+  const { data, error } = await supabaseAdmin
+    .from('sedes')
+    .update(patch)
+    .eq('id', sedeId)
+    .select('*')
+    .limit(1);
+
+  if (error) throw error;
+  if (Array.isArray(data)) return data[0] ?? null;
+  return data ?? null;
+}
+
 function getTodayDateStr() {
   const nowAR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
   const year = nowAR.getFullYear();
@@ -396,14 +410,8 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         return res.status(400).json({ error: 'Ningún campo reconocido para actualizar' });
       }
 
-      const { data: updated, error } = await supabase
-        .from('sedes')
-        .update(patch)
-        .eq('id', sedeId)
-        .select('*')
-        .single();
+      const updated = await updateSedeById(supabaseAdmin, sedeId, patch);
 
-      if (error) throw error;
       if (!updated) return res.status(404).json({ error: 'Sede no encontrada' });
 
       res.json({ sede: enrichSedeWithHeroPhoto(updated) });
@@ -490,14 +498,11 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
 
       const fotos_urls = capSedeFotoUrls([...currentFotos, fotoUrl]);
 
-      const { data: updated, error: updateErr } = await supabaseAdmin
-        .from('sedes')
-        .update({ fotos_urls })
-        .eq('id', sedeId)
-        .select('*')
-        .single();
+      const updated = await updateSedeById(supabaseAdmin, sedeId, { fotos_urls });
 
-      if (updateErr) throw updateErr;
+      if (!updated) {
+        return res.status(404).json({ error: 'Sede no encontrada' });
+      }
 
       console.log(`✓ POST /api/sedes/${sedeId}/fotos — ${fotos_urls.length}/${MAX_FOTOS_SEDE}`);
       return res.status(201).json({
