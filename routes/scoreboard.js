@@ -42,6 +42,41 @@ function parseSedeId(raw) {
   return Number.isFinite(sid) && sid > 0 ? sid : null;
 }
 
+const SCOREBOARD_PARTIDO_SELECT = [
+  'id', 'sede_id', 'torneo_id', 'torneo_nombre', 'cancha',
+  'equipo_a_nombre', 'equipo_b_nombre', 'equipo_a_jugadores', 'equipo_b_jugadores',
+  'jersey_a1', 'jersey_a2', 'jersey_a3', 'jersey_a4',
+  'jersey_b1', 'jersey_b2', 'jersey_b3', 'jersey_b4',
+  'color_a', 'color_b',
+  'color_uniforme_a1', 'color_uniforme_a2', 'color_uniforme_b1', 'color_uniforme_b2',
+  'estado', 'saque_actual', 'score_a', 'score_b', 'games_a', 'games_b', 'sets_a', 'sets_b',
+  'historial_sets', 'es_tiebreak', 'ultimo_punto', 'historial_puntos',
+  'cronometro_inicio', 'cronometro_pausado', 'cronometro_segundos',
+  'created_at', 'updated_at',
+].join(', ');
+
+const COLOR_UNIFORME_FIELDS = [
+  'color_uniforme_a1',
+  'color_uniforme_a2',
+  'color_uniforme_b1',
+  'color_uniforme_b2',
+];
+
+function parseColorUniforme(raw) {
+  if (raw == null || raw === '') return null;
+  return String(raw).trim().slice(0, 64);
+}
+
+function pickColorUniformes(body) {
+  const out = {};
+  for (const key of COLOR_UNIFORME_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(body ?? {}, key)) {
+      out[key] = parseColorUniforme(body[key]);
+    }
+  }
+  return out;
+}
+
 function emitScoreboardUpdate(io, partidoId, partido) {
   if (!io) return;
   const payload = enrichPartidoResponse(partido);
@@ -51,7 +86,7 @@ function emitScoreboardUpdate(io, partidoId, partido) {
 async function fetchPartido(supabaseAdmin, partidoId) {
   const { data, error } = await supabaseAdmin
     .from('scoreboard_partidos')
-    .select('*')
+    .select(SCOREBOARD_PARTIDO_SELECT)
     .eq('id', partidoId)
     .maybeSingle();
 
@@ -70,11 +105,11 @@ async function savePartido(supabaseAdmin, partido) {
     .from('scoreboard_partidos')
     .update({ ...rest, updated_at: new Date().toISOString() })
     .eq('id', id)
-    .select('*')
-    .single();
+    .select(SCOREBOARD_PARTIDO_SELECT)
+    .limit(1);
 
   if (error) throw error;
-  return data;
+  return Array.isArray(data) ? data[0] ?? null : data;
 }
 
 export function mountScoreboardRoutes(app, {
@@ -161,19 +196,22 @@ export function mountScoreboardRoutes(app, {
         saque_actual: saque_actual === 'B' ? 'B' : 'A',
         color_a: String(color_a || '#1a3a6e').trim(),
         color_b: String(color_b || '#6e1a1a').trim(),
+        ...pickColorUniformes(req.body),
         estado: 'pendiente',
       };
 
       const { data, error } = await supabaseAdmin
         .from('scoreboard_partidos')
         .insert(row)
-        .select('*')
-        .single();
+        .select(SCOREBOARD_PARTIDO_SELECT)
+        .limit(1);
 
       if (error) throw error;
+      const created = Array.isArray(data) ? data[0] : data;
+      if (!created) throw new Error('No se pudo crear el partido');
 
-      const enriched = enrichPartidoResponse(data);
-      emitScoreboardUpdate(io, data.id, data);
+      const enriched = enrichPartidoResponse(created);
+      emitScoreboardUpdate(io, created.id, created);
       return res.status(201).json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -193,6 +231,53 @@ export function mountScoreboardRoutes(app, {
     }
   });
 
+  app.patch('/api/scoreboard/partidos/:id', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status).json({ error: authError });
+
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      assertCanControlScoreboard(role, partido.sede_id);
+
+      const body = req.body ?? {};
+      const patch = { ...pickColorUniformes(body) };
+
+      const passthrough = [
+        'equipo_a_nombre', 'equipo_b_nombre', 'equipo_a_jugadores', 'equipo_b_jugadores',
+        'cancha', 'torneo_nombre', 'torneo_id', 'saque_actual', 'color_a', 'color_b',
+        'jersey_a1', 'jersey_a2', 'jersey_a3', 'jersey_a4',
+        'jersey_b1', 'jersey_b2', 'jersey_b3', 'jersey_b4',
+      ];
+      for (const key of passthrough) {
+        if (Object.prototype.hasOwnProperty.call(body, key)) patch[key] = body[key];
+      }
+
+      if (Object.keys(patch).length === 0) {
+        return res.status(400).json({ error: 'Ningún campo reconocido para actualizar' });
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('scoreboard_partidos')
+        .update({ ...patch, updated_at: new Date().toISOString() })
+        .eq('id', partido.id)
+        .select(SCOREBOARD_PARTIDO_SELECT)
+        .limit(1);
+
+      if (error) throw error;
+      const updated = Array.isArray(data) ? data[0] : data;
+      if (!updated) return res.status(404).json({ error: 'Partido no encontrado' });
+
+      const enriched = enrichPartidoResponse(updated);
+      emitScoreboardUpdate(io, updated.id, updated);
+      return res.json(enriched);
+    } catch (err) {
+      const st = err.status || 500;
+      console.error('❌ PATCH /api/scoreboard/partidos/:id:', err.message);
+      return res.status(st).json({ error: err.message || 'Error al actualizar partido' });
+    }
+  });
+
   app.get('/api/scoreboard/cancha/:sedeId/:cancha', async (req, res) => {
     try {
       const sid = parseSedeId(req.params.sedeId);
@@ -203,7 +288,7 @@ export function mountScoreboardRoutes(app, {
 
       const { data, error } = await supabaseAdmin
         .from('scoreboard_partidos')
-        .select('*')
+        .select(SCOREBOARD_PARTIDO_SELECT)
         .eq('sede_id', sid)
         .eq('cancha', cancha)
         .in('estado', ['en_curso', 'pendiente'])
