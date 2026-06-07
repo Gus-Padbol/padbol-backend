@@ -32,6 +32,7 @@ import { reservaHoraInicioFromRow, reservaHoraFinFromRow, reservaMatchesSede } f
 import { createClasesRouter } from './routes/clases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountSurgeRoutes } from './routes/surge.js';
+import { mountCanchasRoutes } from './routes/canchas.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
 import { mountResenasRoutes } from './routes/resenas.js';
 import {
@@ -841,6 +842,7 @@ app.get('/api/sedes', async (req, res) => {
 });
 
 mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser });
+mountCanchasRoutes(app, { supabaseAdmin });
 mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountResenasRoutes(app, {
   pgPool,
