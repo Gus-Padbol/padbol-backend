@@ -114,6 +114,18 @@ async function fetchJugadoresTempByPartido(supabaseAdmin, partidoId) {
   return data ?? [];
 }
 
+/** Escrituras en scoreboard_jugadores_temp solo vía service role (supabaseAdmin). */
+async function upsertJugadorTemp(supabaseAdmin, row) {
+  const { data, error } = await supabaseAdmin
+    .from('scoreboard_jugadores_temp')
+    .upsert(row, { onConflict: 'partido_id,equipo,slot' })
+    .select(JUGADOR_TEMP_SELECT)
+    .limit(1);
+
+  if (error) throw error;
+  return Array.isArray(data) ? data[0] ?? null : data ?? null;
+}
+
 function emitScoreboardUpdate(io, partidoId, partido) {
   if (!io) return;
   const payload = enrichPartidoResponse(partido);
@@ -418,14 +430,7 @@ export function mountScoreboardRoutes(app, {
         updated_at: new Date().toISOString(),
       };
 
-      const { data, error } = await supabaseAdmin
-        .from('scoreboard_jugadores_temp')
-        .upsert(row, { onConflict: 'partido_id,equipo,slot' })
-        .select(JUGADOR_TEMP_SELECT)
-        .limit(1);
-
-      if (error) throw error;
-      const saved = Array.isArray(data) ? data[0] : data;
+      const saved = await upsertJugadorTemp(supabaseAdmin, row);
       return res.status(201).json({ jugador: saved ?? row });
     } catch (err) {
       const st = err.status || 500;
