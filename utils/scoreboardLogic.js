@@ -172,6 +172,44 @@ function winRegularPoint(partido, equipo) {
   partido.score_b = scoreB;
 }
 
+export function getCurrentSetNumero(partido) {
+  const historial = Array.isArray(partido?.historial_sets) ? partido.historial_sets : [];
+  return historial.length + 1;
+}
+
+export function buildHistorialPuntoSnapshot(partido, equipo) {
+  return {
+    equipo,
+    score_a_antes: normalizePointScore(partido.score_a),
+    score_b_antes: normalizePointScore(partido.score_b),
+    set_numero: getCurrentSetNumero(partido),
+    games_a_antes: Number(partido.games_a) || 0,
+    games_b_antes: Number(partido.games_b) || 0,
+    sets_a_antes: Number(partido.sets_a) || 0,
+    sets_b_antes: Number(partido.sets_b) || 0,
+    es_tiebreak_antes: Boolean(partido.es_tiebreak),
+    estado_antes: partido.estado ?? 'pendiente',
+    historial_sets_antes: JSON.parse(JSON.stringify(partido.historial_sets || [])),
+    saque_actual_antes: partido.saque_actual ?? 'A',
+  };
+}
+
+export function applyHistorialPuntoSnapshot(partido, entry) {
+  partido.score_a = entry.score_a_antes;
+  partido.score_b = entry.score_b_antes;
+  partido.games_a = entry.games_a_antes;
+  partido.games_b = entry.games_b_antes;
+  partido.sets_a = entry.sets_a_antes ?? 0;
+  partido.sets_b = entry.sets_b_antes ?? 0;
+  partido.es_tiebreak = Boolean(entry.es_tiebreak_antes);
+  partido.estado = entry.estado_antes ?? partido.estado;
+  partido.historial_sets = JSON.parse(JSON.stringify(entry.historial_sets_antes || []));
+  partido.saque_actual = entry.saque_actual_antes ?? partido.saque_actual;
+  partido.ultimo_punto = null;
+  partido.updated_at = new Date().toISOString();
+  return partido;
+}
+
 export function registrarPunto(partido, equipo) {
   if (!['A', 'B'].includes(equipo)) {
     throw Object.assign(new Error('Equipo inválido'), { status: 400 });

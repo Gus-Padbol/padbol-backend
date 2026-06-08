@@ -8,6 +8,8 @@ import {
   resolveJerseyNumber,
   pauseCronometro,
   startCronometro,
+  buildHistorialPuntoSnapshot,
+  applyHistorialPuntoSnapshot,
 } from '../utils/scoreboardLogic.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
@@ -124,6 +126,56 @@ async function upsertJugadorTemp(supabaseAdmin, row) {
 
   if (error) throw error;
   return Array.isArray(data) ? data[0] ?? null : data ?? null;
+}
+
+const HISTORIAL_PUNTO_SELECT = [
+  'id', 'partido_id', 'equipo',
+  'score_a_antes', 'score_b_antes', 'set_numero',
+  'games_a_antes', 'games_b_antes',
+  'sets_a_antes', 'sets_b_antes', 'es_tiebreak_antes',
+  'estado_antes', 'historial_sets_antes', 'saque_actual_antes',
+  'timestamp',
+].join(', ');
+
+async function insertHistorialPuntoBefore(supabaseAdmin, partidoId, partido, equipo) {
+  const snapshot = buildHistorialPuntoSnapshot(partido, equipo);
+  const { error } = await supabaseAdmin
+    .from('scoreboard_historial_puntos')
+    .insert({ partido_id: partidoId, ...snapshot });
+
+  if (error) throw error;
+}
+
+async function fetchUltimoHistorialPunto(supabaseAdmin, partidoId) {
+  const { data, error } = await supabaseAdmin
+    .from('scoreboard_historial_puntos')
+    .select(HISTORIAL_PUNTO_SELECT)
+    .eq('partido_id', partidoId)
+    .order('timestamp', { ascending: false })
+    .limit(1);
+
+  if (error) throw error;
+  return data?.[0] ?? null;
+}
+
+async function deleteHistorialPuntoById(supabaseAdmin, historialId) {
+  const { error } = await supabaseAdmin
+    .from('scoreboard_historial_puntos')
+    .delete()
+    .eq('id', historialId);
+
+  if (error) throw error;
+}
+
+async function fetchHistorialPuntos(supabaseAdmin, partidoId) {
+  const { data, error } = await supabaseAdmin
+    .from('scoreboard_historial_puntos')
+    .select(HISTORIAL_PUNTO_SELECT)
+    .eq('partido_id', partidoId)
+    .order('timestamp', { ascending: false });
+
+  if (error) throw error;
+  return data ?? [];
 }
 
 function emitScoreboardUpdate(io, partidoId, partido) {
@@ -496,6 +548,7 @@ export function mountScoreboardRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
+      await insertHistorialPuntoBefore(supabaseAdmin, partido.id, partido, equipo);
       registrarPunto(partido, equipo);
       partido = await savePartido(supabaseAdmin, partido);
 
@@ -506,6 +559,49 @@ export function mountScoreboardRoutes(app, {
       const st = err.status || 500;
       console.error('❌ POST /api/scoreboard/partidos/:id/punto/:equipo:', err.message);
       return res.status(st).json({ error: err.message || 'Error al registrar punto' });
+    }
+  });
+
+  app.get('/api/scoreboard/partidos/:id/historial', async (req, res) => {
+    try {
+      const partidoId = String(req.params.id ?? '').trim();
+      if (!partidoId) {
+        return res.status(400).json({ error: 'partidoId inválido' });
+      }
+
+      const historial = await fetchHistorialPuntos(supabaseAdmin, partidoId);
+      return res.json({ historial });
+    } catch (err) {
+      console.error('❌ GET /api/scoreboard/partidos/:id/historial:', err.message);
+      return res.status(500).json({ error: err.message || 'Error al obtener historial de puntos' });
+    }
+  });
+
+  app.post('/api/scoreboard/partidos/:id/undo', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status).json({ error: authError });
+
+      let partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      assertCanControlScoreboard(role, partido.sede_id);
+
+      const entry = await fetchUltimoHistorialPunto(supabaseAdmin, partido.id);
+      if (!entry) {
+        return res.status(400).json({ error: 'No hay puntos para deshacer' });
+      }
+
+      applyHistorialPuntoSnapshot(partido, entry);
+      await deleteHistorialPuntoById(supabaseAdmin, entry.id);
+      partido = await savePartido(supabaseAdmin, partido);
+
+      const enriched = enrichPartidoResponse(partido);
+      emitScoreboardUpdate(io, partido.id, partido);
+      return res.json(enriched);
+    } catch (err) {
+      const st = err.status || 500;
+      console.error('❌ POST /api/scoreboard/partidos/:id/undo:', err.message);
+      return res.status(st).json({ error: err.message || 'Error al deshacer punto' });
     }
   });
 
