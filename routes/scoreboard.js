@@ -519,14 +519,18 @@ export function mountScoreboardRoutes(app, {
         .select(SCOREBOARD_PARTIDO_SELECT)
         .eq('sede_id', sid)
         .eq('cancha', cancha)
-        .in('estado', ['en_curso', 'pendiente'])
-        .order('updated_at', { ascending: false })
+        .not('estado', 'in', '(terminado,finalizado)')
+        .order('created_at', { ascending: false })
         .limit(1);
 
       if (error) throw error;
 
       const partido = data?.[0] ?? null;
-      return res.json(partido ? enrichPartidoResponse(partido) : null);
+      if (!partido) {
+        return res.json({ partido: null });
+      }
+
+      return res.json({ partido: enrichPartidoResponse(partido) });
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/cancha/:sedeId/:cancha:', err.message);
