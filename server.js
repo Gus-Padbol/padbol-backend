@@ -51,6 +51,7 @@ import { mountListaEsperaGeneralRoutes } from './routes/listaEsperaGeneral.js';
 import { mountLogrosPremiosRoutes } from './routes/logrosPremios.js';
 import { mountLigasPremiosRoutes } from './routes/ligasPremios.js';
 import { enrichSedeWithHeroPhoto } from './utils/sedeHero.js';
+import { SEDE_APP_SELECT } from './utils/sedePublicSelect.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
@@ -824,7 +825,7 @@ app.get('/api/sedes', async (req, res) => {
     console.log('📡 GET /api/sedes - Conectando a Supabase...');
     const { data, error } = await supabase
       .from('sedes')
-      .select('*');
+      .select(SEDE_APP_SELECT);
     
     console.log('📊 Respuesta Supabase:', { data, error });
     
@@ -920,7 +921,7 @@ app.get('/api/sedes/:id', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('sedes')
-      .select('*')
+      .select(SEDE_APP_SELECT)
       .eq('id', sedeId)
       .maybeSingle();
 
