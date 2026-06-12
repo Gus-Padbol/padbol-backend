@@ -624,6 +624,28 @@ function slotBlockingInfo({ hora, canchaNum }, blockingReservas, blockingPartido
   return { blocked: false, motivo: null };
 }
 
+function compareHoraSort(a, b) {
+  return parseTimeToMinutes(a) - parseTimeToMinutes(b);
+}
+
+function mergeSlotTimeCandidates(smartTimes, gridTimes, availabilityCtx) {
+  const merged = new Set(smartTimes);
+  for (const hora of gridTimes) {
+    if (merged.has(hora)) continue;
+    const { canchasLibres } = evaluateHoraCourts(
+      hora,
+      availabilityCtx.totalCourts,
+      availabilityCtx.blockingReservas,
+      availabilityCtx.blockingPartidos,
+      availabilityCtx.nowMs,
+    );
+    if (canchasLibres >= 1) {
+      merged.add(hora);
+    }
+  }
+  return [...merged].sort(compareHoraSort);
+}
+
 function mergeReservasById(rowsA, rowsB) {
   const map = new Map();
   for (const row of [...(rowsA ?? []), ...(rowsB ?? [])]) {
@@ -702,11 +724,21 @@ export async function buildDisponibilidadSlots(
     blockingReservas,
     blockingPartidos,
   );
-  const slotTimes = smartInicios.length > 0
+  const smartTimes = smartInicios.length > 0
     ? smartInicios.map((m) => minutosAHoraReserva(m))
-    : generateSlotTimes(sede, null, duracionMinutos, fecha);
+    : [];
+  const gridTimes = generateSlotTimes(sede, null, duracionMinutos, fecha);
   const totalCourts = sede.cantidad_canchas || 1;
   const nowMs = Date.now();
+  const availabilityCtx = {
+    totalCourts,
+    blockingReservas,
+    blockingPartidos,
+    nowMs,
+  };
+  const slotTimes = smartTimes.length > 0
+    ? mergeSlotTimeCandidates(smartTimes, gridTimes, availabilityCtx)
+    : gridTimes;
 
   if (expandCourts) {
     return slotTimes.flatMap((hora) => {
