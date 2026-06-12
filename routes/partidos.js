@@ -2,7 +2,7 @@ import express from 'express';
 import { notifyPartidoJugadorUnido, sendPushToUser } from '../utils/push.js';
 import { createNotificacion } from '../utils/notificaciones.js';
 import { procesarResultadoPartidoCasual } from '../src/partidos/resultadoService.js';
-import { generarIniciosMinutosSlotReserva, minutosAHoraReserva } from '../lib/reservaSlotsHorarios.js';
+import { generarIniciosMinutosSlotReserva, generarIniciosSmartSlots, minutosAHoraReserva } from '../lib/reservaSlotsHorarios.js';
 import {
   normalizeHoraInicioReserva,
   computeHoraFinDesdeDuracion,
@@ -649,7 +649,16 @@ export async function buildDisponibilidadSlots(
     { sedeId, sedeNombre: sede.nombre, fecha },
   );
 
-  const slotTimes = generateSlotTimes(sede, null, duracionMinutos, fecha);
+  const smartInicios = generarIniciosSmartSlots(
+    sede,
+    fecha,
+    duracionMinutos,
+    blockingReservas,
+    blockingPartidos,
+  );
+  const slotTimes = smartInicios.length > 0
+    ? smartInicios.map((m) => minutosAHoraReserva(m))
+    : generateSlotTimes(sede, null, duracionMinutos, fecha);
   const totalCourts = sede.cantidad_canchas || 1;
   const nowMs = Date.now();
 
