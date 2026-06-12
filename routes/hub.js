@@ -1,6 +1,6 @@
 import express from 'express';
 
-const CARD_KEYS = ['reservar', 'buscar_partido', 'torneos', 'armar_partido'];
+const CARD_KEYS = ['reservar', 'buscar_partido', 'torneos', 'rankings', 'armar_partido'];
 
 const VALID_DEPORTES = new Set([
   'padbol',
