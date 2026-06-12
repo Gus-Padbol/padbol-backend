@@ -480,7 +480,8 @@ export function parseCourtNumberFromStorage(cancha) {
 export function isReservaBlockingSlot(reserva, { hora, canchaNum }, nowMs = Date.now()) {
   if (!isBlockingReserva(reserva, nowMs)) return false;
   if (formatHora(reservaHoraInicioFromRow(reserva)) !== formatHora(hora)) return false;
-  return Number(resolveReservaCanchaQueryText(reserva.cancha)) === canchaNum;
+  const court = resolveReservaCanchaQueryText(reserva.cancha ?? reserva.cancha_id);
+  return Number(court) === canchaNum;
 }
 
 export function isPartidoBlockingSlot(partido, { hora, canchaNum }) {
@@ -543,17 +544,62 @@ function getHoraUnavailableInfo(hora, totalCourts, blockingReservas, blockingPar
   return { blocked: true, motivo: 'reservado' };
 }
 
-function buildUnavailableSlot(hora, info, cancha = null) {
+function buildUnavailableSlot(hora, info, cancha = null, canchasLibres = 0) {
   const slot = {
     hora,
     disponible: false,
     cancha,
+    canchas_libres: canchasLibres,
     motivo: info.motivo ?? 'reservado',
   };
   if (info.partido) {
     slot.partido = info.partido;
   }
   return slot;
+}
+
+function buildAvailableSlot(hora, cancha, canchasLibres) {
+  return {
+    hora,
+    disponible: true,
+    cancha,
+    canchas_libres: canchasLibres,
+  };
+}
+
+function evaluateHoraCourts(hora, totalCourts, blockingReservas, blockingPartidos, nowMs) {
+  const freeCourts = [];
+  const partidoSlots = [];
+
+  for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
+    const info = slotBlockingInfo(
+      { hora, canchaNum: cancha },
+      blockingReservas,
+      blockingPartidos,
+      nowMs,
+    );
+
+    if (!info.blocked) {
+      freeCourts.push(cancha);
+      continue;
+    }
+
+    if (info.motivo === 'partido_abierto' && info.partido) {
+      const lugaresLibres = Math.max(
+        0,
+        (info.partido.jugadores_requeridos ?? 4) - (info.partido.jugadores_confirmados ?? 0),
+      );
+      if (lugaresLibres > 0) {
+        partidoSlots.push({ cancha, partido: info.partido, lugaresLibres });
+      }
+    }
+  }
+
+  return {
+    freeCourts,
+    partidoSlots,
+    canchasLibres: freeCourts.length,
+  };
 }
 
 function slotBlockingInfo({ hora, canchaNum }, blockingReservas, blockingPartidos, nowMs) {
@@ -664,36 +710,28 @@ export async function buildDisponibilidadSlots(
 
   if (expandCourts) {
     return slotTimes.flatMap((hora) => {
+      const { freeCourts, partidoSlots, canchasLibres } = evaluateHoraCourts(
+        hora,
+        totalCourts,
+        blockingReservas,
+        blockingPartidos,
+        nowMs,
+      );
       const cards = [];
 
-      for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
-        const info = slotBlockingInfo(
-          { hora, canchaNum: cancha },
-          blockingReservas,
-          blockingPartidos,
-          nowMs,
-        );
+      for (const cancha of freeCourts) {
+        cards.push(buildAvailableSlot(hora, cancha, canchasLibres));
+      }
 
-        if (!info.blocked) {
-          cards.push({ hora, disponible: true, cancha });
-          continue;
-        }
-
-        if (info.motivo === 'partido_abierto' && info.partido) {
-          const lugaresLibres = Math.max(
-            0,
-            (info.partido.jugadores_requeridos ?? 4) - (info.partido.jugadores_confirmados ?? 0),
-          );
-          if (lugaresLibres > 0) {
-            cards.push({
-              hora,
-              disponible: false,
-              cancha,
-              motivo: 'partido_abierto',
-              partido: info.partido,
-            });
-          }
-        }
+      for (const { cancha, partido } of partidoSlots) {
+        cards.push({
+          hora,
+          disponible: false,
+          cancha,
+          canchas_libres: canchasLibres,
+          motivo: 'partido_abierto',
+          partido,
+        });
       }
 
       if (cards.length === 0) {
@@ -704,7 +742,7 @@ export async function buildDisponibilidadSlots(
           blockingPartidos,
           nowMs,
         );
-        return [buildUnavailableSlot(hora, unavailableInfo)];
+        return [buildUnavailableSlot(hora, unavailableInfo, null, 0)];
       }
 
       return cards;
@@ -712,16 +750,28 @@ export async function buildDisponibilidadSlots(
   }
 
   return slotTimes.map((hora) => {
-    for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
-      const info = slotBlockingInfo(
-        { hora, canchaNum: cancha },
-        blockingReservas,
-        blockingPartidos,
-        nowMs,
+    const { freeCourts, partidoSlots, canchasLibres } = evaluateHoraCourts(
+      hora,
+      totalCourts,
+      blockingReservas,
+      blockingPartidos,
+      nowMs,
+    );
+
+    if (canchasLibres > 0) {
+      return buildAvailableSlot(hora, freeCourts[0], canchasLibres);
+    }
+
+    if (partidoSlots.length > 0) {
+      const bestPartido = partidoSlots.reduce(
+        (best, current) => (current.lugaresLibres > best.lugaresLibres ? current : best),
       );
-      if (!info.blocked) {
-        return { hora, disponible: true, cancha };
-      }
+      return buildUnavailableSlot(
+        hora,
+        { blocked: true, motivo: 'partido_abierto', partido: bestPartido.partido },
+        bestPartido.cancha,
+        0,
+      );
     }
 
     const info = getHoraUnavailableInfo(
@@ -731,7 +781,7 @@ export async function buildDisponibilidadSlots(
       blockingPartidos,
       nowMs,
     );
-    return buildUnavailableSlot(hora, info);
+    return buildUnavailableSlot(hora, info, null, 0);
   });
 }
 
