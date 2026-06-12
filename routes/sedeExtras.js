@@ -19,6 +19,17 @@ function parseStock(raw) {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
+function parseImagenUrl(body) {
+  const raw = body?.imagen_url ?? body?.image_url;
+  if (raw == null || raw === '') return null;
+  return String(raw).trim().slice(0, 2000) || null;
+}
+
+function hasImagenUrlInBody(body) {
+  return Object.prototype.hasOwnProperty.call(body ?? {}, 'imagen_url')
+    || Object.prototype.hasOwnProperty.call(body ?? {}, 'image_url');
+}
+
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
   const row = await fetchUserRoleRowForAuthUser(user);
@@ -103,7 +114,7 @@ export function mountSedeExtrasRoutes(app, {
 
       const descripcion = b.descripcion != null ? String(b.descripcion).trim().slice(0, 2000) || null : null;
       const precio_moneda = String(b.precio_moneda || 'ARS').trim().toUpperCase().slice(0, 8) || 'ARS';
-      const imagen_url = b.imagen_url != null ? String(b.imagen_url).trim().slice(0, 2000) || null : null;
+      const imagen_url = parseImagenUrl(b);
       const activo = b.activo === undefined ? true : Boolean(b.activo);
       const stock = parseStock(b.stock);
       const aprobado_super = isSuperAdminRole(role) && Boolean(b.aprobado_super);
@@ -128,6 +139,15 @@ export function mountSedeExtrasRoutes(app, {
 
       if (result.error && /stock/i.test(String(result.error.message || ''))) {
         delete insertRow.stock;
+        result = await supabaseAdmin
+          .from('sede_extras')
+          .insert([insertRow])
+          .select('*')
+          .single();
+      }
+
+      if (result.error && /imagen_url/i.test(String(result.error.message || ''))) {
+        delete insertRow.imagen_url;
         result = await supabaseAdmin
           .from('sede_extras')
           .insert([insertRow])
@@ -188,8 +208,8 @@ export function mountSedeExtrasRoutes(app, {
       if (Object.prototype.hasOwnProperty.call(b, 'precio_moneda')) {
         patch.precio_moneda = String(b.precio_moneda || 'ARS').trim().toUpperCase().slice(0, 8) || 'ARS';
       }
-      if (Object.prototype.hasOwnProperty.call(b, 'imagen_url')) {
-        patch.imagen_url = b.imagen_url != null ? String(b.imagen_url).trim().slice(0, 2000) || null : null;
+      if (hasImagenUrlInBody(b)) {
+        patch.imagen_url = parseImagenUrl(b);
       }
       if (Object.prototype.hasOwnProperty.call(b, 'activo')) patch.activo = Boolean(b.activo);
       if (Object.prototype.hasOwnProperty.call(b, 'stock')) patch.stock = parseStock(b.stock);
@@ -213,6 +233,16 @@ export function mountSedeExtrasRoutes(app, {
 
       if (error && /stock/i.test(String(error.message || ''))) {
         delete patch.stock;
+        ({ data, error } = await supabaseAdmin
+          .from('sede_extras')
+          .update(patch)
+          .eq('id', extraId)
+          .select('*')
+          .single());
+      }
+
+      if (error && /imagen_url/i.test(String(error.message || ''))) {
+        delete patch.imagen_url;
         ({ data, error } = await supabaseAdmin
           .from('sede_extras')
           .update(patch)
