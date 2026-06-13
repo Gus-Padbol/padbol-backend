@@ -1315,20 +1315,31 @@ const UPCOMING_SEDE_PARTIDO_STATES = ['abierto', 'completo'];
 
 /** Upcoming open/full partidos for a single sede (sede profile preview). */
 export async function fetchSedeUpcomingPartidos(supabaseAdmin, sedeId, user, { limit = 3 } = {}) {
-  const today = getTodayArgentinaDate();
+  const today = new Date();
+  today.setHours(today.getHours() - 3);
+  const todayStr = today.toISOString().split('T')[0];
   const safeLimit = Math.min(20, Math.max(1, Number(limit) || 3));
+
+  console.log('[fetchSedeUpcomingPartidos] query', {
+    sede_id: sedeId,
+    fecha_gte: todayStr,
+    estado: 'abierto',
+    limit: safeLimit,
+  });
 
   const { data, error } = await supabaseAdmin
     .from('partidos_abiertos')
     .select(PARTIDO_SELECT)
     .eq('sede_id', sedeId)
-    .in('estado', UPCOMING_SEDE_PARTIDO_STATES)
-    .gte('fecha', today)
+    .eq('estado', 'abierto')
+    .gte('fecha', todayStr)
     .order('fecha', { ascending: true })
     .order('hora', { ascending: true })
     .limit(safeLimit);
 
   if (error) throw error;
+
+  console.log('[fetchSedeUpcomingPartidos] result count', (data ?? []).length);
 
   return Promise.all(
     (data ?? []).map((partido) => mapPartidoRow(partido, supabaseAdmin, user)),
