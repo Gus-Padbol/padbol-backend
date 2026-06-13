@@ -26,6 +26,13 @@ function getTodayArgentinaDate() {
   return `${year}-${month}-${day}`;
 }
 
+/** Fecha YYYY-MM-DD con offset manual UTC-3 (Argentina). */
+function getTodayArgentinaDateUtcOffset() {
+  const today = new Date();
+  today.setHours(today.getHours() - 3);
+  return today.toISOString().split('T')[0];
+}
+
 function formatHora(hora) {
   if (!hora) return null;
   return String(hora).slice(0, 5);
@@ -1311,16 +1318,13 @@ function validateResultadoPayload(body) {
   };
 }
 
-const UPCOMING_SEDE_PARTIDO_STATES = ['abierto', 'completo'];
-
-/** Upcoming open/full partidos for a single sede (sede profile preview). */
+/** Upcoming open partidos for a single sede (sede profile preview). */
 export async function fetchSedeUpcomingPartidos(supabaseAdmin, sedeId, user, { limit = 3 } = {}) {
-  const today = new Date();
-  today.setHours(today.getHours() - 3);
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = getTodayArgentinaDateUtcOffset();
   const safeLimit = Math.min(20, Math.max(1, Number(limit) || 3));
 
   console.log('[fetchSedeUpcomingPartidos] query', {
+    table: 'partidos_abiertos',
     sede_id: sedeId,
     fecha_gte: todayStr,
     estado: 'abierto',
@@ -1339,7 +1343,7 @@ export async function fetchSedeUpcomingPartidos(supabaseAdmin, sedeId, user, { l
 
   if (error) throw error;
 
-  console.log('[fetchSedeUpcomingPartidos] result count', (data ?? []).length);
+  console.log('[fetchSedeUpcomingPartidos] result count:', data?.length ?? 0);
 
   return Promise.all(
     (data ?? []).map((partido) => mapPartidoRow(partido, supabaseAdmin, user)),
@@ -1518,15 +1522,43 @@ export function createPartidosRouter({
 
   router.get('/abiertos', async (req, res) => {
     try {
-      const today = getTodayArgentinaDate();
+      const todayStr = getTodayArgentinaDateUtcOffset();
+      const sedeId = parsePositiveInt(req.query.sede_id);
       const auth = await getAuthenticatedUser(req);
       const user = auth.user ?? null;
+
+      if (sedeId != null) {
+        console.log('[GET /api/partidos/abiertos] query', {
+          table: 'partidos_abiertos',
+          sede_id: sedeId,
+          fecha_gte: todayStr,
+          estado: 'abierto',
+        });
+
+        const { data: partidos, error } = await supabaseAdmin
+          .from('partidos_abiertos')
+          .select(PARTIDO_SELECT)
+          .eq('sede_id', sedeId)
+          .eq('estado', 'abierto')
+          .gte('fecha', todayStr)
+          .order('fecha', { ascending: true })
+          .order('hora', { ascending: true });
+
+        if (error) throw error;
+
+        console.log('[GET /api/partidos/abiertos] result count:', partidos?.length ?? 0);
+
+        const result = await Promise.all(
+          (partidos ?? []).map((partido) => mapPartidoRow(partido, supabaseAdmin, user)),
+        );
+        return res.json(result);
+      }
 
       const { data: partidos, error } = await supabaseAdmin
         .from('partidos_abiertos')
         .select(PARTIDO_SELECT)
         .in('estado', OPEN_JOIN_STATES)
-        .gte('fecha', today)
+        .gte('fecha', todayStr)
         .order('fecha', { ascending: true })
         .order('hora', { ascending: true });
 
