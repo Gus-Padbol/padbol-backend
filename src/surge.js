@@ -298,6 +298,55 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
   const tz = String(sede.timezone || DEFAULT_TZ).trim() || DEFAULT_TZ;
   const precioBase = precioFijoSedeParaDuracion(sede, duracion);
 
+  // --- Franjas de precio (tienen prioridad sobre Surge) ---
+  if (options.slot_inicio) {
+    try {
+      const slotDate = new Date(options.slot_inicio);
+      const localStr = new Intl.DateTimeFormat('es-AR', {
+        timeZone: tz,
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(slotDate);
+      const diaSemana = slotDate.toLocaleDateString('es-AR', { timeZone: tz, weekday: 'short' });
+      const diasMap = { dom: 0, lun: 1, mar: 2, mié: 3, jue: 4, vie: 5, sáb: 6 };
+      const diaNum = diasMap[diaSemana.toLowerCase().slice(0, 3)];
+      const horaLocal = slotDate.toLocaleTimeString('es-AR', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+
+      const { data: franjas } = await supabaseAdmin
+        .from('franjas_precio')
+        .select('hora_inicio, hora_fin, precio_60min, precio_90min, precio_120min, dia_semana')
+        .eq('sede_id', sid)
+        .eq('deporte', dep)
+        .eq('activo', true)
+        .or(`dia_semana.eq.${diaNum},dia_semana.is.null`);
+
+      if (franjas && franjas.length > 0) {
+        const matching = franjas
+          .filter(f => horaLocal >= f.hora_inicio.slice(0, 5) && horaLocal < f.hora_fin.slice(0, 5))
+          .sort((a, b) => (a.dia_semana === null ? 1 : -1)); // día específico tiene prioridad
+
+        if (matching.length > 0) {
+          const franja = matching[0];
+          const colMap = { 60: 'precio_60min', 90: 'precio_90min', 120: 'precio_120min' };
+          const precioFranja = franja[colMap[duracion]];
+          if (precioFranja && precioFranja > 0) {
+            return {
+              precio: precioFranja,
+              precio_base: precioFranja,
+              surge_activo: false,
+              franja_activa: true,
+            };
+          }
+        }
+      }
+    } catch (franjaErr) {
+      console.warn('⚠️ Error consultando franjas_precio, continuando con Surge:', franjaErr.message);
+    }
+  }
+  // --- Fin franjas ---
+
   const { data: config, error: cfgErr } = await supabaseAdmin
     .from('surge_config')
     .select('descuento_max_pct, aumento_max_pct, activo')
