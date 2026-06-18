@@ -1,5 +1,11 @@
 import express from 'express';
 import { maskEmail } from '../lib/safeLog.js';
+import {
+  EQUIPO_JUGADOR_SELECT,
+  EQUIPO_USUARIO_SELECT,
+  mapEquipoJugadorDto,
+  mapEquipoSummaryContactFields,
+} from '../lib/dto/equiposDto.js';
 
 const DEPORTE_LIMITS = {
   padbol: { min: 2, max: 4, label: 'Padbol' },
@@ -108,6 +114,8 @@ async function mapEquipoSummary(equipo, members, supabaseAdmin, user = null) {
     )
     : null;
 
+  const contact = mapEquipoSummaryContactFields(equipo, user);
+
   return {
     id: equipo.id,
     nombre: equipo.nombre,
@@ -119,11 +127,11 @@ async function mapEquipoSummary(equipo, members, supabaseAdmin, user = null) {
     miembros_total: members.length,
     miembros_aceptados: accepted,
     miembros_pendientes: pending,
-    capitan_user_id: equipo.capitan_user_id,
-    capitan_nombre: capitanPerfil?.nombre ?? equipo.capitan_email ?? 'Capitán',
-    capitan_email: equipo.capitan_email ?? null,
+    capitan_user_id: contact.capitan_user_id,
+    capitan_nombre: capitanPerfil?.nombre ?? (contact.es_capitan ? equipo.capitan_email : null) ?? 'Capitán',
+    capitan_email: contact.capitan_email,
     torneo_id: equipo.torneo_id ?? null,
-    es_capitan: user ? equipo.capitan_user_id === user.id : false,
+    es_capitan: contact.es_capitan,
     mi_estado: myMembership?.estado ?? null,
     created_at: equipo.created_at,
   };
@@ -132,7 +140,7 @@ async function mapEquipoSummary(equipo, members, supabaseAdmin, user = null) {
 async function getEquipoBundle(equipoId, supabaseAdmin) {
   const { data: equipo, error } = await supabaseAdmin
     .from('equipos_usuario')
-    .select('*')
+    .select(EQUIPO_USUARIO_SELECT)
     .eq('id', equipoId)
     .maybeSingle();
 
@@ -141,7 +149,7 @@ async function getEquipoBundle(equipoId, supabaseAdmin) {
 
   const { data: members, error: membersErr } = await supabaseAdmin
     .from('equipos_jugadores')
-    .select('*')
+    .select(EQUIPO_JUGADOR_SELECT)
     .eq('equipo_id', equipoId)
     .order('invited_at', { ascending: true });
 
@@ -151,6 +159,7 @@ async function getEquipoBundle(equipoId, supabaseAdmin) {
 }
 
 async function mapEquipoDetail(bundle, supabaseAdmin, user) {
+  const isCaptain = Boolean(user && bundle.equipo.capitan_user_id === user.id);
   const enrichedMembers = await Promise.all(
     bundle.members.map(async (member) => {
       const perfil = await resolvePlayerProfile(
@@ -158,15 +167,7 @@ async function mapEquipoDetail(bundle, supabaseAdmin, user) {
         supabaseAdmin,
       );
 
-      return {
-        id: member.id,
-        user_id: member.user_id ?? perfil?.user_id ?? null,
-        email: member.email,
-        nombre: member.nombre ?? perfil?.nombre ?? member.email,
-        foto_url: perfil?.foto_url ?? null,
-        rol: member.rol,
-        estado: member.estado,
-      };
+      return mapEquipoJugadorDto(member, perfil, { viewer: user, isCaptain });
     }),
   );
 
@@ -226,7 +227,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
 
       const [{ data: capitanEquipos, error: capitanErr }, { data: memberRows, error: memberErr }] =
         await Promise.all([
-          supabaseAdmin.from('equipos_usuario').select('*').eq('capitan_user_id', user.id),
+          supabaseAdmin.from('equipos_usuario').select(EQUIPO_USUARIO_SELECT).eq('capitan_user_id', user.id),
           supabaseAdmin
             .from('equipos_jugadores')
             .select('equipo_id')
@@ -242,7 +243,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       if (memberEquipoIds.length > 0) {
         const { data, error } = await supabaseAdmin
           .from('equipos_usuario')
-          .select('*')
+          .select(EQUIPO_USUARIO_SELECT)
           .in('id', memberEquipoIds);
         if (error) throw error;
         memberEquipos = data ?? [];
@@ -257,7 +258,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
         [...byId.values()].map(async (equipo) => {
           const { data: members, error } = await supabaseAdmin
             .from('equipos_jugadores')
-            .select('*')
+            .select(EQUIPO_JUGADOR_SELECT)
             .eq('equipo_id', equipo.id);
           if (error) throw error;
           return mapEquipoSummary(equipo, members ?? [], supabaseAdmin, user);
@@ -308,7 +309,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
           estado: 'formando',
           updated_at: now,
         }])
-        .select('*')
+        .select(EQUIPO_USUARIO_SELECT)
         .single();
 
       if (insertErr) throw insertErr;
@@ -613,7 +614,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
           puntos_totales: 0,
           inscripcion_estado: 'pendiente',
         }])
-        .select('*')
+        .select('id, torneo_id, sede_id, nombre, inscripcion_estado')
         .single();
 
       if (insertErr) throw insertErr;

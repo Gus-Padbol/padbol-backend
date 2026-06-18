@@ -2611,6 +2611,17 @@ app.get('/api/config/puntos', async (req, res) => {
 
 app.put('/api/config/puntos', async (req, res) => {
   try {
+    const auth = await requireAdminUser(req, res, {
+      getAuthenticatedUser,
+      fetchUserRoleRowForAuthUser,
+      legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+    });
+    if (!auth) return;
+
+    if (auth.role.rol !== 'super_admin') {
+      return res.status(403).json({ error: 'No tenés permiso para modificar la configuración de puntos' });
+    }
+
     const { niveles, posiciones, tipos_custom } = req.body;
     const rows = [];
     if (niveles)                    rows.push({ clave: 'niveles',      valor: niveles,      updated_at: new Date() });
@@ -3959,12 +3970,19 @@ jugadorRouter.get('/perfiles', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('jugadores_perfil')
-      .select('user_id, nombre, nombre_saludo, apodo, username, foto_url, email')
+      .select('user_id, nombre, nombre_saludo, apodo, username, foto_url')
       .in('user_id', userIds);
 
     if (error) throw error;
 
-    return res.json(data ?? []);
+    return res.json((data ?? []).map((row) => ({
+      user_id: row.user_id,
+      nombre: row.nombre ?? null,
+      nombre_saludo: row.nombre_saludo ?? null,
+      apodo: row.apodo ?? null,
+      username: row.username ?? null,
+      foto_url: row.foto_url ?? null,
+    })));
   } catch (err) {
     console.error('❌ Error GET /api/jugador/perfiles:', err.message);
     return res.status(500).json({ error: err.message });

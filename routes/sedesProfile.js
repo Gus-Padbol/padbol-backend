@@ -10,6 +10,7 @@ import {
 import { fetchSedeUpcomingPartidos } from './partidos.js';
 import { SEDE_PERFIL_SELECT, pickPublicSedeRow } from '../utils/sedePublicSelect.js';
 import { filterSedePatchForRole, requireSedeAdminForId } from '../lib/authAccess.js';
+import { mapTorneoPublicRow, TORNEO_PUBLIC_SELECT } from '../lib/dto/legacyPublic.js';
 
 function parseSedeId(raw) {
   const sedeId = parseInt(raw, 10);
@@ -254,7 +255,7 @@ export function mountSedesProfileRoutes(app, {
 
       let query = supabase
         .from('torneos')
-        .select('*')
+        .select(TORNEO_PUBLIC_SELECT)
         .eq('sede_id', sedeId);
 
       if (upcoming) {
@@ -270,7 +271,7 @@ export function mountSedesProfileRoutes(app, {
       const { data, error } = await query;
       if (error) throw error;
 
-      res.json({ torneos: data ?? [] });
+      res.json({ torneos: (data ?? []).map(mapTorneoPublicRow) });
     } catch (err) {
       console.error('❌ Error GET /api/sedes/:id/torneos:', err.message);
       res.json({ torneos: [] });
@@ -436,15 +437,17 @@ export function mountSedesProfileRoutes(app, {
 
   app.post('/api/sedes/:id/fotos', async (req, res) => {
     try {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) {
-        return res.status(status).json({ error: authError });
-      }
-
       const sedeId = parseSedeId(req.params.id);
       if (sedeId == null) {
         return res.status(400).json({ error: 'ID de sede inválido' });
       }
+
+      const auth = await requireSedeAdminForId(req, res, sedeId, {
+        getAuthenticatedUser,
+        fetchUserRoleRowForAuthUser,
+        legacySuperAdminEmails,
+      });
+      if (!auth) return;
 
       const { foto_base64, mime_type } = req.body ?? {};
       if (!foto_base64) {
@@ -522,7 +525,7 @@ export function mountSedesProfileRoutes(app, {
         ok: true,
         foto_url: fotoUrl,
         fotos_urls,
-        sede: enrichSedeWithHeroPhoto(updated),
+        sede: pickPublicSedeRow(enrichSedeWithHeroPhoto(updated)),
       });
     } catch (err) {
       console.error('❌ POST /api/sedes/:id/fotos:', err.message);

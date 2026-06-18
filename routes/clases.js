@@ -96,12 +96,14 @@ async function resolveHorariosTable(supabaseAdmin) {
   return null;
 }
 
+const CLASES_HORARIO_SELECT = 'id, clase_id, fecha, hora, created_at';
+
 async function fetchHorariosByClaseIds(supabaseAdmin, table, claseIds, today) {
   if (!table || claseIds.length === 0) return {};
 
   const { data, error } = await supabaseAdmin
     .from(table)
-    .select('*')
+    .select(CLASES_HORARIO_SELECT)
     .in('clase_id', claseIds)
     .gte('fecha', today)
     .order('fecha', { ascending: true })
