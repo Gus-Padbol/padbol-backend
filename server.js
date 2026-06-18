@@ -88,6 +88,13 @@ import {
   TORNEO_PUBLIC_SELECT,
 } from './lib/dto/legacyPublic.js';
 import {
+  mapMisReservaRow,
+  mapReservaDetailDto,
+  mapReservaListDto,
+  RESERVA_ADMIN_SELECT,
+  RESERVA_OWNER_SELECT,
+} from './lib/dto/reservaDto.js';
+import {
   chiviRateLimit,
   configureRateLimitTrustProxy,
   isRateLimitDisabled,
@@ -768,32 +775,6 @@ function buildUserEmailOrIdFilters(user, { emailField = 'email', userIdFields = 
   return filters;
 }
 
-function mapMisReservaRow(row) {
-  const sedeNombre = row.sedes?.nombre ?? row.sede ?? null;
-  const horaInicio = reservaHoraInicioFromRow(row);
-  const horaFin = reservaHoraFinFromRow(row, row.duracion_minutos);
-
-  return {
-    id: row.id,
-    sede_nombre: sedeNombre,
-    sede: sedeNombre,
-    sede_id: row.sede_id ?? null,
-    fecha: row.fecha,
-    hora: row.hora ?? horaInicio,
-    hora_inicio: horaInicio,
-    hora_fin: horaFin,
-    duracion_minutos: row.duracion_minutos ?? null,
-    cancha: row.cancha ?? null,
-    estado: row.estado ?? null,
-    precio: row.precio ?? null,
-    monto_pagado: row.monto_pagado ?? null,
-    moneda: row.moneda ?? 'ARS',
-    checkin_realizado: row.checkin_realizado ?? false,
-    qr_token: row.qr_token ?? null,
-    created_at: row.created_at ?? null,
-  };
-}
-
 function mapMisInscripcionRow(row) {
   const torneo = row.torneos ?? {};
 
@@ -1290,7 +1271,7 @@ app.post('/api/reservas', reservasWriteRateLimit, async (req, res) => {
     const { data: reservaRows, error: insertErr } = await supabaseAdmin
       .from('reservas')
       .insert([insertRow])
-      .select('*');
+      .select(RESERVA_OWNER_SELECT);
 
     if (insertErr) {
       if (isReservaSlotUniqueViolation(insertErr)) {
@@ -1413,16 +1394,19 @@ app.get('/api/reservas', async (req, res) => {
       return res.status(403).json({ error: 'No tenés permiso para consultar reservas' });
     }
 
+    const isAdmin = scope.kind === 'all' || scope.kind === 'sede';
+    const selectCols = isAdmin ? RESERVA_ADMIN_SELECT : RESERVA_OWNER_SELECT;
+
     let query = supabaseAdmin
       .from('reservas')
-      .select('*')
+      .select(selectCols)
       .order('created_at', { ascending: false });
 
     query = applyReservasListScopeToQuery(query, scope);
 
     const { data, error } = await query;
     if (error) throw error;
-    res.json(data || []);
+    res.json((data || []).map((row) => mapReservaListDto(row, { isAdmin })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1442,7 +1426,7 @@ app.get('/api/reservas/mis-reservas', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('reservas')
-      .select('*')
+      .select(RESERVA_OWNER_SELECT)
       .or(filters.join(','))
       .order('fecha', { ascending: false })
       .order('hora', { ascending: false });
@@ -1530,10 +1514,11 @@ app.put('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
       .from('reservas')
       .update(updates)
       .eq('id', id)
-      .select();
+      .select(access === 'admin' ? RESERVA_ADMIN_SELECT : RESERVA_OWNER_SELECT);
 
     if (error) throw error;
-    res.json(data);
+    const mapped = (data || []).map((row) => mapReservaDetailDto(row, { isAdmin: access === 'admin' }));
+    res.json(mapped);
   } catch (err) {
     const st = err.status || 500;
     if (st >= 400 && st < 500) {

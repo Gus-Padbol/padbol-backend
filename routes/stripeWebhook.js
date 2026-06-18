@@ -6,6 +6,7 @@ import {
   fromStripeMinorUnits,
   stripeCurrenciesMatch,
 } from '../lib/stripe/stripeAmount.js';
+import { mapPagoExitosoPollDto } from '../lib/dto/reservaDto.js';
 
 const ALLOWED_PRE_CONFIRM_ESTADOS = new Set(['pendiente', 'prereserva']);
 
@@ -310,26 +311,21 @@ export async function procesarStripeCheckoutSession(pgPool, session, deps = {}) 
   };
 }
 
-function buildStripePagoExitosoReadResponse({ reserva, reservaId, sessionId, paymentStatus }) {
+function buildStripePagoExitosoReadResponse({ reserva, reservaId, paymentStatus }) {
   const estado = normalizeEstado(reserva?.estado);
   const pagoEstado = normalizeEstado(reserva?.pago_estado);
   const confirmed = estado === 'confirmada' && pagoEstado === 'pagado';
 
-  return {
-    ok: true,
-    read_only: true,
-    provider: 'stripe',
+  return mapPagoExitosoPollDto({
+    reserva,
+    reservaId,
     confirmed,
-    reserva_id: reservaId ?? reserva?.id ?? null,
-    estado: reserva?.estado ?? null,
-    pago_estado: reserva?.pago_estado ?? null,
-    stripe_checkout_session_id: reserva?.stripe_checkout_session_id ?? sessionId ?? null,
-    stripe_payment_intent_id: reserva?.stripe_payment_intent_id ?? null,
-    payment_status: paymentStatus ?? null,
+    provider: 'stripe',
+    paymentStatus: paymentStatus ?? null,
     message: confirmed
       ? 'Reserva confirmada por webhook de Stripe'
       : 'Pago pendiente de confirmación — esperá unos segundos o revisá el estado de la reserva',
-  };
+  });
 }
 
 async function handleStripePagoExitosoReadOnly(req, res, pgPool, deps) {

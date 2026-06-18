@@ -1,4 +1,5 @@
 import { MercadoPagoConfig, Payment } from 'mercadopago';
+import { mapPagoExitosoPollDto } from '../lib/dto/reservaDto.js';
 import { safeQueryLog } from '../lib/safeLog.js';
 
 /** Tolerancia mínima ARS entre monto MP y precio_esperado (redondeos MP). */
@@ -440,25 +441,20 @@ export async function procesarPagoMercadoPago(pgPool, paymentId, deps = {}) {
   };
 }
 
-function buildPagoExitosoReadResponse({ reserva, reservaId, payment, paymentId, paymentStatus }) {
+function buildPagoExitosoReadResponse({ reserva, reservaId, payment, paymentStatus }) {
   const estado = normalizeEstado(reserva?.estado);
   const pagoEstado = normalizeEstado(reserva?.pago_estado);
   const confirmed = estado === 'confirmada' && pagoEstado === 'pagado';
 
-  return {
-    ok: true,
-    read_only: true,
+  return mapPagoExitosoPollDto({
+    reserva,
+    reservaId,
     confirmed,
-    reserva_id: reservaId ?? reserva?.id ?? null,
-    estado: reserva?.estado ?? null,
-    pago_estado: reserva?.pago_estado ?? null,
-    mp_payment_id: reserva?.mp_payment_id ?? null,
-    payment_id: paymentId ?? (payment?.id != null ? String(payment.id) : null),
-    payment_status: paymentStatus ?? (payment?.status ? String(payment.status) : null),
+    paymentStatus: paymentStatus ?? (payment?.status ? String(payment.status) : null),
     message: confirmed
       ? 'Reserva confirmada por webhook de Mercado Pago'
       : 'Pago pendiente de confirmación — esperá unos segundos o revisá el estado de la reserva',
-  };
+  });
 }
 
 /** GET/POST /api/pago-exitoso — solo lectura; no confirma reservas. */
