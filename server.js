@@ -53,7 +53,9 @@ import { mountLigasPremiosRoutes } from './routes/ligasPremios.js';
 import { enrichSedeWithHeroPhoto } from './utils/sedeHero.js';
 import { SEDE_APP_SELECT } from './utils/sedePublicSelect.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
-import { ensureReservaPendienteParaMpPg } from './routes/reservaPendienteMp.js';
+import { ensureReservaPendienteParaMpPg, normalizeCrearPreferenciaReservaInput } from './routes/reservaPendienteMp.js';
+import { assertReservaOwnerOrAdmin } from './lib/reservaAccess.js';
+import { quoteReservaPrice, assertClientPrecioMatchesQuote } from './lib/pricing/quoteReservaPrice.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountPushRoutes } from './routes/push.js';
@@ -1082,6 +1084,11 @@ app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
 // POST reserva
 app.post('/api/reservas', async (req, res) => {
   try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+    }
+
     const {
       sede,
       sede_id: sedeIdBody,
@@ -1099,27 +1106,17 @@ app.post('/api/reservas', async (req, res) => {
       nivel_partido,
       precio,
       duracion_minutos,
-      user_id: userIdBody,
       modo_partido: modoPartidoRaw,
-      estado,
     } = req.body;
 
     const modoPartido = modoPartidoRaw === true || modoPartidoRaw === 'true';
+    const authUser = user;
 
     if (modoPartido) {
       logPartidoCanchaBody(req.body, 'POST /api/reservas modo_partido');
     }
 
-    let authUser = null;
-    if (modoPartido || userIdBody) {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) {
-        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
-      }
-      authUser = user;
-    }
-
-    const contactEmail = email ?? authUser?.email;
+    const contactEmail = email ?? authUser.email;
     const contactWhatsapp = whatsapp ?? telefono ?? '';
     const contactNombre = nombre
       ?? authUser?.user_metadata?.full_name
@@ -1160,7 +1157,7 @@ app.post('/api/reservas', async (req, res) => {
       return res.status(400).json({ error: 'Sede no encontrada' });
     }
 
-    const bookingUserId = authUser?.id ?? userIdBody ?? null;
+    const bookingUserId = authUser.id;
     if (bookingUserId && pgPool) {
       try {
         const susp = await assertJugadorNoSuspendidoPg(pgPool, bookingUserId);
@@ -1184,10 +1181,6 @@ app.post('/api/reservas', async (req, res) => {
     const canchaStorage = resolveReservaCanchaStorageText(req.body);
     const partidoCanchaNombre = resolvePartidoCanchaNombre(req.body);
     const durationMinutes = parsePositiveInt(duracion_minutos) ?? 90;
-
-    if (!modoPartido && !userIdBody && !contactWhatsapp) {
-      return res.status(400).json({ error: 'Faltan campos requeridos' });
-    }
 
     const blocked = await isCourtBlocked(supabaseAdmin, {
       sedeNombre,
@@ -1216,15 +1209,11 @@ app.post('/api/reservas', async (req, res) => {
       whatsapp: contactWhatsapp,
       nivel: nivel_partido ?? nivel ?? 'Principiante',
       precio,
-      estado: modoPartido ? 'prereserva' : (estado || 'confirmada'),
-      pago_estado: modoPartido ? 'pendiente' : undefined,
+      estado: modoPartido ? 'prereserva' : 'pendiente',
+      pago_estado: 'pendiente',
       duracion_minutos: durationMinutes,
-      user_id: authUser?.id ?? userIdBody ?? null,
+      user_id: authUser.id,
     });
-
-    if (!modoPartido) {
-      delete insertRow.pago_estado;
-    }
 
     console.log('[DEBUG INSERT reservas]', insertRow);
 
@@ -1245,9 +1234,6 @@ app.post('/api/reservas', async (req, res) => {
     let partidoId = null;
     let deadlineCancel = null;
     if (modoPartido) {
-      if (!authUser) {
-        return res.status(401).json({ error: 'Autenticación requerida para crear partido' });
-      }
       if (sedeId == null) {
         return res.status(400).json({ error: 'sede_id requerido para partido abierto' });
       }
@@ -1292,30 +1278,6 @@ app.post('/api/reservas', async (req, res) => {
       console.log(`✓ Partido prereserva ${partidoId} creado (sin pago) — reserva ${reserva.id}`);
     }
 
-    if (!modoPartido) {
-      const { data: sedeRow } = await supabase
-        .from('sedes')
-        .select('direccion')
-        .eq('nombre', sedeNombre)
-        .maybeSingle();
-
-      if (contactWhatsapp) {
-        sendWhatsAppConfirmation(contactWhatsapp, {
-          sede: sedeNombre,
-          fecha,
-          hora,
-          cancha: canchaNum,
-          direccion: sedeRow?.direccion,
-        }).catch((err) => console.warn('⚠️ WhatsApp no enviado:', err.message));
-      }
-
-      if (reserva.estado === 'confirmada' && reserva.user_id) {
-        notifyReservaConfirmada(supabaseAdmin, reserva).catch((err) =>
-          console.warn('⚠️ Push reserva confirmada:', err.message),
-        );
-      }
-    }
-
     const mappedReserva = mapMisReservaRow({ ...reserva, sedes: { nombre: sedeNombre } });
 
     if (modoPartido && partidoId) {
@@ -1334,81 +1296,12 @@ app.post('/api/reservas', async (req, res) => {
   }
 });
 
-// POST /api/reservas/:id/confirmar — confirm prereserva after creator payment
+// POST /api/reservas/:id/confirmar — deshabilitado: confirmación solo vía pago MP verificado
 app.post('/api/reservas/:id/confirmar', async (req, res) => {
-  try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
-    }
-
-    const reservaId = parseInt(req.params.id, 10);
-    if (Number.isNaN(reservaId)) {
-      return res.status(400).json({ error: 'ID de reserva inválido' });
-    }
-
-    const { data: reserva, error: fetchErr } = await supabaseAdmin
-      .from('reservas')
-      .select('*')
-      .eq('id', reservaId)
-      .maybeSingle();
-
-    if (fetchErr) throw fetchErr;
-    if (!reserva) {
-      return res.status(404).json({ error: 'Reserva no encontrada' });
-    }
-
-    if (reserva.user_id && reserva.user_id !== user.id) {
-      return res.status(403).json({ error: 'No tenés permiso para confirmar esta reserva' });
-    }
-
-    if (reserva.estado !== 'prereserva') {
-      return res.status(400).json({ error: 'La reserva no está pendiente de confirmación' });
-    }
-
-    const { data: updatedRows, error: updateErr } = await supabaseAdmin
-      .from('reservas')
-      .update({
-        estado: 'confirmada',
-        pago_estado: 'pagado',
-        monto_pagado: reserva.precio ?? null,
-      })
-      .eq('id', reservaId)
-      .select('*');
-
-    if (updateErr) throw updateErr;
-
-    const updated = updatedRows?.[0];
-    const mappedReserva = mapMisReservaRow({ ...updated, sedes: { nombre: updated.sede } });
-
-    if (updated?.whatsapp) {
-      const { data: sedeRow } = await supabase
-        .from('sedes')
-        .select('direccion')
-        .eq('nombre', updated.sede)
-        .maybeSingle();
-
-      sendWhatsAppConfirmation(updated.whatsapp, {
-        sede: updated.sede,
-        fecha: updated.fecha,
-        hora: updated.hora,
-        cancha: updated.cancha,
-        direccion: sedeRow?.direccion,
-      }).catch((err) => console.warn('⚠️ WhatsApp no enviado:', err.message));
-    }
-
-    if (updated?.user_id) {
-      notifyReservaConfirmada(supabaseAdmin, updated).catch((err) =>
-        console.warn('⚠️ Push reserva confirmada:', err.message),
-      );
-    }
-
-    console.log(`✓ POST /api/reservas/${reservaId}/confirmar — confirmada, pago_estado=pagado`);
-    res.json({ reserva: mappedReserva, success: true });
-  } catch (err) {
-    console.error('❌ Error POST /api/reservas/:id/confirmar:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  return res.status(410).json({
+    error: 'Este endpoint ya no confirma reservas. La confirmación ocurre automáticamente tras un pago aprobado en Mercado Pago.',
+    code: 'CONFIRMAR_DISABLED_USE_MP_WEBHOOK',
+  });
 });
 
 mountReservaQrRoutes(app, {
@@ -1482,8 +1375,31 @@ app.get('/api/ingresos', async (req, res) => {
 // PUT reserva
 app.put('/api/reservas/:id', async (req, res) => {
   try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+    }
+
     const { id } = req.params;
-    const { sede, fecha, hora, cancha, nombre, email, precio, duracion, duracion_minutos, estado } = req.body;
+    const { data: reserva, error: fetchErr } = await supabaseAdmin
+      .from('reservas')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr) throw fetchErr;
+    if (!reserva) {
+      return res.status(404).json({ error: 'Reserva no encontrada' });
+    }
+
+    await assertReservaOwnerOrAdmin(user, reserva, {
+      fetchUserRoleRowForAuthUser,
+      legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+      supabaseAdmin,
+      pgPool,
+    });
+
+    const { sede, fecha, hora, cancha, nombre, email, precio, duracion, duracion_minutos } = req.body;
 
     const updates = {};
     if (sede     !== undefined) updates.sede     = sede;
@@ -1497,9 +1413,8 @@ app.put('/api/reservas/:id', async (req, res) => {
     if (durationValue !== undefined) {
       updates.duracion_minutos = durationValue !== null ? parseInt(durationValue, 10) : null;
     }
-    if (estado   !== undefined) updates.estado   = estado;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('reservas')
       .update(updates)
       .eq('id', id)
@@ -1508,6 +1423,10 @@ app.put('/api/reservas/:id', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
+    const st = err.status || 500;
+    if (st >= 400 && st < 500) {
+      return res.status(st).json({ error: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -1515,9 +1434,31 @@ app.put('/api/reservas/:id', async (req, res) => {
 // DELETE reserva
 app.delete('/api/reservas/:id', async (req, res) => {
   try {
-    const { id } = req.params;
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+    }
 
-    const { error } = await supabase
+    const { id } = req.params;
+    const { data: reserva, error: fetchErr } = await supabaseAdmin
+      .from('reservas')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr) throw fetchErr;
+    if (!reserva) {
+      return res.status(404).json({ error: 'Reserva no encontrada' });
+    }
+
+    await assertReservaOwnerOrAdmin(user, reserva, {
+      fetchUserRoleRowForAuthUser,
+      legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+      supabaseAdmin,
+      pgPool,
+    });
+
+    const { error } = await supabaseAdmin
       .from('reservas')
       .delete()
       .eq('id', id);
@@ -1525,6 +1466,10 @@ app.delete('/api/reservas/:id', async (req, res) => {
     if (error) throw error;
     res.json({ mensaje: 'Reserva eliminada' });
   } catch (err) {
+    const st = err.status || 500;
+    if (st >= 400 && st < 500) {
+      return res.status(st).json({ error: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -1708,48 +1653,12 @@ app.get('/api/torneos/:id', async (req, res) => {
   }
 });
 
-// POST /api/torneos/confirmar-inscripcion — marca inscripción del equipo como confirmada (tras pago MP)
+// POST /api/torneos/confirmar-inscripcion — deshabilitado: confirmación solo vía pago verificado
 app.post('/api/torneos/confirmar-inscripcion', async (req, res) => {
-  try {
-    const { equipo_id, torneo_id } = req.body || {};
-    const eid = parseInt(String(equipo_id), 10);
-    const tid = parseInt(String(torneo_id), 10);
-    if (!eid || !tid) {
-      return res.status(400).json({ error: 'equipo_id y torneo_id son requeridos' });
-    }
-
-    const { data: eq, error: errEq } = await supabase
-      .from('equipos')
-      .select('id, torneo_id, inscripcion_estado')
-      .eq('id', eid)
-      .maybeSingle();
-
-    if (errEq) throw errEq;
-    if (!eq) return res.status(404).json({ error: 'Equipo no encontrado' });
-    if (Number(eq.torneo_id) !== tid) {
-      return res.status(400).json({ error: 'El equipo no pertenece a ese torneo' });
-    }
-
-    if (String(eq.inscripcion_estado || '').toLowerCase() === 'confirmado') {
-      return res.json({ ok: true, already: true });
-    }
-
-    const { error: errUp } = await supabase
-      .from('equipos')
-      .update({ inscripcion_estado: 'confirmado' })
-      .eq('id', eid);
-
-    if (errUp) throw errUp;
-
-    notifyTorneoInscripcionConfirmada(supabaseAdmin, eid, tid).catch((err) =>
-      console.warn('⚠️ Push inscripción torneo:', err.message),
-    );
-
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('❌ POST /api/torneos/confirmar-inscripcion:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  return res.status(410).json({
+    error: 'Este endpoint ya no confirma inscripciones. La confirmación debe hacerse tras un pago verificado.',
+    code: 'TORNEO_CONFIRMAR_DISABLED',
+  });
 });
 
 app.put('/api/torneos/:id', async (req, res) => {
@@ -2881,6 +2790,11 @@ app.post('/api/crear-preferencia', async (req, res) => {
   const ctx = { sedeId: req.body?.sedeId ?? null, titulo: req.body?.titulo ?? null };
   const db = supabaseAdmin;
   try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+    }
+
     if (!db) {
       logCrearPreferenciaError('config', new Error('Supabase client no inicializado'), ctx);
       return res.status(503).json({
@@ -2902,14 +2816,45 @@ app.post('/api/crear-preferencia', async (req, res) => {
       reservaData,
       sedeId,
       extras,
-      pricing,
     } = req.body;
-    if (!titulo || precio == null) {
-      return res.status(400).json({ error: 'Faltan campos requeridos: titulo, precio' });
+    if (!titulo) {
+      return res.status(400).json({ error: 'Falta campo requerido: titulo' });
     }
 
     if (!pgPool) {
       return res.status(503).json({ error: 'DATABASE_URL no configurada — no se puede crear reserva pendiente' });
+    }
+
+    const quoteInput = normalizeCrearPreferenciaReservaInput(req.body);
+    const resolvedSedeId = parsePositiveInt(sedeId ?? quoteInput.sede_id);
+    if (resolvedSedeId == null) {
+      return res.status(400).json({ error: 'sedeId o sede_id es requerido' });
+    }
+
+    let quote;
+    try {
+      quote = await quoteReservaPrice(db, {
+        sedeId: resolvedSedeId,
+        deporte: quoteInput.deporte ?? reservaData?.deporte ?? 'padbol',
+        duracionMinutos: quoteInput.duracion_minutos ?? reservaData?.duracion_minutos ?? 90,
+        fecha: quoteInput.fecha ?? reservaData?.fecha,
+        hora: quoteInput.hora ?? quoteInput.hora_inicio ?? reservaData?.hora,
+        extras: extras ?? reservaData?.extras ?? [],
+        moneda,
+      });
+    } catch (quoteErr) {
+      logCrearPreferenciaError('quote', quoteErr, ctx);
+      return res.status(quoteErr.status || 500).json({ error: quoteErr.message || 'No se pudo calcular el precio' });
+    }
+
+    try {
+      assertClientPrecioMatchesQuote(precio ?? reservaData?.precio ?? req.body?.pricing?.total, quote.total);
+    } catch (priceErr) {
+      return res.status(priceErr.status || 400).json({
+        error: priceErr.message,
+        serverTotal: priceErr.serverTotal ?? quote.total,
+        clientPrecio: priceErr.clientPrecio ?? precio,
+      });
     }
 
     let client = mpClient;
@@ -2937,7 +2882,10 @@ app.post('/api/crear-preferencia', async (req, res) => {
 
     let reservaIdParaMp;
     try {
-      const pending = await ensureReservaPendienteParaMpPg(pgPool, req.body);
+      const pending = await ensureReservaPendienteParaMpPg(pgPool, req.body, {
+        authUser: user,
+        quote,
+      });
       reservaIdParaMp = pending.reserva_id;
       console.log(`[POST /api/crear-preferencia] reserva pendiente id=${reservaIdParaMp} (created=${pending.created})`);
     } catch (pendingErr) {
@@ -2945,16 +2893,17 @@ app.post('/api/crear-preferencia', async (req, res) => {
       return res.status(pendingErr.status || 500).json({ error: pendingErr.message || 'No se pudo crear la reserva pendiente' });
     }
 
-    const paymentExtras = extras ?? reservaData?.extras ?? [];
-    const paymentPricing = pricing ?? {
-      base: reservaData?.precio_base ?? precio,
-      fee: reservaData?.platform_fee ?? 0,
-      extrasSubtotal: reservaData?.extras_subtotal ?? 0,
-      total: precio,
-    };
+    const paymentExtras = quote.extras.map((e) => ({
+      id: e.id,
+      nombre: e.nombre,
+      precio: e.precio,
+      moneda: e.moneda,
+      cantidad: e.cantidad,
+    }));
+    const paymentPricing = quote.pricing;
     const items = buildMercadoPagoItems({
       titulo,
-      moneda,
+      moneda: quote.moneda,
       pricing: paymentPricing,
       extras: paymentExtras,
     });
@@ -2977,11 +2926,14 @@ app.post('/api/crear-preferencia', async (req, res) => {
       },
     });
 
-    console.log(`✓ MP preferencia creada: ${response.id} | reserva_id: ${reservaIdParaMp} | items: ${items.length} | sede: ${sedeNombre || '—'}`);
+    console.log(`✓ MP preferencia creada: ${response.id} | reserva_id: ${reservaIdParaMp} | total: ${quote.total} | sede: ${sedeNombre || '—'}`);
     res.json({
       init_point: response.init_point,
       preference_id: response.id,
       reserva_id: reservaIdParaMp,
+      precio_esperado: quote.total,
+      moneda: quote.moneda,
+      pricing: quote.pricing,
     });
   } catch (err) {
     logCrearPreferenciaError('handler', err, ctx);

@@ -128,11 +128,42 @@ async function assertSlotDisponiblePg(pgPool, { sedeNombre, sedeId, fecha, horaI
   }
 }
 
+async function persistReservaPricingPg(pgPool, reservaId, {
+  precio,
+  precio_esperado,
+  moneda,
+  pricing_snapshot,
+  user_id,
+}) {
+  const snapshotJson = pricing_snapshot ? JSON.stringify(pricing_snapshot) : null;
+  try {
+    await pgPool.query(
+      `UPDATE reservas
+       SET precio = COALESCE($2, precio),
+           precio_esperado = $3,
+           moneda = COALESCE($4, moneda, 'ARS'),
+           pricing_snapshot = $5::jsonb,
+           user_id = COALESCE($6, user_id)
+       WHERE id = $1`,
+      [reservaId, precio, precio_esperado, moneda, snapshotJson, user_id ?? null],
+    );
+  } catch (err) {
+    if (!/precio_esperado|pricing_snapshot|colum|column/i.test(String(err.message || ''))) throw err;
+    await pgPool.query(
+      `UPDATE reservas
+       SET precio = COALESCE($2, precio),
+           user_id = COALESCE($3, user_id)
+       WHERE id = $1`,
+      [reservaId, precio, user_id ?? null],
+    );
+  }
+}
+
 /**
  * Inserta reserva en estado pendiente antes del checkout MP.
  * Si ya viene reserva_id (p. ej. prereserva de partido), la reutiliza.
  */
-export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
+export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options = {}) {
   if (!pgPool) {
     const err = new Error('DATABASE_URL no configurada — pgPool no disponible');
     err.status = 503;
@@ -140,10 +171,27 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
   }
 
   const input = normalizeCrearPreferenciaReservaInput(body);
+  const authUser = options.authUser ?? null;
+  const quote = options.quote ?? null;
+  const authUserId = authUser?.id ? String(authUser.id) : null;
+  const authEmail = authUser?.email ? String(authUser.email).trim().toLowerCase() : null;
+
+  if (authUserId) {
+    input.user_id = authUserId;
+  }
+  if (authEmail && !input.email) {
+    input.email = authEmail;
+  }
+  if (authUser?.user_metadata?.full_name && !input.nombre) {
+    input.nombre = String(authUser.user_metadata.full_name).trim();
+  }
+
+  const serverPrecio = quote?.total != null ? Math.round(Number(quote.total)) : null;
+  const serverMoneda = quote?.moneda ?? 'ARS';
 
   if (input.reserva_id) {
     const { rows } = await pgPool.query(
-      `SELECT id, estado, pago_estado FROM reservas WHERE id = $1 LIMIT 1`,
+      `SELECT id, estado, pago_estado, user_id, email FROM reservas WHERE id = $1 LIMIT 1`,
       [input.reserva_id],
     );
     const existing = rows[0];
@@ -152,11 +200,29 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
       err.status = 404;
       throw err;
     }
+    if (authUserId) {
+      const ownerOk = (existing.user_id && String(existing.user_id) === authUserId)
+        || (authEmail && existing.email && String(existing.email).trim().toLowerCase() === authEmail);
+      if (!ownerOk) {
+        const err = new Error('No tenés permiso para pagar esta reserva');
+        err.status = 403;
+        throw err;
+      }
+    }
     const estado = String(existing.estado || '').toLowerCase();
     if (estado === 'confirmada') {
       const err = new Error('La reserva ya está confirmada');
       err.status = 409;
       throw err;
+    }
+    if (serverPrecio != null) {
+      await persistReservaPricingPg(pgPool, existing.id, {
+        precio: serverPrecio,
+        precio_esperado: serverPrecio,
+        moneda: serverMoneda,
+        pricing_snapshot: quote?.pricing_snapshot ?? null,
+        user_id: authUserId,
+      });
     }
     return { reserva_id: existing.id, created: false };
   }
@@ -190,7 +256,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
     ? String(input.hora_fin).trim().slice(0, 5)
     : computeHoraFinDesdeDuracion(horaInicio, duracionMinutos);
   const horaLegacy = reservaLegacyHoraText(horaInicio, horaFin);
-  const precio = parsePositiveInt(input.precio) ?? 0;
+  const precio = serverPrecio ?? parsePositiveInt(input.precio) ?? 0;
   const contacto = String(input.whatsapp || input.telefono || '').trim();
 
   await assertSlotDisponiblePg(pgPool, {
@@ -201,38 +267,80 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}) {
     canchaText,
   });
 
-  const { rows } = await pgPool.query(
-    `INSERT INTO reservas (
-       sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
-       nombre, email, telefono, whatsapp,
-       nivel, precio, estado, pago_estado, duracion_minutos, user_id
-     ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8,
-       $9, $10, $11, $12,
-       $13, $14, 'pendiente', 'pendiente', $15, $16
-     )
-     RETURNING id`,
-    [
-      sedeNombre,
-      sedeId,
-      input.fecha,
-      horaLegacy,
-      horaInicio,
-      horaFin,
-      canchaText,
-      input.cancha_id ?? null,
-      input.nombre || input.email,
-      input.email,
-      contacto,
-      contacto,
-      input.nivel,
-      precio,
-      duracionMinutos,
-      input.user_id || null,
-    ],
-  );
-
-  const reservaId = rows[0]?.id;
+  let reservaId;
+  try {
+    const { rows } = await pgPool.query(
+      `INSERT INTO reservas (
+         sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
+         nombre, email, telefono, whatsapp,
+         nivel, precio, precio_esperado, moneda, pricing_snapshot,
+         estado, pago_estado, duracion_minutos, user_id
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         $9, $10, $11, $12,
+         $13, $14, $15, $16, $17::jsonb,
+         'pendiente', 'pendiente', $18, $19
+       )
+       RETURNING id`,
+      [
+        sedeNombre,
+        sedeId,
+        input.fecha,
+        horaLegacy,
+        horaInicio,
+        horaFin,
+        canchaText,
+        input.cancha_id ?? null,
+        input.nombre || input.email,
+        input.email,
+        contacto,
+        contacto,
+        input.nivel,
+        precio,
+        serverPrecio ?? precio,
+        serverMoneda,
+        quote?.pricing_snapshot ? JSON.stringify(quote.pricing_snapshot) : null,
+        duracionMinutos,
+        authUserId || input.user_id || null,
+      ],
+    );
+    reservaId = rows[0]?.id;
+  } catch (insertErr) {
+    if (!/precio_esperado|pricing_snapshot|colum|column/i.test(String(insertErr.message || ''))) {
+      throw insertErr;
+    }
+    const { rows } = await pgPool.query(
+      `INSERT INTO reservas (
+         sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
+         nombre, email, telefono, whatsapp,
+         nivel, precio, estado, pago_estado, duracion_minutos, user_id
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         $9, $10, $11, $12,
+         $13, $14, 'pendiente', 'pendiente', $15, $16
+       )
+       RETURNING id`,
+      [
+        sedeNombre,
+        sedeId,
+        input.fecha,
+        horaLegacy,
+        horaInicio,
+        horaFin,
+        canchaText,
+        input.cancha_id ?? null,
+        input.nombre || input.email,
+        input.email,
+        contacto,
+        contacto,
+        input.nivel,
+        precio,
+        duracionMinutos,
+        authUserId || input.user_id || null,
+      ],
+    );
+    reservaId = rows[0]?.id;
+  }
   if (!reservaId) {
     throw new Error('No se pudo crear la reserva pendiente');
   }

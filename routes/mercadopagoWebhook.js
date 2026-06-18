@@ -1,5 +1,15 @@
 import { MercadoPagoConfig, Payment } from 'mercadopago';
 
+/** Tolerancia mínima ARS entre monto MP y precio_esperado (redondeos MP). */
+export const PAYMENT_AMOUNT_TOLERANCE = 1;
+
+const ALLOWED_PRE_CONFIRM_ESTADOS = new Set(['pendiente', 'prereserva']);
+
+const RESERVA_CONFIRM_SELECT = `
+  id, estado, pago_estado, sede, fecha, hora, cancha, whatsapp, telefono,
+  precio, precio_esperado, monto_pagado, mp_payment_id, user_id
+`;
+
 function jsonError(res, status, message, extra = {}) {
   if (res.headersSent) return;
   return res.status(status).json({ ok: false, error: message, ...extra });
@@ -58,6 +68,18 @@ export function extractMercadoPagoPaymentId(req) {
   return null;
 }
 
+function parseReservaIdFromRequest(req) {
+  const q = req.query || {};
+  const fromQuery = parseReservaIdFromExternalReference(
+    q.external_reference ?? q.reserva_id ?? q.reservaId,
+  );
+  if (fromQuery) return fromQuery;
+  const b = req.body || {};
+  return parseReservaIdFromExternalReference(
+    b.external_reference ?? b.reserva_id ?? b.reservaId,
+  );
+}
+
 async function collectMpAccessTokensPg(pgPool, defaultToken) {
   const tokens = [];
   const main = String(defaultToken || process.env.MP_ACCESS_TOKEN || '').trim();
@@ -104,7 +126,161 @@ export async function fetchMercadoPagoPaymentById(paymentId, pgPool, defaultToke
   throw lastErr || new Error('No se pudo obtener el pago en Mercado Pago');
 }
 
-export async function confirmarReservaPorPagoPg(pgPool, reservaId, payment) {
+function normalizeEstado(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+export function assertPaymentAmountCoversExpected(montoPagado, precioEsperado, tolerance = PAYMENT_AMOUNT_TOLERANCE) {
+  const paid = Number(montoPagado);
+  const expected = Number(precioEsperado);
+  if (!Number.isFinite(expected) || expected <= 0) {
+    const err = new Error('La reserva no tiene precio_esperado válido');
+    err.status = 400;
+    throw err;
+  }
+  if (!Number.isFinite(paid) || paid <= 0) {
+    const err = new Error('Monto del pago inválido');
+    err.status = 400;
+    throw err;
+  }
+  if (paid + tolerance < expected) {
+    const err = new Error(
+      `Monto pagado insuficiente: ${paid} < precio_esperado ${expected}`,
+    );
+    err.status = 402;
+    err.monto_pagado = paid;
+    err.precio_esperado = expected;
+    throw err;
+  }
+}
+
+async function fetchReservaForPaymentConfirmPg(pgPool, reservaId) {
+  const rid = parseInt(String(reservaId), 10);
+  const { rows } = await pgPool.query(
+    `SELECT ${RESERVA_CONFIRM_SELECT} FROM reservas WHERE id = $1`,
+    [rid],
+  );
+  return rows[0] ?? null;
+}
+
+async function assertMpPaymentIdNotUsedOnOtherReservaPg(pgPool, mpPaymentId, reservaId) {
+  if (!mpPaymentId) return null;
+
+  let rows;
+  try {
+    ({ rows } = await pgPool.query(
+      `SELECT id, estado, pago_estado FROM reservas
+       WHERE mp_payment_id = $1 AND id <> $2
+       LIMIT 1`,
+      [mpPaymentId, reservaId],
+    ));
+  } catch (err) {
+    if (!/mp_payment_id|colum|column/i.test(String(err.message || ''))) throw err;
+    return null;
+  }
+
+  if (rows[0]) {
+    const err = new Error(`El pago MP ${mpPaymentId} ya fue usado en la reserva ${rows[0].id}`);
+    err.status = 409;
+    err.code = 'MP_PAYMENT_ID_ALREADY_USED';
+    throw err;
+  }
+  return null;
+}
+
+/**
+ * Valida pago MP + reserva antes de confirmar. No muta DB.
+ */
+export async function validateVerifiedPaymentForReserva(pgPool, payment) {
+  if (!pgPool) {
+    const err = new Error('DATABASE_URL no configurada — pgPool no disponible');
+    err.status = 503;
+    throw err;
+  }
+
+  const status = String(payment?.status || '').toLowerCase();
+  if (status !== 'approved') {
+    const err = new Error(status ? `Pago en estado ${status}` : 'Estado de pago desconocido');
+    err.status = 400;
+    err.payment_status = status;
+    throw err;
+  }
+
+  const reservaId = parseReservaIdFromExternalReference(payment.external_reference);
+  if (!reservaId) {
+    const err = new Error('external_reference vacío o no es un reserva_id válido');
+    err.status = 400;
+    throw err;
+  }
+
+  const mpPaymentId = payment?.id != null ? String(payment.id).trim() : null;
+  if (!mpPaymentId) {
+    const err = new Error('Pago MP sin id');
+    err.status = 400;
+    throw err;
+  }
+
+  const montoPagado = payment.transaction_amount != null
+    ? Number(payment.transaction_amount)
+    : null;
+
+  const reserva = await fetchReservaForPaymentConfirmPg(pgPool, reservaId);
+  if (!reserva) {
+    const err = new Error(`Reserva ${reservaId} no encontrada`);
+    err.status = 404;
+    throw err;
+  }
+
+  const estado = normalizeEstado(reserva.estado);
+  const pagoEstado = normalizeEstado(reserva.pago_estado);
+
+  if (estado === 'confirmada' && pagoEstado === 'pagado') {
+    if (reserva.mp_payment_id && String(reserva.mp_payment_id) !== mpPaymentId) {
+      const err = new Error('La reserva ya está confirmada con otro pago');
+      err.status = 409;
+      throw err;
+    }
+    return {
+      reservaId,
+      reserva,
+      montoPagado,
+      mpPaymentId,
+      already: true,
+    };
+  }
+
+  if (!ALLOWED_PRE_CONFIRM_ESTADOS.has(estado)) {
+    const err = new Error(`Estado de reserva no válido para confirmar pago: ${estado || 'desconocido'}`);
+    err.status = 400;
+    throw err;
+  }
+
+  if (reserva.precio_esperado == null || Number(reserva.precio_esperado) <= 0) {
+    const err = new Error('La reserva no tiene precio_esperado — crear checkout con crear-preferencia');
+    err.status = 400;
+    throw err;
+  }
+
+  assertPaymentAmountCoversExpected(montoPagado, reserva.precio_esperado);
+  await assertMpPaymentIdNotUsedOnOtherReservaPg(pgPool, mpPaymentId, reservaId);
+
+  return {
+    reservaId,
+    reserva,
+    montoPagado,
+    mpPaymentId,
+    already: false,
+  };
+}
+
+/**
+ * Confirma reserva con datos ya verificados. Único punto de UPDATE a confirmada/pagado vía MP.
+ */
+export async function confirmReservaAfterVerifiedPayment(pgPool, {
+  reservaId,
+  montoPagado,
+  mpPaymentId,
+}) {
   if (!pgPool) {
     const err = new Error('DATABASE_URL no configurada — pgPool no disponible');
     err.status = 503;
@@ -118,33 +294,12 @@ export async function confirmarReservaPorPagoPg(pgPool, reservaId, payment) {
     throw err;
   }
 
-  const monto = payment?.transaction_amount != null
-    ? Number(payment.transaction_amount)
-    : null;
-  const mpPaymentId = payment?.id != null ? String(payment.id).trim() : null;
-
-  const { rows: existingRows } = await pgPool.query(
-    'SELECT id, estado, pago_estado, sede, fecha, hora, cancha, whatsapp, telefono, precio, mp_payment_id FROM reservas WHERE id = $1',
-    [rid],
-  );
-  const existing = existingRows[0];
-  if (!existing) {
-    const err = new Error(`Reserva ${rid} no encontrada`);
-    err.status = 404;
+  const monto = Number(montoPagado);
+  const pid = String(mpPaymentId || '').trim();
+  if (!pid) {
+    const err = new Error('mp_payment_id requerido');
+    err.status = 400;
     throw err;
-  }
-
-  if (String(existing.estado || '').toLowerCase() === 'confirmada'
-    && String(existing.pago_estado || '').toLowerCase() === 'pagado') {
-    if (mpPaymentId && !existing.mp_payment_id) {
-      await pgPool.query(
-        'UPDATE reservas SET mp_payment_id = $2 WHERE id = $1',
-        [rid, mpPaymentId],
-      ).catch((err) => {
-        if (!/mp_payment_id|colum|column/i.test(String(err.message || ''))) throw err;
-      });
-    }
-    return { reserva: existing, already: true };
   }
 
   let updatedRows;
@@ -153,11 +308,12 @@ export async function confirmarReservaPorPagoPg(pgPool, reservaId, payment) {
       `UPDATE reservas
        SET estado = 'confirmada',
            pago_estado = 'pagado',
-           monto_pagado = COALESCE($2::numeric, monto_pagado, precio),
-           mp_payment_id = COALESCE($3, mp_payment_id)
+           monto_pagado = $2::numeric,
+           mp_payment_id = $3
        WHERE id = $1
-       RETURNING id, estado, pago_estado, monto_pagado, mp_payment_id, sede, fecha, hora, cancha, whatsapp, telefono, precio, user_id`,
-      [rid, Number.isFinite(monto) ? monto : null, mpPaymentId],
+         AND lower(trim(estado)) IN ('pendiente', 'prereserva')
+       RETURNING ${RESERVA_CONFIRM_SELECT}`,
+      [rid, Number.isFinite(monto) ? monto : null, pid],
     ));
   } catch (updateErr) {
     if (!/mp_payment_id|colum|column/i.test(String(updateErr.message || ''))) throw updateErr;
@@ -165,14 +321,48 @@ export async function confirmarReservaPorPagoPg(pgPool, reservaId, payment) {
       `UPDATE reservas
        SET estado = 'confirmada',
            pago_estado = 'pagado',
-           monto_pagado = COALESCE($2::numeric, monto_pagado, precio)
+           monto_pagado = $2::numeric
        WHERE id = $1
-       RETURNING id, estado, pago_estado, monto_pagado, sede, fecha, hora, cancha, whatsapp, telefono, precio, user_id`,
+         AND lower(trim(estado)) IN ('pendiente', 'prereserva')
+       RETURNING id, estado, pago_estado, sede, fecha, hora, cancha, whatsapp, telefono,
+                 precio, precio_esperado, monto_pagado, user_id`,
       [rid, Number.isFinite(monto) ? monto : null],
     ));
   }
 
-  return { reserva: updatedRows[0] ?? existing, already: false };
+  if (updatedRows[0]) {
+    return { reserva: updatedRows[0], already: false };
+  }
+
+  const existing = await fetchReservaForPaymentConfirmPg(pgPool, rid);
+  if (!existing) {
+    const err = new Error(`Reserva ${rid} no encontrada`);
+    err.status = 404;
+    throw err;
+  }
+
+  const estado = normalizeEstado(existing.estado);
+  const pagoEstado = normalizeEstado(existing.pago_estado);
+  if (estado === 'confirmada' && pagoEstado === 'pagado') {
+    return { reserva: existing, already: true };
+  }
+
+  const err = new Error(`No se pudo confirmar la reserva ${rid} (estado actual: ${estado})`);
+  err.status = 409;
+  throw err;
+}
+
+/** @deprecated Usar confirmReservaAfterVerifiedPayment + validateVerifiedPaymentForReserva */
+export async function confirmarReservaPorPagoPg(pgPool, reservaId, payment) {
+  const validated = await validateVerifiedPaymentForReserva(pgPool, payment);
+  if (validated.already) {
+    return { reserva: validated.reserva, already: true };
+  }
+  return confirmReservaAfterVerifiedPayment(pgPool, {
+    reservaId: validated.reservaId,
+    montoPagado: validated.montoPagado,
+    mpPaymentId: validated.mpPaymentId,
+  });
 }
 
 export async function procesarPagoMercadoPago(pgPool, paymentId, deps = {}) {
@@ -180,11 +370,7 @@ export async function procesarPagoMercadoPago(pgPool, paymentId, deps = {}) {
   const pid = String(payment?.id ?? paymentId);
   const status = String(payment?.status || '').toLowerCase();
 
-  if (deps.logTag === 'PAGO-EXITOSO') {
-    console.log('[PAGO-EXITOSO] MP status:', payment?.status, 'external_reference:', payment?.external_reference);
-  }
-
-  if (!['approved'].includes(status)) {
+  if (status !== 'approved') {
     return {
       ok: true,
       processed: false,
@@ -194,18 +380,25 @@ export async function procesarPagoMercadoPago(pgPool, paymentId, deps = {}) {
     };
   }
 
-  const reservaId = parseReservaIdFromExternalReference(payment.external_reference);
-  if (!reservaId) {
-    const err = new Error('external_reference vacío o no es un reserva_id válido');
-    err.status = 400;
-    throw err;
+  const validated = await validateVerifiedPaymentForReserva(pgPool, payment);
+
+  if (validated.already) {
+    return {
+      ok: true,
+      processed: true,
+      payment_id: pid,
+      reserva_id: validated.reservaId,
+      already: true,
+      reserva: validated.reserva,
+      confirmed: true,
+    };
   }
 
-  const { reserva, already } = await confirmarReservaPorPagoPg(pgPool, reservaId, payment);
-
-  if (deps.logTag === 'PAGO-EXITOSO') {
-    console.log('[PAGO-EXITOSO] reserva actualizada:', reservaId);
-  }
+  const { reserva, already } = await confirmReservaAfterVerifiedPayment(pgPool, {
+    reservaId: validated.reservaId,
+    montoPagado: validated.montoPagado,
+    mpPaymentId: validated.mpPaymentId,
+  });
 
   if (!already && deps.sendWhatsAppConfirmation && reserva) {
     const phone = reserva.whatsapp || reserva.telefono;
@@ -233,53 +426,120 @@ export async function procesarPagoMercadoPago(pgPool, paymentId, deps = {}) {
     }
   }
 
-  console.log(`✓ MP pago ${pid} → reserva ${reservaId} confirmada${already ? ' (ya estaba)' : ''}`);
+  console.log(`✓ MP pago ${pid} → reserva ${validated.reservaId} confirmada${already ? ' (ya estaba)' : ''}`);
 
   return {
     ok: true,
     processed: true,
     payment_id: pid,
-    reserva_id: reservaId,
+    reserva_id: validated.reservaId,
     already,
     reserva,
+    confirmed: true,
   };
 }
 
-async function handleMercadoPagoReturnOrWebhook(req, res, pgPool, deps, options = {}) {
-  const logTag = options.logTag || null;
+function buildPagoExitosoReadResponse({ reserva, reservaId, payment, paymentId, paymentStatus }) {
+  const estado = normalizeEstado(reserva?.estado);
+  const pagoEstado = normalizeEstado(reserva?.pago_estado);
+  const confirmed = estado === 'confirmada' && pagoEstado === 'pagado';
+
+  return {
+    ok: true,
+    read_only: true,
+    confirmed,
+    reserva_id: reservaId ?? reserva?.id ?? null,
+    estado: reserva?.estado ?? null,
+    pago_estado: reserva?.pago_estado ?? null,
+    mp_payment_id: reserva?.mp_payment_id ?? null,
+    payment_id: paymentId ?? (payment?.id != null ? String(payment.id) : null),
+    payment_status: paymentStatus ?? (payment?.status ? String(payment.status) : null),
+    message: confirmed
+      ? 'Reserva confirmada por webhook de Mercado Pago'
+      : 'Pago pendiente de confirmación — esperá unos segundos o revisá el estado de la reserva',
+  };
+}
+
+/** GET/POST /api/pago-exitoso — solo lectura; no confirma reservas. */
+async function handlePagoExitosoReadOnly(req, res, pgPool, deps) {
   try {
-    if (logTag === 'PAGO-EXITOSO') {
-      console.log('[PAGO-EXITOSO] query params:', JSON.stringify(req.query));
-    }
+    console.log('[PAGO-EXITOSO] query params:', JSON.stringify(req.query));
 
     if (!pgPool) {
       return jsonError(res, 503, 'DATABASE_URL no configurada — pgPool no disponible');
     }
 
-    const paymentId = extractMercadoPagoPaymentId(req);
-    const pid = paymentId
+    const paymentId = extractMercadoPagoPaymentId(req)
       ?? (req.query?.payment_id ? String(req.query.payment_id).trim() : null)
       ?? (req.query?.collection_id ? String(req.query.collection_id).trim() : null);
 
-    if (logTag === 'PAGO-EXITOSO') {
-      console.log('[PAGO-EXITOSO] payment_id:', pid);
+    let reservaId = parseReservaIdFromRequest(req);
+    let payment = null;
+    let paymentStatus = null;
+
+    if (paymentId) {
+      try {
+        payment = await fetchMercadoPagoPaymentById(paymentId, pgPool, deps.defaultMpToken);
+        paymentStatus = String(payment?.status || '').toLowerCase();
+        if (!reservaId) {
+          reservaId = parseReservaIdFromExternalReference(payment.external_reference);
+        }
+      } catch (fetchErr) {
+        console.warn('[PAGO-EXITOSO] no se pudo leer pago MP:', fetchErr.message);
+      }
     }
 
-    if (!pid) {
+    if (!reservaId) {
+      return res.status(400).json({
+        ok: false,
+        read_only: true,
+        error: 'Falta reserva_id o payment_id con external_reference válido',
+      });
+    }
+
+    const reserva = await fetchReservaForPaymentConfirmPg(pgPool, reservaId);
+    if (!reserva) {
+      return res.status(404).json({
+        ok: false,
+        read_only: true,
+        error: `Reserva ${reservaId} no encontrada`,
+      });
+    }
+
+    return res.status(200).json(buildPagoExitosoReadResponse({
+      reserva,
+      reservaId,
+      payment,
+      paymentId,
+      paymentStatus,
+    }));
+  } catch (err) {
+    console.error('[PAGO-EXITOSO] error:', err?.message);
+    return jsonError(res, err.status || 500, err.message || 'Error al consultar estado de pago');
+  }
+}
+
+async function handleMercadoPagoWebhook(req, res, pgPool, deps) {
+  try {
+    if (!pgPool) {
+      return jsonError(res, 503, 'DATABASE_URL no configurada — pgPool no disponible');
+    }
+
+    const paymentId = extractMercadoPagoPaymentId(req)
+      ?? (req.query?.payment_id ? String(req.query.payment_id).trim() : null)
+      ?? (req.query?.collection_id ? String(req.query.collection_id).trim() : null);
+
+    if (!paymentId) {
       return res.status(400).json({
         ok: false,
         error: 'Falta payment_id (topic=payment&id=…, payment_id o collection_id)',
       });
     }
 
-    const result = await procesarPagoMercadoPago(pgPool, pid, { ...deps, logTag });
+    const result = await procesarPagoMercadoPago(pgPool, paymentId, deps);
     return res.status(200).json(result);
   } catch (err) {
-    if (logTag === 'PAGO-EXITOSO') {
-      console.error('[PAGO-EXITOSO] error:', err?.message);
-    } else {
-      console.error('❌ MP pago/retorno:', err.message);
-    }
+    console.error('❌ MP webhook:', err.message);
     return jsonError(res, err.status || 500, err.message || 'Error al procesar pago');
   }
 }
@@ -293,20 +553,20 @@ export function mountMercadoPagoWebhookRoutes(app, deps) {
     res.status(200).json({ ok: true, service: 'mercadopago-webhook' });
   });
 
-  /** Notificación IPN de Mercado Pago */
+  /** Notificación IPN de Mercado Pago — único endpoint que confirma reservas */
   app.post('/api/webhooks/mercadopago', (req, res) => {
-    void handleMercadoPagoReturnOrWebhook(req, res, pgPool, handlerDeps);
+    void handleMercadoPagoWebhook(req, res, pgPool, handlerDeps);
   });
 
   /**
-   * Retorno del checkout (redirect) — el cliente puede consultar confirmación vía API JSON
-   * Query: payment_id, collection_id, external_reference, status, collection_status
+   * Retorno del checkout — solo lectura (poll de confirmación vía webhook).
+   * Query: payment_id, collection_id, external_reference, reserva_id
    */
   app.get('/api/pago-exitoso', (req, res) => {
-    void handleMercadoPagoReturnOrWebhook(req, res, pgPool, handlerDeps, { logTag: 'PAGO-EXITOSO' });
+    void handlePagoExitosoReadOnly(req, res, pgPool, handlerDeps);
   });
 
   app.post('/api/pago-exitoso', (req, res) => {
-    void handleMercadoPagoReturnOrWebhook(req, res, pgPool, handlerDeps);
+    void handlePagoExitosoReadOnly(req, res, pgPool, handlerDeps);
   });
 }
