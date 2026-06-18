@@ -4,10 +4,16 @@ import {
   normalizeHoraInicioReserva,
   computeHoraFinDesdeDuracion,
   reservaLegacyHoraText,
+  BLOCKING_RESERVA_ESTADOS,
+  isReservaSlotUniqueViolation,
 } from './partidos.js';
 import { sqlReservaHoraInicio, sqlReservaSedeMatch } from '../utils/reservasColumns.js';
 
-const BLOCKING_ESTADOS = ['confirmada', 'prereserva', 'pendiente'];
+function throwReservaSlotConflictError() {
+  const err = new Error('Este horario ya está reservado');
+  err.status = 409;
+  throw err;
+}
 
 export function normalizeCrearPreferenciaReservaInput(body = {}) {
   const rd = body.reservaData && typeof body.reservaData === 'object' ? body.reservaData : {};
@@ -119,7 +125,7 @@ async function assertSlotDisponiblePg(pgPool, { sedeNombre, sedeId, fecha, horaI
        AND cancha = $5
        AND estado = ANY($6::text[])
      LIMIT 1`,
-    [sedeId ?? null, sedeNombre, fecha, hi, canchaText, BLOCKING_ESTADOS],
+    [sedeId ?? null, sedeNombre, fecha, hi, canchaText, BLOCKING_RESERVA_ESTADOS],
   );
   if (rows[0]) {
     const err = new Error('Este horario ya está reservado');
@@ -306,40 +312,50 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
     );
     reservaId = rows[0]?.id;
   } catch (insertErr) {
+    if (isReservaSlotUniqueViolation(insertErr)) {
+      throwReservaSlotConflictError();
+    }
     if (!/precio_esperado|pricing_snapshot|colum|column/i.test(String(insertErr.message || ''))) {
       throw insertErr;
     }
-    const { rows } = await pgPool.query(
-      `INSERT INTO reservas (
-         sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
-         nombre, email, telefono, whatsapp,
-         nivel, precio, estado, pago_estado, duracion_minutos, user_id
-       ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8,
-         $9, $10, $11, $12,
-         $13, $14, 'pendiente', 'pendiente', $15, $16
-       )
-       RETURNING id`,
-      [
-        sedeNombre,
-        sedeId,
-        input.fecha,
-        horaLegacy,
-        horaInicio,
-        horaFin,
-        canchaText,
-        input.cancha_id ?? null,
-        input.nombre || input.email,
-        input.email,
-        contacto,
-        contacto,
-        input.nivel,
-        precio,
-        duracionMinutos,
-        authUserId || input.user_id || null,
-      ],
-    );
-    reservaId = rows[0]?.id;
+    try {
+      const { rows } = await pgPool.query(
+        `INSERT INTO reservas (
+           sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
+           nombre, email, telefono, whatsapp,
+           nivel, precio, estado, pago_estado, duracion_minutos, user_id
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8,
+           $9, $10, $11, $12,
+           $13, $14, 'pendiente', 'pendiente', $15, $16
+         )
+         RETURNING id`,
+        [
+          sedeNombre,
+          sedeId,
+          input.fecha,
+          horaLegacy,
+          horaInicio,
+          horaFin,
+          canchaText,
+          input.cancha_id ?? null,
+          input.nombre || input.email,
+          input.email,
+          contacto,
+          contacto,
+          input.nivel,
+          precio,
+          duracionMinutos,
+          authUserId || input.user_id || null,
+        ],
+      );
+      reservaId = rows[0]?.id;
+    } catch (fallbackErr) {
+      if (isReservaSlotUniqueViolation(fallbackErr)) {
+        throwReservaSlotConflictError();
+      }
+      throw fallbackErr;
+    }
   }
   if (!reservaId) {
     throw new Error('No se pudo crear la reserva pendiente');

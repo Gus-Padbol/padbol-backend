@@ -23,6 +23,7 @@ import {
   fetchDisponibilidadOccupancy,
   filterBlockingReservas,
   isCourtBlocked,
+  isReservaSlotUniqueViolation,
   logPartidoCanchaBody,
   parsePositiveInt,
   resolvePartidoCanchaNombre,
@@ -45,6 +46,7 @@ import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
 import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
+import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js';
 import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
 import { mountTorneoInteresRoutes } from './routes/torneoInteres.js';
 import { mountListaEsperaGeneralRoutes } from './routes/listaEsperaGeneral.js';
@@ -70,6 +72,7 @@ import { createChiviRouter } from './src/routes/chivi.js';
 import { createArenaRouter } from './src/routes/arena.js';
 import { createRangosRouter } from './src/routes/rangos.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
+import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
 import {
   actualizarRango,
@@ -865,6 +868,13 @@ mountReservasDiagnosticoRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
+mountReservasHoldCleanupRoutes(app, {
+  supabaseAdmin,
+  pgPool,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 mountSedeExtrasRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
@@ -1222,7 +1232,12 @@ app.post('/api/reservas', async (req, res) => {
       .insert([insertRow])
       .select('*');
 
-    if (insertErr) throw insertErr;
+    if (insertErr) {
+      if (isReservaSlotUniqueViolation(insertErr)) {
+        return res.status(409).json({ error: 'Este horario ya está reservado' });
+      }
+      throw insertErr;
+    }
 
     const reserva = reservaRows?.[0];
     if (!reserva) {
@@ -1291,6 +1306,9 @@ app.post('/api/reservas', async (req, res) => {
 
     res.json([mappedReserva]);
   } catch (err) {
+    if (Number(err?.status) === 409 || isReservaSlotUniqueViolation(err)) {
+      return res.status(409).json({ error: 'Este horario ya está reservado' });
+    }
     console.error('❌ Error POST reserva:', err.message);
     res.status(500).json({ error: err.message });
   }
@@ -3097,6 +3115,13 @@ initReservasCron({
   timezone: 'America/Argentina/Buenos_Aires',
 });
 
+initReservasHoldCleanupCron({
+  supabaseAdmin,
+  pgPool,
+  cron,
+  timezone: 'America/Argentina/Buenos_Aires',
+});
+
 // ─── Auto-cancel incomplete partidos past deadline (every 15 min) ───────────
 const PARTIDO_AUTO_CANCEL_MS = 15 * 60 * 1000;
 
@@ -4342,6 +4367,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Ligas premios: GET /api/ligas-premios/:sede_id, POST/DELETE /api/admin/ligas-premios');
     console.log('✅ Rangos ARENA: GET /api/rangos/mi-rango');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');
+    console.log('✅ Admin/cron: POST /api/reservas/cleanup-expired-holds');
     console.log('✅ Extras sede: GET /api/sedes/:id/extras-admin + CRUD /api/sedes/:id/extras');
     console.log('✅ Torneo interés: POST/DELETE /api/sedes/:id/torneo-interes, GET /api/admin/sedes/:id/torneo-interes');
     console.log('✅ Lista espera general: POST/DELETE/GET check /api/lista-espera-general, GET /api/admin/lista-espera-general/:sede_id');

@@ -431,17 +431,25 @@ async function cancelPartidoWithReserva(supabaseAdmin, partidoId, reservaId, par
     .eq('id', partidoId);
 }
 
-const PRERESERVA_BLOCK_MS = 30 * 60 * 1000;
+export const BLOCKING_RESERVA_ESTADOS = ['confirmada', 'pendiente', 'prereserva'];
 
 export function isBlockingReserva(reserva, nowMs = Date.now()) {
+  void nowMs;
   if (!reserva?.estado) return false;
-  if (reserva.estado === 'confirmada') return true;
-  if (reserva.estado === 'prereserva') {
-    const createdAt = new Date(reserva.created_at).getTime();
-    if (Number.isNaN(createdAt)) return false;
-    return createdAt > nowMs - PRERESERVA_BLOCK_MS;
-  }
-  return false;
+  return BLOCKING_RESERVA_ESTADOS.includes(String(reserva.estado).toLowerCase());
+}
+
+export function isReservaSlotUniqueViolation(err) {
+  if (!err) return false;
+  if (String(err.code) === '23505') return true;
+  const text = [
+    err.message,
+    err.details,
+    err.hint,
+    err.constraint,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return text.includes('duplicate key')
+    || text.includes('idx_reservas_slot_blocking_unique');
 }
 
 export function filterBlockingReservas(reservas, nowMs = Date.now()) {
@@ -848,12 +856,12 @@ async function isCourtBlocked(supabaseAdmin, { sedeNombre, sedeId, fecha, hora, 
     const queries = [];
     if (resolvedSedeId != null) {
       queries.push(
-        supabaseAdmin.from('reservas').select(selectCols).eq('fecha', fecha).eq('sede_id', resolvedSedeId).in('estado', ['confirmada', 'prereserva', 'pendiente']),
+        supabaseAdmin.from('reservas').select(selectCols).eq('fecha', fecha).eq('sede_id', resolvedSedeId).in('estado', BLOCKING_RESERVA_ESTADOS),
       );
     }
     if (sedeNombre) {
       queries.push(
-        supabaseAdmin.from('reservas').select(selectCols).eq('fecha', fecha).eq('sede', sedeNombre).in('estado', ['confirmada', 'prereserva', 'pendiente']),
+        supabaseAdmin.from('reservas').select(selectCols).eq('fecha', fecha).eq('sede', sedeNombre).in('estado', BLOCKING_RESERVA_ESTADOS),
       );
     }
 
@@ -1463,7 +1471,12 @@ export function createPartidosRouter({
         .insert([reservaInsert])
         .select('*');
 
-      if (reservaErr) throw reservaErr;
+      if (reservaErr) {
+        if (isReservaSlotUniqueViolation(reservaErr)) {
+          return res.status(409).json({ error: 'Este horario ya está reservado' });
+        }
+        throw reservaErr;
+      }
 
       const reserva = reservaRows?.[0];
       if (!reserva) {
