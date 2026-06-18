@@ -56,7 +56,7 @@ import { enrichSedeWithHeroPhoto } from './utils/sedeHero.js';
 import { SEDE_APP_SELECT } from './utils/sedePublicSelect.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg, normalizeCrearPreferenciaReservaInput } from './routes/reservaPendienteMp.js';
-import { assertCancelReservaOwnerCompat, assertReservaOwnerOrAdmin } from './lib/reservaAccess.js';
+import { assertCancelReservaOwnerCompat, assertReservaOwnerOrAdmin, buildAdminReservaPutUpdates, buildNormalUserReservaPutUpdates, resolveReservaAccess } from './lib/reservaAccess.js';
 import {
   applyReservasListScopeToQuery,
   isAdminClubOrSuper,
@@ -1434,13 +1434,11 @@ app.get('/api/ingresos', async (req, res) => {
   }
 });
 
-// PUT reserva
+// PUT reserva — JWT; jugador solo nombre; admin dentro de su alcance
 app.put('/api/reservas/:id', async (req, res) => {
   try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
-    }
+    const user = await requireAuthenticatedUser(req, res, getAuthenticatedUser);
+    if (!user) return;
 
     const { id } = req.params;
     const { data: reserva, error: fetchErr } = await supabaseAdmin
@@ -1454,26 +1452,23 @@ app.put('/api/reservas/:id', async (req, res) => {
       return res.status(404).json({ error: 'Reserva no encontrada' });
     }
 
-    await assertReservaOwnerOrAdmin(user, reserva, {
+    const access = await resolveReservaAccess(user, reserva, {
       fetchUserRoleRowForAuthUser,
       legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
       supabaseAdmin,
       pgPool,
     });
 
-    const { sede, fecha, hora, cancha, nombre, email, precio, duracion, duracion_minutos } = req.body;
+    if (!access) {
+      return res.status(403).json({ error: 'No tenés permiso para esta reserva' });
+    }
 
-    const updates = {};
-    if (sede     !== undefined) updates.sede     = sede;
-    if (fecha    !== undefined) updates.fecha    = fecha;
-    if (hora     !== undefined) updates.hora     = hora;
-    if (cancha   !== undefined) updates.cancha   = cancha !== null ? normalizeReservaCancha(cancha) : null;
-    if (nombre   !== undefined) updates.nombre   = nombre;
-    if (email    !== undefined) updates.email    = email;
-    if (precio   !== undefined) updates.precio   = precio !== null ? parseInt(precio) : null;
-    const durationValue = duracion_minutos ?? duracion;
-    if (durationValue !== undefined) {
-      updates.duracion_minutos = durationValue !== null ? parseInt(durationValue, 10) : null;
+    const updates = access === 'admin'
+      ? buildAdminReservaPutUpdates(req.body, { normalizeReservaCancha })
+      : buildNormalUserReservaPutUpdates(req.body);
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No hay campos para actualizar' });
     }
 
     const { data, error } = await supabaseAdmin
@@ -1493,13 +1488,11 @@ app.put('/api/reservas/:id', async (req, res) => {
   }
 });
 
-// DELETE reserva
+// DELETE reserva — JWT; jugador usa cancelar-reserva; admin cancela sin borrar
 app.delete('/api/reservas/:id', async (req, res) => {
   try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
-    }
+    const user = await requireAuthenticatedUser(req, res, getAuthenticatedUser);
+    if (!user) return;
 
     const { id } = req.params;
     const { data: reserva, error: fetchErr } = await supabaseAdmin
@@ -1513,20 +1506,35 @@ app.delete('/api/reservas/:id', async (req, res) => {
       return res.status(404).json({ error: 'Reserva no encontrada' });
     }
 
-    await assertReservaOwnerOrAdmin(user, reserva, {
+    const access = await resolveReservaAccess(user, reserva, {
       fetchUserRoleRowForAuthUser,
       legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
       supabaseAdmin,
       pgPool,
     });
 
+    if (!access) {
+      return res.status(403).json({ error: 'No tenés permiso para esta reserva' });
+    }
+
+    if (access === 'owner') {
+      return res.status(405).json({
+        error: 'Use POST /api/cancelar-reserva para cancelar tu reserva',
+        use: '/api/cancelar-reserva',
+      });
+    }
+
+    if (reserva.estado === 'cancelada') {
+      return res.status(409).json({ error: 'La reserva ya está cancelada' });
+    }
+
     const { error } = await supabaseAdmin
       .from('reservas')
-      .delete()
+      .update({ estado: 'cancelada' })
       .eq('id', id);
 
     if (error) throw error;
-    res.json({ mensaje: 'Reserva eliminada' });
+    res.json({ mensaje: 'Reserva cancelada' });
   } catch (err) {
     const st = err.status || 500;
     if (st >= 400 && st < 500) {
@@ -1613,7 +1621,12 @@ function generarGruposKnockout(equipos, torneoId, sedeId) {
 
 // ===== TORNEOS =====
 mountTorneosFinalizadosRoutes(app, { pgPool });
-mountPushRoutes(app, { supabaseAdmin, getAuthenticatedUser });
+mountPushRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 
 app.post('/api/torneos', async (req, res) => {
   try {
@@ -4363,7 +4376,7 @@ checkinRouter.post('/verificar', async (req, res) => {
       return res.status(400).json({ error: 'La fecha del QR no coincide con la reserva' });
     }
 
-    const allowedStates = ['confirmada', 'pendiente'];
+    const allowedStates = ['confirmada'];
     if (!allowedStates.includes(reserva.estado)) {
       return res.status(400).json({
         error: `Estado de reserva no válido para check-in: ${reserva.estado ?? 'desconocido'}`,

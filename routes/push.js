@@ -1,7 +1,13 @@
 import express from 'express';
+import { requireAdminOrInternalSecret } from '../lib/authAccess.js';
 import { sendPushToTokens } from '../utils/push.js';
 
-export function mountPushRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
+export function mountPushRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails = [],
+}) {
   const router = express.Router();
 
   router.post('/push-tokens', async (req, res) => {
@@ -53,10 +59,12 @@ export function mountPushRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
 
   router.post('/push/send', async (req, res) => {
     try {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) {
-        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
-      }
+      const auth = await requireAdminOrInternalSecret(req, res, {
+        getAuthenticatedUser,
+        fetchUserRoleRowForAuthUser,
+        legacySuperAdminEmails,
+      });
+      if (!auth) return;
 
       const { tokens, title, body, data } = req.body ?? {};
       const tokenList = Array.isArray(tokens) ? tokens : tokens ? [tokens] : [];
