@@ -28,7 +28,6 @@ export const SEDE_PUBLIC_COLUMNS = [
   'fotos_destacadas',
   'logo_url',
   'descripcion',
-  'descripcion_larga',
   'slogan',
   'historia',
   'amenities',
@@ -48,12 +47,10 @@ export const SEDE_PUBLIC_COLUMNS = [
   'surge_precio_maximo',
 ];
 
-/** Columnas de sedes expuestas en GET /api/sedes y GET /api/sedes/:id (incluye surge_activo). */
-export const SEDE_APP_SELECT = SEDE_PUBLIC_COLUMNS.filter(
-  (col) => col !== 'descripcion_larga',
-).join(', ');
+/** Columnas de sedes expuestas en GET /api/sedes, GET /api/sedes/:id y perfil (sin secretos). */
+export const SEDE_APP_SELECT = SEDE_PUBLIC_COLUMNS.join(', ');
 
-export const SEDE_PERFIL_SELECT = SEDE_PUBLIC_COLUMNS.join(', ');
+export const SEDE_PERFIL_SELECT = SEDE_APP_SELECT;
 
 export function pickPublicSedeRow(row) {
   if (!row || typeof row !== 'object') return row ?? null;
