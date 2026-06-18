@@ -10,6 +10,7 @@ import {
   reservaLegacyHoraText,
 } from '../utils/reservasTime.js';
 import { reservaHoraInicioFromRow } from '../utils/reservasColumns.js';
+import { toPartidoPublicDto } from '../lib/dto/legacyPublic.js';
 
 export {
   normalizeHoraInicioReserva,
@@ -1136,6 +1137,11 @@ async function mapPartidoRow(partido, supabaseAdmin, user = null) {
   };
 }
 
+async function mapPartidoPublicRow(partido, supabaseAdmin, user = null) {
+  const full = await mapPartidoRow(partido, supabaseAdmin, user);
+  return toPartidoPublicDto(full);
+}
+
 async function countPartidosJugados(supabaseAdmin, userId) {
   if (!userId) return 0;
 
@@ -1354,7 +1360,7 @@ export async function fetchSedeUpcomingPartidos(supabaseAdmin, sedeId, user, { l
   console.log('[fetchSedeUpcomingPartidos] result count:', data?.length ?? 0);
 
   return Promise.all(
-    (data ?? []).map((partido) => mapPartidoRow(partido, supabaseAdmin, user)),
+    (data ?? []).map((partido) => mapPartidoPublicRow(partido, supabaseAdmin, user)),
   );
 }
 
@@ -1570,7 +1576,7 @@ export function createPartidosRouter({
         console.log('[GET /api/partidos/abiertos] result count:', partidos?.length ?? 0);
 
         const result = await Promise.all(
-          (partidos ?? []).map((partido) => mapPartidoRow(partido, supabaseAdmin, user)),
+          (partidos ?? []).map((partido) => mapPartidoPublicRow(partido, supabaseAdmin, user)),
         );
         return res.json(result);
       }
@@ -1611,7 +1617,7 @@ export function createPartidosRouter({
       }
 
       const result = await Promise.all(
-        merged.map((partido) => mapPartidoRow(partido, supabaseAdmin, user)),
+        merged.map((partido) => mapPartidoPublicRow(partido, supabaseAdmin, user)),
       );
 
       res.json(result);

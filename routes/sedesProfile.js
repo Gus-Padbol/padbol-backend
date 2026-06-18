@@ -9,6 +9,7 @@ import {
 } from '../utils/sedeHero.js';
 import { fetchSedeUpcomingPartidos } from './partidos.js';
 import { SEDE_PERFIL_SELECT, pickPublicSedeRow } from '../utils/sedePublicSelect.js';
+import { filterSedePatchForRole, requireSedeAdminForId } from '../lib/authAccess.js';
 
 function parseSedeId(raw) {
   const sedeId = parseInt(raw, 10);
@@ -22,7 +23,7 @@ async function updateSedeById(supabaseAdmin, sedeId, patch) {
     .from('sedes')
     .update(patch)
     .eq('id', sedeId)
-    .select('*')
+    .select(SEDE_PERFIL_SELECT)
     .limit(1);
 
   if (error) throw error;
@@ -163,7 +164,13 @@ async function fetchHubHeroImage(supabaseAdmin, deporte = 'padbol') {
   }
 }
 
-export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser }) {
+export function mountSedesProfileRoutes(app, {
+  supabase,
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails = [],
+}) {
   /** Sesión opcional: lectura pública; con Bearer se enriquecen flags en partidos. */
   async function optionalAuthUser(req) {
     const authHeader = req.headers.authorization;
@@ -296,15 +303,17 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
 
   app.patch('/api/sedes/:id', async (req, res) => {
     try {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) {
-        return res.status(status).json({ error: authError });
-      }
-
       const sedeId = parseSedeId(req.params.id);
       if (sedeId == null) {
         return res.status(400).json({ error: 'ID de sede inválido' });
       }
+
+      const auth = await requireSedeAdminForId(req, res, sedeId, {
+        getAuthenticatedUser,
+        fetchUserRoleRowForAuthUser,
+        legacySuperAdminEmails,
+      });
+      if (!auth) return;
 
       const body = req.body ?? {};
       const patch = {};
@@ -349,8 +358,10 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         'horario_apertura', 'horario_cierre', 'moneda', 'metodo_pago', 'pago_manual_instrucciones',
         'instagram', 'facebook', 'tiktok', 'twitter', 'youtube', 'website',
         'color_fondo_logo', 'color_hero_primario', 'color_hero_secundario', 'color_borde_hero',
-        'mp_access_token', 'stripe_account_id',
       ];
+      if (auth.role.rol === 'super_admin') {
+        passthrough.push('mp_access_token', 'stripe_account_id', 'mp_public_key');
+      }
       for (const key of passthrough) {
         if (hop(key)) patch[key] = body[key];
       }
@@ -411,11 +422,12 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
         return res.status(400).json({ error: 'Ningún campo reconocido para actualizar' });
       }
 
-      const updated = await updateSedeById(supabaseAdmin, sedeId, patch);
+      const safePatch = filterSedePatchForRole(patch, auth.role);
+      const updated = await updateSedeById(supabaseAdmin, sedeId, safePatch);
 
       if (!updated) return res.status(404).json({ error: 'Sede no encontrada' });
 
-      res.json({ sede: enrichSedeWithHeroPhoto(updated) });
+      res.json({ sede: pickPublicSedeRow(enrichSedeWithHeroPhoto(updated)) });
     } catch (err) {
       console.error('❌ Error PATCH /api/sedes/:id:', err.message);
       res.status(500).json({ error: err.message });

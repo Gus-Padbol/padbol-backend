@@ -74,6 +74,20 @@ import {
 import { quoteReservaPrice, assertClientPrecioMatchesQuote } from './lib/pricing/quoteReservaPrice.js';
 import { envConfigured, maskEmail, maskPhone, safeQueryLog, summarizeError } from './lib/safeLog.js';
 import {
+  EQUIPO_TORNEO_PUBLIC_SELECT,
+  JUGADOR_PUBLIC_SELECT,
+  JUGADOR_TORNEO_PUBLIC_SELECT,
+  legacyWriteDisabled,
+  mapEquipoTorneoPublicRow,
+  mapJugadorPublicRow,
+  mapJugadorTorneoPublicRow,
+  mapPartidoTorneoPublicRow,
+  mapTorneoPublicRow,
+  PARTIDO_TORNEO_DETAIL_PUBLIC_SELECT,
+  PARTIDO_TORNEO_PUBLIC_SELECT,
+  TORNEO_PUBLIC_SELECT,
+} from './lib/dto/legacyPublic.js';
+import {
   chiviRateLimit,
   configureRateLimitTrustProxy,
   isRateLimitDisabled,
@@ -877,7 +891,13 @@ app.get('/api/sedes', async (req, res) => {
   }
 });
 
-mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthenticatedUser });
+mountSedesProfileRoutes(app, {
+  supabase,
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 mountCanchasRoutes(app, { supabaseAdmin });
 mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountResenasRoutes(app, {
@@ -1694,11 +1714,11 @@ app.get('/api/torneos', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('torneos')
-      .select('*')
+      .select(TORNEO_PUBLIC_SELECT)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json(data || []);
+    res.json((data || []).map(mapTorneoPublicRow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1752,12 +1772,12 @@ app.get('/api/torneos/:id', async (req, res) => {
 
     const { data, error } = await supabase
       .from('torneos')
-      .select('*')
+      .select(TORNEO_PUBLIC_SELECT)
       .eq('id', id)
       .single();
 
     if (error) throw error;
-    res.json(data);
+    res.json(mapTorneoPublicRow(data));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2133,44 +2153,18 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
 });
 
 // ===== JUGADORES =====
-app.post('/api/jugadores', async (req, res) => {
-  try {
-    const { user_id, nombre, email, documento, tipo_documento, nacionalidad, fecha_nacimiento, foto_url, pierna_habil, bio } = req.body;
-
-    const { data, error } = await supabase
-      .from('jugadores')
-      .insert([{
-        user_id,
-        nombre,
-        email,
-        documento,
-        tipo_documento,
-        nacionalidad,
-        fecha_nacimiento,
-        foto_url,
-        pierna_habil,
-        bio,
-        estado: 'activo',
-      }])
-      .select();
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+app.post('/api/jugadores', (req, res) => legacyWriteDisabled(res, 'POST /api/jugadores'));
 
 app.get('/api/jugadores', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('jugadores')
-      .select('*')
+      .select(JUGADOR_PUBLIC_SELECT)
       .eq('estado', 'activo')
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json(data || []);
+    res.json((data || []).map(mapJugadorPublicRow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2184,44 +2178,18 @@ app.get('/api/jugadores/:id', async (req, res) => {
 
     const { data, error } = await supabase
       .from('jugadores')
-      .select('*')
+      .select(JUGADOR_PUBLIC_SELECT)
       .eq('id', id)
       .single();
 
     if (error) throw error;
-    res.json(data);
+    res.json(mapJugadorPublicRow(data));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.put('/api/jugadores/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { nombre, email, documento, nacionalidad, fecha_nacimiento, foto_url, pierna_habil, bio } = req.body;
-
-    const { data, error } = await supabase
-      .from('jugadores')
-      .update({
-        nombre,
-        email,
-        documento,
-        nacionalidad,
-        fecha_nacimiento,
-        foto_url,
-        pierna_habil,
-        bio,
-        updated_at: new Date(),
-      })
-      .eq('id', id)
-      .select();
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+app.put('/api/jugadores/:id', (req, res) => legacyWriteDisabled(res, 'PUT /api/jugadores/:id'));
 
 // ===== JUGADORES TORNEO =====
 app.post('/api/torneos/:torneo_id/jugadores', async (req, res) => {
@@ -2255,11 +2223,11 @@ app.get('/api/torneos/:torneo_id/jugadores', async (req, res) => {
 
     const { data, error } = await supabase
       .from('jugadores_torneo')
-      .select('*')
+      .select(JUGADOR_TORNEO_PUBLIC_SELECT)
       .eq('torneo_id', parseInt(torneo_id));
 
     if (error) throw error;
-    res.json(data || []);
+    res.json((data || []).map(mapJugadorTorneoPublicRow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2310,7 +2278,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     const { torneo_id } = req.params;
 
     const [{ data: equipos, error: errE }, { data: grupoPartidos }] = await Promise.all([
-      supabase.from('equipos').select('*').eq('torneo_id', parseInt(torneo_id)).order('puntos_totales', { ascending: false }),
+      supabase.from('equipos').select(EQUIPO_TORNEO_PUBLIC_SELECT).eq('torneo_id', parseInt(torneo_id)).order('puntos_totales', { ascending: false }),
       supabase.from('partidos').select('equipo_a_id, equipo_b_id, grupo').eq('torneo_id', parseInt(torneo_id)).not('grupo', 'is', null),
     ]);
     if (errE) throw errE;
@@ -2324,7 +2292,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
       }
     });
 
-    const result = (equipos || []).map(eq => ({ ...eq, grupo: grupoMap[eq.id] || null }));
+    const result = (equipos || []).map(eq => mapEquipoTorneoPublicRow(eq, grupoMap[eq.id] || null));
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2435,16 +2403,12 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
 
     const { data, error } = await supabase
       .from('partidos')
-      .select(`
-        *,
-        equipo_a:equipos!equipo_a_id(nombre),
-        equipo_b:equipos!equipo_b_id(nombre)
-      `)
+      .select(PARTIDO_TORNEO_PUBLIC_SELECT)
       .eq('torneo_id', parseInt(torneo_id))
       .order('fecha_hora', { ascending: true });
 
     if (error) throw error;
-    res.json(data || []);
+    res.json((data || []).map(mapPartidoTorneoPublicRow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2456,17 +2420,12 @@ app.get('/api/partidos/:id', async (req, res) => {
 
     const { data, error } = await supabase
       .from('partidos')
-      .select(`
-        *,
-        equipo_a:equipos!equipo_a_id(nombre),
-        equipo_b:equipos!equipo_b_id(nombre),
-        games(*)
-      `)
+      .select(PARTIDO_TORNEO_DETAIL_PUBLIC_SELECT)
       .eq('id', id)
       .single();
 
     if (error) throw error;
-    res.json(data);
+    res.json(mapPartidoTorneoPublicRow(data));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
