@@ -1464,7 +1464,11 @@ export function createPartidosRouter({
         duracion_minutos: durationMinutes ?? 90,
         user_id: user.id,
       });
-      console.log('[DEBUG INSERT reservas]', reservaInsert);
+      console.log('[DEBUG INSERT reservas]', {
+        sede_id: sedeRow.id,
+        fecha,
+        estado: 'prereserva',
+      });
 
       const { data: reservaRows, error: reservaErr } = await supabaseAdmin
         .from('reservas')
@@ -1496,7 +1500,11 @@ export function createPartidosRouter({
         deadlineCancel,
         duracionMinutos: durationMinutes,
       });
-      console.log('[DEBUG partidos_abiertos INSERT]', JSON.stringify(partidoInsert));
+      console.log('[DEBUG partidos_abiertos INSERT]', {
+        reserva_id: reserva.id,
+        sede_id: sedeRow.id,
+        estado: 'abierto',
+      });
 
       const { data: partido, error: partidoErr } = await supabaseAdmin
         .from('partidos_abiertos')
@@ -2727,7 +2735,11 @@ export function createPartidosRouter({
         nivel,
         estado: 'abierto',
       });
-      console.log('[DEBUG partidos_abiertos INSERT]', JSON.stringify(partidoInsert));
+      console.log('[DEBUG partidos_abiertos INSERT]', {
+        sede_id: sedeRow.id,
+        fecha,
+        estado: 'abierto',
+      });
 
       const { data: partido, error: insertErr } = await supabaseAdmin
         .from('partidos_abiertos')

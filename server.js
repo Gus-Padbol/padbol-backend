@@ -72,6 +72,7 @@ import {
   resolveReservasListScope,
 } from './lib/authAccess.js';
 import { quoteReservaPrice, assertClientPrecioMatchesQuote } from './lib/pricing/quoteReservaPrice.js';
+import { envConfigured, maskEmail, maskPhone, safeQueryLog, summarizeError } from './lib/safeLog.js';
 import { toStripeMinorUnits, normalizeStripeCurrency } from './lib/stripe/stripeAmount.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
@@ -197,11 +198,6 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('⚠️  SUPABASE_SERVICE_ROLE_KEY no está configurado — supabaseAdmin usa SUPABASE_KEY (RLS puede bloquear pagos)');
 }
 
-function supabaseKeyPrefixForLog(key) {
-  const s = String(key ?? '').trim();
-  return s ? s.slice(0, 20) : '(not set)';
-}
-
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 const pgPool = DATABASE_URL
   ? new pg.Pool({
@@ -240,8 +236,7 @@ async function fetchSedeMpCredentialsPg(sedeId) {
     table: 'sedes',
     operation: 'select',
     client: 'pgPool',
-    sql: 'SELECT mp_access_token, mp_public_key FROM sedes WHERE id = $1',
-    params: { id: sid },
+    sede_id: sid,
   });
   try {
     const { rows } = await pgPool.query(
@@ -671,13 +666,15 @@ async function handleGetMiRol(req, res) {
     const userId = String(authUser.id).trim();
     const email = String(authUser.email || '').trim().toLowerCase();
 
-    console.log('[mi-rol] lookup:', { userId, email });
+    console.log('[mi-rol] lookup:', { userId });
 
     const { data: row, error: roleError } = await fetchUserRoleRowByJwtUserId(userId);
 
     console.log('[mi-rol] user_roles query result:', {
       userId,
-      row: row ?? null,
+      hasRow: Boolean(row),
+      role: row?.role ?? null,
+      sede_id: row?.sede_id ?? null,
       error: roleError?.message ?? null,
     });
 
@@ -716,7 +713,7 @@ async function sendWhatsAppConfirmation(phone, { sede, fecha, hora, cancha, dire
 *PADBOL MATCH*`;
 
   await twilioClient.messages.create({ from: TWILIO_WHATSAPP_FROM, to, body });
-  console.log(`✓ WhatsApp enviado a ${to}`);
+  console.log(`✓ WhatsApp enviado — dest ${maskPhone(to) || 'ok'}`);
 }
 
 async function getAuthenticatedUser(req) {
@@ -857,15 +854,13 @@ app.get('/api/sedes', async (req, res) => {
     const { data, error } = await supabase
       .from('sedes')
       .select(SEDE_APP_SELECT);
-    
-    console.log('📊 Respuesta Supabase:', { data, error });
-    
+
     if (error) {
-      console.error('❌ Error Supabase:', error);
+      console.error('❌ Error Supabase GET /api/sedes:', summarizeError(error));
       throw error;
     }
-    
-    console.log('SEDES RESPONSE:', data);
+
+    console.log(`✓ GET /api/sedes — ${(data || []).length} sede(s)`);
     res.json(data || []);
   } catch (err) {
     console.error('❌ Error GET /api/sedes:', err.message);
@@ -1257,7 +1252,11 @@ app.post('/api/reservas', async (req, res) => {
       user_id: authUser.id,
     });
 
-    console.log('[DEBUG INSERT reservas]', insertRow);
+    console.log('[POST reserva] insert', {
+      sede_id: sedeId,
+      fecha,
+      estado: modoPartido ? 'prereserva' : 'pendiente',
+    });
 
     const { data: reservaRows, error: insertErr } = await supabaseAdmin
       .from('reservas')
@@ -1276,7 +1275,7 @@ app.post('/api/reservas', async (req, res) => {
       throw new Error('No se pudo crear la reserva');
     }
 
-    console.log('✓ Reserva creada:', reserva.id);
+    console.log(`✓ Reserva creada id=${reserva.id}`);
 
     let partidoId = null;
     let deadlineCancel = null;
@@ -1301,7 +1300,11 @@ app.post('/api/reservas', async (req, res) => {
         deadlineCancel,
         duracionMinutos: durationMinutes,
       });
-      console.log('[DEBUG partidos_abiertos INSERT]', JSON.stringify(partidoInsert));
+      console.log('[DEBUG partidos_abiertos INSERT]', {
+        reserva_id: reserva.id,
+        sede_id: sedeId,
+        estado: 'abierto',
+      });
 
       const { data: partido, error: partidoErr } = await supabaseAdmin
         .from('partidos_abiertos')
@@ -2848,7 +2851,7 @@ app.get('/api/creditos/:email', async (req, res) => {
     if (error) throw error;
 
     const total = (data || []).reduce((sum, c) => sum + Number(c.monto), 0);
-    console.log(`✓ GET creditos ${emailParam} — total: ${total} (${(data || []).length} registros)`);
+    console.log(`✓ GET creditos ${maskEmail(emailParam)} — total: ${total} (${(data || []).length} registros)`);
     res.json({ total, creditos: data || [] });
   } catch (err) {
     console.error('❌ Error GET /api/creditos:', err.message);
@@ -2874,19 +2877,9 @@ function serializeRawErrorForLog(err, seen = new WeakSet(), depth = 0) {
 }
 
 function logCrearPreferenciaError(phase, err, ctx = {}) {
-  const raw = serializeRawErrorForLog(err);
-  console.error('[POST /api/crear-preferencia] raw error (JSON.stringify):', JSON.stringify(raw));
-
   console.error('❌ POST /api/crear-preferencia', {
     phase,
-    message: err?.message ?? raw?.message ?? String(err),
-    code: err?.code ?? raw?.code,
-    details: err?.details ?? raw?.details,
-    hint: err?.hint ?? raw?.hint,
-    status: err?.status ?? raw?.status,
-    cause: err?.cause ?? raw?.cause,
-    stack: err?.stack ?? raw?.stack,
-    raw,
+    ...summarizeError(err),
     ...ctx,
   });
 }
@@ -2909,7 +2902,7 @@ function logCrearPreferenciaSupabaseQuery(client, table, operation, params = {})
     table,
     operation,
     client: supabaseClientLabelForLog(client),
-    ...(Object.keys(params).length ? { params } : {}),
+    ...(Object.keys(params).length ? { params: safeQueryLog(params) } : {}),
   });
 }
 
@@ -3008,7 +3001,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
       return res.status(503).json({ error: 'Mercado Pago no configurado en el servidor (MP_ACCESS_TOKEN)' });
     }
 
-    console.log('[POST /api/crear-preferencia] tras pg mp_access_token: sin más queries Supabase en este handler');
+    console.log('[POST /api/crear-preferencia] sede MP credentials loaded from pg');
 
     let reservaIdParaMp;
     try {
@@ -3068,14 +3061,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
   } catch (err) {
     logCrearPreferenciaError('handler', err, ctx);
     if (!res.headersSent) {
-      console.error('[MP ERROR DETALLADO]', JSON.stringify({
-        message: err?.message,
-        cause: err?.cause,
-        status: err?.status,
-        error: err?.error,
-        errorsList: err?.cause?.errorsList ?? err?.errorsList,
-        raw: JSON.stringify(err),
-      }, null, 2));
+      console.error('[MP ERROR DETALLADO]', summarizeError(err));
       res.status(Number.isFinite(Number(err?.status)) ? Number(err.status) : 500).json({
         error: err?.message ?? serializeRawErrorForLog(err)?.message ?? String(err),
       });
@@ -3296,7 +3282,7 @@ Recordá llegar 10 minutos antes.
         const digits = String(r.whatsapp).replace(/\D/g, '');
         const to     = `whatsapp:+${digits}`;
         await twilioClient.messages.create({ from: TWILIO_WHATSAPP_FROM, to, body });
-        console.log(`✓ Recordatorio enviado a ${to} (reserva ${r.id})`);
+        console.log(`✓ Recordatorio enviado reserva ${r.id} dest ${maskPhone(digits)}`);
 
         // Mark as sent
         await supabase
@@ -3987,7 +3973,7 @@ async function handlePutAuthenticatedPerfil(req, res) {
 
     const resolvedDeportes = await resolvePerfilDeportes(perfil, perfil.user_id ?? user.id);
 
-    console.log(`✓ PUT jugador perfil — actualizado para ${email}`);
+    console.log(`✓ PUT jugador perfil — user ${user.id}`);
     res.json(await buildAuthenticatedPerfilPayload(perfil, user, resolvedDeportes));
   } catch (err) {
     console.error('❌ Error PUT jugador perfil:', err.message);
@@ -4329,7 +4315,7 @@ usuariosRouter.post('/perfil', async (req, res) => {
 
     const deportes = [deporteKey];
 
-    console.log(`✓ POST /api/usuarios/perfil — perfil guardado para ${email}`);
+    console.log(`✓ POST /api/usuarios/perfil — user ${user.id}`);
     res.status(existingRows?.length ? 200 : 201).json({
       nombre: perfil.nombre ?? '',
       telefono: perfil.telefono ?? '',
@@ -4416,7 +4402,7 @@ usuariosRouter.post('/foto-perfil', async (req, res) => {
       return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
     }
 
-    console.log(`✓ POST /api/usuarios/foto-perfil — foto guardada para ${email}`);
+    console.log(`✓ POST /api/usuarios/foto-perfil — user ${user.id}`);
     res.json({ foto_url });
   } catch (err) {
     console.error('❌ Error POST /api/usuarios/foto-perfil:', err.message);
@@ -4553,9 +4539,9 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Rutas rol: GET /api/auth/mi-rol');
     console.log('✅ Rutas rol: GET /api/usuarios/mi-rol');
     console.log(`📊 Supabase: ${SUPABASE_URL}`);
-    console.log('🔑 Supabase keys (first 20 chars):', {
-      SUPABASE_KEY: supabaseKeyPrefixForLog(SUPABASE_KEY),
-      SUPABASE_SERVICE_ROLE_KEY: supabaseKeyPrefixForLog(SUPABASE_SERVICE_ROLE_KEY),
+    console.log('🔑 Supabase env:', {
+      SUPABASE_KEY: envConfigured('SUPABASE_KEY'),
+      SUPABASE_SERVICE_ROLE_KEY: envConfigured('SUPABASE_SERVICE_ROLE_KEY'),
     });
     console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
     console.log('Hub endpoint ready: GET /api/hub/imagenes');

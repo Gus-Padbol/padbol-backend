@@ -1,4 +1,5 @@
 import { MercadoPagoConfig, Payment } from 'mercadopago';
+import { safeQueryLog } from '../lib/safeLog.js';
 
 /** Tolerancia mínima ARS entre monto MP y precio_esperado (redondeos MP). */
 export const PAYMENT_AMOUNT_TOLERANCE = 1;
@@ -463,7 +464,7 @@ function buildPagoExitosoReadResponse({ reserva, reservaId, payment, paymentId, 
 /** GET/POST /api/pago-exitoso — solo lectura; no confirma reservas. */
 async function handlePagoExitosoReadOnly(req, res, pgPool, deps) {
   try {
-    console.log('[PAGO-EXITOSO] query params:', JSON.stringify(req.query));
+    console.log('[PAGO-EXITOSO] query params:', safeQueryLog(req.query));
 
     if (!pgPool) {
       return jsonError(res, 503, 'DATABASE_URL no configurada — pgPool no disponible');

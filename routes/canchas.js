@@ -22,13 +22,13 @@ export function mountCanchasRoutes(app, { supabaseAdmin }) {
         .select('id, nombre, deporte, sede_id, estado')
         .eq('sede_id', sedeId);
 
-      console.log('[GET /api/canchas] supabase response:', { data, error });
+      console.log('[GET /api/canchas] result count:', (data || []).length);
 
       if (error) throw error;
 
       return res.json({ canchas: data || [] });
     } catch (err) {
-      console.error('❌ GET /api/canchas:', err.message, err);
+      console.error('❌ GET /api/canchas:', err.message);
       return res.status(500).json({ error: err.message || 'Error al obtener canchas' });
     }
   });
