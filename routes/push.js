@@ -1,4 +1,5 @@
 import express from 'express';
+import { pushSendRateLimit, pushTokensRateLimit } from '../lib/rateLimit.js';
 import { requireAdminOrInternalSecret } from '../lib/authAccess.js';
 import { sendPushToTokens } from '../utils/push.js';
 
@@ -10,7 +11,7 @@ export function mountPushRoutes(app, {
 }) {
   const router = express.Router();
 
-  router.post('/push-tokens', async (req, res) => {
+  router.post('/push-tokens', pushTokensRateLimit, async (req, res) => {
     try {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) {
@@ -57,7 +58,7 @@ export function mountPushRoutes(app, {
     }
   });
 
-  router.post('/push/send', async (req, res) => {
+  router.post('/push/send', pushSendRateLimit, async (req, res) => {
     try {
       const auth = await requireAdminOrInternalSecret(req, res, {
         getAuthenticatedUser,

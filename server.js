@@ -73,6 +73,14 @@ import {
 } from './lib/authAccess.js';
 import { quoteReservaPrice, assertClientPrecioMatchesQuote } from './lib/pricing/quoteReservaPrice.js';
 import { envConfigured, maskEmail, maskPhone, safeQueryLog, summarizeError } from './lib/safeLog.js';
+import {
+  chiviRateLimit,
+  configureRateLimitTrustProxy,
+  isRateLimitDisabled,
+  paymentsRateLimit,
+  pushTokensRateLimit,
+  reservasWriteRateLimit,
+} from './lib/rateLimit.js';
 import { toStripeMinorUnits, normalizeStripeCurrency } from './lib/stripe/stripeAmount.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
@@ -100,6 +108,7 @@ globalThis.WebSocket = ws;
 dotenv.config();
 
 const app = express();
+configureRateLimitTrustProxy(app);
 const httpServer = http.createServer(app);
 const io = new SocketIOServer(httpServer, {
   cors: {
@@ -1119,7 +1128,7 @@ app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
 });
 
 // POST reserva
-app.post('/api/reservas', async (req, res) => {
+app.post('/api/reservas', reservasWriteRateLimit, async (req, res) => {
   try {
     const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
@@ -1461,7 +1470,7 @@ app.get('/api/ingresos', async (req, res) => {
 });
 
 // PUT reserva — JWT; jugador solo nombre; admin dentro de su alcance
-app.put('/api/reservas/:id', async (req, res) => {
+app.put('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
   try {
     const user = await requireAuthenticatedUser(req, res, getAuthenticatedUser);
     if (!user) return;
@@ -1515,7 +1524,7 @@ app.put('/api/reservas/:id', async (req, res) => {
 });
 
 // DELETE reserva — JWT; jugador usa cancelar-reserva; admin cancela sin borrar
-app.delete('/api/reservas/:id', async (req, res) => {
+app.delete('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
   try {
     const user = await requireAuthenticatedUser(req, res, getAuthenticatedUser);
     if (!user) return;
@@ -2378,7 +2387,7 @@ app.get('/api/partidos-abiertos', (req, res, next) => {
 });
 app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/xp', createXpRouter({ supabaseAdmin, getAuthenticatedUser }));
-app.use('/api/chivi', createChiviRouter({ getAuthenticatedUser }));
+app.use('/api/chivi', chiviRateLimit, createChiviRouter({ getAuthenticatedUser }));
 app.use('/api/arena', createArenaRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/rangos', createRangosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
@@ -2677,7 +2686,7 @@ app.put('/api/config/puntos', async (req, res) => {
 });
 
 // POST /api/cancelar-reserva — Cancellation with optional credit (JWT + dueño o admin)
-app.post('/api/cancelar-reserva', async (req, res) => {
+app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {
   try {
     const user = await requireAuthenticatedUser(req, res, getAuthenticatedUser);
     if (!user) return;
@@ -2907,7 +2916,7 @@ function logCrearPreferenciaSupabaseQuery(client, table, operation, params = {})
 }
 
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
-app.post('/api/crear-preferencia', async (req, res) => {
+app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
   crearPreferenciaSupabaseLogActive = true;
   crearPreferenciaSupabaseLogSeq = 0;
   const ctx = { sedeId: req.body?.sedeId ?? null, titulo: req.body?.titulo ?? null };
@@ -3072,7 +3081,7 @@ app.post('/api/crear-preferencia', async (req, res) => {
 });
 
 // POST /api/crear-pago-stripe — Stripe Checkout Session (quote server-side + reserva pendiente)
-app.post('/api/crear-pago-stripe', async (req, res) => {
+app.post('/api/crear-pago-stripe', paymentsRateLimit, async (req, res) => {
   try {
     if (!stripeClient) {
       return res.status(503).json({ error: 'Stripe no configurado en el servidor (STRIPE_SECRET_KEY)' });
@@ -4039,7 +4048,7 @@ mountJugadorReputacionRoutes(jugadorRouter, { supabaseAdmin, getAuthenticatedUse
 const usuariosRouter = express.Router();
 
 // POST /api/usuarios/push-token — Save Expo push token on jugadores_perfil
-usuariosRouter.post('/push-token', async (req, res) => {
+usuariosRouter.post('/push-token', pushTokensRateLimit, async (req, res) => {
   try {
     const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
@@ -4543,6 +4552,7 @@ app.use((err, _req, res, _next) => {
       SUPABASE_KEY: envConfigured('SUPABASE_KEY'),
       SUPABASE_SERVICE_ROLE_KEY: envConfigured('SUPABASE_SERVICE_ROLE_KEY'),
     });
+    console.log(`🛡️ Rate limits: ${isRateLimitDisabled() ? 'disabled' : 'enabled'} (webhooks sin límite)`);
     console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
     console.log('Hub endpoint ready: GET /api/hub/imagenes');
     console.log('✅ Webhook MP: POST/GET /api/webhooks/mercadopago');
