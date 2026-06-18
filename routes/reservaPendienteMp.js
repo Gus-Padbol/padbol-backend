@@ -140,6 +140,8 @@ async function persistReservaPricingPg(pgPool, reservaId, {
   moneda,
   pricing_snapshot,
   user_id,
+  payment_provider,
+  stripe_checkout_session_id,
 }) {
   const snapshotJson = pricing_snapshot ? JSON.stringify(pricing_snapshot) : null;
   try {
@@ -149,12 +151,25 @@ async function persistReservaPricingPg(pgPool, reservaId, {
            precio_esperado = $3,
            moneda = COALESCE($4, moneda, 'ARS'),
            pricing_snapshot = $5::jsonb,
-           user_id = COALESCE($6, user_id)
+           user_id = COALESCE($6, user_id),
+           payment_provider = COALESCE($7, payment_provider),
+           stripe_checkout_session_id = COALESCE($8, stripe_checkout_session_id)
        WHERE id = $1`,
-      [reservaId, precio, precio_esperado, moneda, snapshotJson, user_id ?? null],
+      [
+        reservaId,
+        precio,
+        precio_esperado,
+        moneda,
+        snapshotJson,
+        user_id ?? null,
+        payment_provider ?? null,
+        stripe_checkout_session_id ?? null,
+      ],
     );
   } catch (err) {
-    if (!/precio_esperado|pricing_snapshot|colum|column/i.test(String(err.message || ''))) throw err;
+    if (!/precio_esperado|pricing_snapshot|payment_provider|stripe_checkout|colum|column/i.test(String(err.message || ''))) {
+      throw err;
+    }
     await pgPool.query(
       `UPDATE reservas
        SET precio = COALESCE($2, precio),
@@ -162,6 +177,23 @@ async function persistReservaPricingPg(pgPool, reservaId, {
        WHERE id = $1`,
       [reservaId, precio, user_id ?? null],
     );
+  }
+}
+
+export async function persistStripeCheckoutSessionPg(pgPool, reservaId, sessionId, {
+  payment_provider = 'stripe',
+} = {}) {
+  if (!pgPool || !reservaId || !sessionId) return;
+  try {
+    await pgPool.query(
+      `UPDATE reservas
+       SET stripe_checkout_session_id = $2,
+           payment_provider = COALESCE($3, payment_provider, 'stripe')
+       WHERE id = $1`,
+      [reservaId, String(sessionId), payment_provider],
+    );
+  } catch (err) {
+    if (!/stripe_checkout|payment_provider|colum|column/i.test(String(err.message || ''))) throw err;
   }
 }
 
@@ -179,6 +211,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
   const input = normalizeCrearPreferenciaReservaInput(body);
   const authUser = options.authUser ?? null;
   const quote = options.quote ?? null;
+  const paymentProvider = options.paymentProvider ?? null;
   const authUserId = authUser?.id ? String(authUser.id) : null;
   const authEmail = authUser?.email ? String(authUser.email).trim().toLowerCase() : null;
 
@@ -228,6 +261,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
         moneda: serverMoneda,
         pricing_snapshot: quote?.pricing_snapshot ?? null,
         user_id: authUserId,
+        payment_provider: paymentProvider,
       });
     }
     return { reserva_id: existing.id, created: false };
@@ -275,20 +309,56 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
 
   let reservaId;
   try {
-    const { rows } = await pgPool.query(
-      `INSERT INTO reservas (
-         sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
-         nombre, email, telefono, whatsapp,
-         nivel, precio, precio_esperado, moneda, pricing_snapshot,
-         estado, pago_estado, duracion_minutos, user_id
-       ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8,
-         $9, $10, $11, $12,
-         $13, $14, $15, $16, $17::jsonb,
-         'pendiente', 'pendiente', $18, $19
-       )
-       RETURNING id`,
-      [
+    const insertWithPricing = paymentProvider
+      ? `INSERT INTO reservas (
+           sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
+           nombre, email, telefono, whatsapp,
+           nivel, precio, precio_esperado, moneda, pricing_snapshot, payment_provider,
+           estado, pago_estado, duracion_minutos, user_id
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8,
+           $9, $10, $11, $12,
+           $13, $14, $15, $16, $17::jsonb, $18,
+           'pendiente', 'pendiente', $19, $20
+         )
+         RETURNING id`
+      : `INSERT INTO reservas (
+           sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
+           nombre, email, telefono, whatsapp,
+           nivel, precio, precio_esperado, moneda, pricing_snapshot,
+           estado, pago_estado, duracion_minutos, user_id
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8,
+           $9, $10, $11, $12,
+           $13, $14, $15, $16, $17::jsonb,
+           'pendiente', 'pendiente', $18, $19
+         )
+         RETURNING id`;
+
+    const insertParams = paymentProvider
+      ? [
+        sedeNombre,
+        sedeId,
+        input.fecha,
+        horaLegacy,
+        horaInicio,
+        horaFin,
+        canchaText,
+        input.cancha_id ?? null,
+        input.nombre || input.email,
+        input.email,
+        contacto,
+        contacto,
+        input.nivel,
+        precio,
+        serverPrecio ?? precio,
+        serverMoneda,
+        quote?.pricing_snapshot ? JSON.stringify(quote.pricing_snapshot) : null,
+        paymentProvider,
+        duracionMinutos,
+        authUserId || input.user_id || null,
+      ]
+      : [
         sedeNombre,
         sedeId,
         input.fecha,
@@ -308,8 +378,9 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
         quote?.pricing_snapshot ? JSON.stringify(quote.pricing_snapshot) : null,
         duracionMinutos,
         authUserId || input.user_id || null,
-      ],
-    );
+      ];
+
+    const { rows } = await pgPool.query(insertWithPricing, insertParams);
     reservaId = rows[0]?.id;
   } catch (insertErr) {
     if (isReservaSlotUniqueViolation(insertErr)) {

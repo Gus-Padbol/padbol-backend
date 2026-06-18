@@ -55,7 +55,12 @@ import { mountLigasPremiosRoutes } from './routes/ligasPremios.js';
 import { enrichSedeWithHeroPhoto } from './utils/sedeHero.js';
 import { SEDE_APP_SELECT } from './utils/sedePublicSelect.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
-import { ensureReservaPendienteParaMpPg, normalizeCrearPreferenciaReservaInput } from './routes/reservaPendienteMp.js';
+import { mountStripeWebhookRoutes } from './routes/stripeWebhook.js';
+import {
+  ensureReservaPendienteParaMpPg,
+  normalizeCrearPreferenciaReservaInput,
+  persistStripeCheckoutSessionPg,
+} from './routes/reservaPendienteMp.js';
 import { assertCancelReservaOwnerCompat, assertReservaOwnerOrAdmin, buildAdminReservaPutUpdates, buildNormalUserReservaPutUpdates, resolveReservaAccess } from './lib/reservaAccess.js';
 import {
   applyReservasListScopeToQuery,
@@ -67,6 +72,7 @@ import {
   resolveReservasListScope,
 } from './lib/authAccess.js';
 import { quoteReservaPrice, assertClientPrecioMatchesQuote } from './lib/pricing/quoteReservaPrice.js';
+import { toStripeMinorUnits, normalizeStripeCurrency } from './lib/stripe/stripeAmount.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountPushRoutes } from './routes/push.js';
@@ -127,7 +133,13 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe') {
+      req.rawBody = buf;
+    }
+  },
+}));
 
 // Supabase (desde .env)
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -272,6 +284,12 @@ const mpClient = new MercadoPagoConfig({
 const stripeClient = process.env.STRIPE_SECRET_KEY
   ? new Stripe(process.env.STRIPE_SECRET_KEY)
   : null;
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.warn('⚠️  STRIPE_SECRET_KEY no está configurado — Stripe Checkout no estará disponible');
+}
+if (!process.env.STRIPE_WEBHOOK_SECRET) {
+  console.warn('⚠️  STRIPE_WEBHOOK_SECRET no está configurado — el webhook Stripe rechazará eventos');
+}
 
 function normalizePaymentExtras(extras) {
   if (!Array.isArray(extras)) return [];
@@ -320,14 +338,13 @@ function buildMercadoPagoItems({ titulo, moneda, pricing, extras = [] }) {
 }
 
 function buildStripeLineItems({ titulo, moneda, pricing, extras = [] }) {
-  const currency = String(moneda || 'USD').toLowerCase();
-  const toCents = (amount) => Math.round(Number(amount) * 100);
+  const currency = normalizeStripeCurrency(moneda);
 
   const line_items = [{
     price_data: {
       currency,
       product_data: { name: titulo },
-      unit_amount: toCents(pricing?.base ?? 0),
+      unit_amount: toStripeMinorUnits(currency, pricing?.base ?? 0),
     },
     quantity: 1,
   }];
@@ -335,9 +352,9 @@ function buildStripeLineItems({ titulo, moneda, pricing, extras = [] }) {
   for (const extra of normalizePaymentExtras(extras)) {
     line_items.push({
       price_data: {
-        currency: String(extra.moneda || moneda || 'USD').toLowerCase(),
+        currency: normalizeStripeCurrency(extra.moneda || moneda),
         product_data: { name: extra.nombre },
-        unit_amount: toCents(extra.precio),
+        unit_amount: toStripeMinorUnits(extra.moneda || moneda, extra.precio),
       },
       quantity: extra.cantidad,
     });
@@ -349,7 +366,7 @@ function buildStripeLineItems({ titulo, moneda, pricing, extras = [] }) {
       price_data: {
         currency,
         product_data: { name: 'Comisión plataforma (3%)' },
-        unit_amount: toCents(fee),
+        unit_amount: toStripeMinorUnits(currency, fee),
       },
       quantity: 1,
     });
@@ -928,6 +945,12 @@ mountMercadoPagoWebhookRoutes(app, {
   supabase,
   sendWhatsAppConfirmation,
   defaultMpToken: process.env.MP_ACCESS_TOKEN || '',
+});
+mountStripeWebhookRoutes(app, {
+  pgPool,
+  supabase,
+  stripeClient,
+  sendWhatsAppConfirmation,
 });
 mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountArenaRoutes(app, { supabaseAdmin, getAuthenticatedUser });
@@ -3062,11 +3085,26 @@ app.post('/api/crear-preferencia', async (req, res) => {
   }
 });
 
-// POST /api/crear-pago-stripe — Stripe Checkout Session
+// POST /api/crear-pago-stripe — Stripe Checkout Session (quote server-side + reserva pendiente)
 app.post('/api/crear-pago-stripe', async (req, res) => {
   try {
     if (!stripeClient) {
-      return res.status(503).json({ error: 'Stripe no configurado en el servidor' });
+      return res.status(503).json({ error: 'Stripe no configurado en el servidor (STRIPE_SECRET_KEY)' });
+    }
+
+    const user = await requireAuthenticatedUser(req, res, getAuthenticatedUser);
+    if (!user) return;
+
+    if (!supabaseAdmin) {
+      return res.status(503).json({ error: 'Configuración del servidor incompleta (Supabase no disponible)' });
+    }
+    if (!SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(503).json({
+        error: 'Configuración del servidor incompleta (SUPABASE_SERVICE_ROLE_KEY). Contactá soporte.',
+      });
+    }
+    if (!pgPool) {
+      return res.status(503).json({ error: 'DATABASE_URL no configurada — no se puede crear reserva pendiente' });
     }
 
     const {
@@ -3077,51 +3115,129 @@ app.post('/api/crear-pago-stripe', async (req, res) => {
       reservaData,
       sedeId,
       extras,
-      pricing,
       return_url: returnUrl,
       cancel_url: cancelUrl,
     } = req.body;
 
-    if (!titulo || precio == null) {
-      return res.status(400).json({ error: 'Faltan campos requeridos: titulo, precio' });
+    if (!titulo) {
+      return res.status(400).json({ error: 'Falta campo requerido: titulo' });
     }
 
-    const paymentExtras = extras ?? reservaData?.extras ?? [];
-    const paymentPricing = pricing ?? {
-      base: reservaData?.precio_base ?? precio,
-      fee: reservaData?.platform_fee ?? 0,
-      extrasSubtotal: reservaData?.extras_subtotal ?? 0,
-      total: precio,
-    };
+    const quoteInput = normalizeCrearPreferenciaReservaInput(req.body);
+    const resolvedSedeId = parsePositiveInt(sedeId ?? quoteInput.sede_id);
+    if (resolvedSedeId == null) {
+      return res.status(400).json({ error: 'sedeId o sede_id es requerido' });
+    }
+
+    const { rows: sedePaymentRows } = await pgPool.query(
+      'SELECT metodo_pago, moneda FROM sedes WHERE id = $1 LIMIT 1',
+      [resolvedSedeId],
+    );
+    const sedePaymentRow = sedePaymentRows[0];
+    const metodoPago = String(sedePaymentRow?.metodo_pago || '').toLowerCase();
+    if (metodoPago && !metodoPago.includes('stripe')) {
+      return res.status(400).json({
+        error: 'Esta sede no tiene configurado Stripe. Configurá metodo_pago con stripe en Admin → Mi sede → Pagos.',
+      });
+    }
+
+    let quote;
+    try {
+      quote = await quoteReservaPrice(supabaseAdmin, {
+        sedeId: resolvedSedeId,
+        deporte: quoteInput.deporte ?? reservaData?.deporte ?? 'padbol',
+        duracionMinutos: quoteInput.duracion_minutos ?? reservaData?.duracion_minutos ?? 90,
+        fecha: quoteInput.fecha ?? reservaData?.fecha,
+        hora: quoteInput.hora ?? quoteInput.hora_inicio ?? reservaData?.hora,
+        extras: extras ?? reservaData?.extras ?? [],
+        moneda,
+      });
+    } catch (quoteErr) {
+      return res.status(quoteErr.status || 500).json({ error: quoteErr.message || 'No se pudo calcular el precio' });
+    }
+
+    try {
+      assertClientPrecioMatchesQuote(
+        precio ?? reservaData?.precio ?? req.body?.pricing?.total,
+        quote.total,
+      );
+    } catch (priceErr) {
+      return res.status(priceErr.status || 400).json({
+        error: priceErr.message,
+        serverTotal: priceErr.serverTotal ?? quote.total,
+        clientPrecio: priceErr.clientPrecio ?? precio,
+      });
+    }
+
+    let reservaIdParaStripe;
+    try {
+      const pending = await ensureReservaPendienteParaMpPg(pgPool, req.body, {
+        authUser: user,
+        quote,
+        paymentProvider: 'stripe',
+      });
+      reservaIdParaStripe = pending.reserva_id;
+    } catch (pendingErr) {
+      return res.status(pendingErr.status || 500).json({
+        error: pendingErr.message || 'No se pudo crear la reserva pendiente',
+      });
+    }
+
+    const paymentExtras = quote.extras.map((e) => ({
+      id: e.id,
+      nombre: e.nombre,
+      precio: e.precio,
+      moneda: e.moneda,
+      cantidad: e.cantidad,
+    }));
     const line_items = buildStripeLineItems({
       titulo,
-      moneda,
-      pricing: paymentPricing,
+      moneda: quote.moneda,
+      pricing: quote.pricing,
       extras: paymentExtras,
     });
+
+    const backendBase = process.env.BACKEND_URL || 'https://padbol-backend.onrender.com';
+    const defaultSuccessUrl = `${backendBase}/api/pago-exitoso-stripe?session_id={CHECKOUT_SESSION_ID}`;
+    const defaultCancelUrl = cancelUrl || `${FRONTEND_URL}/pago-fallido`;
 
     const session = await stripeClient.checkout.sessions.create({
       mode: 'payment',
       line_items,
-      success_url: returnUrl || 'padbolmatch://pago-exitoso',
-      cancel_url: cancelUrl || 'padbolmatch://pago-error',
+      success_url: returnUrl || defaultSuccessUrl,
+      cancel_url: defaultCancelUrl,
+      client_reference_id: String(reservaIdParaStripe),
       metadata: {
-        sede_id: String(sedeId || ''),
-        sede_nombre: sedeNombre || '',
-        external_reference: reservaData ? JSON.stringify(reservaData).slice(0, 500) : '',
+        reserva_id: String(reservaIdParaStripe),
+        user_id: String(user.id),
+        sede_id: String(resolvedSedeId),
+        sede_nombre: sedeNombre || quoteInput.sede || '',
       },
     });
 
-    console.log(`✓ Stripe session creada: ${session.id} | items: ${line_items.length} | sede: ${sedeNombre || '—'}`);
+    await persistStripeCheckoutSessionPg(pgPool, reservaIdParaStripe, session.id, {
+      payment_provider: 'stripe',
+    });
+
+    console.log(
+      `✓ Stripe session creada: ${session.id} | reserva_id: ${reservaIdParaStripe} | total: ${quote.total} ${quote.moneda} | sede: ${sedeNombre || '—'}`,
+    );
+
     res.json({
       url: session.url,
       session_url: session.url,
       checkout_url: session.url,
       session_id: session.id,
+      reserva_id: reservaIdParaStripe,
+      precio_esperado: quote.total,
+      moneda: quote.moneda,
+      pricing: quote.pricing,
     });
   } catch (err) {
     console.error('❌ Error POST /api/crear-pago-stripe:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(Number.isFinite(Number(err?.status)) ? Number(err.status) : 500).json({
+      error: err.message,
+    });
   }
 });
 
@@ -4444,6 +4560,8 @@ app.use((err, _req, res, _next) => {
     console.log(`💬 Twilio WhatsApp: whatsapp:+14155238886`);
     console.log('Hub endpoint ready: GET /api/hub/imagenes');
     console.log('✅ Webhook MP: POST/GET /api/webhooks/mercadopago');
+    console.log('✅ Webhook Stripe: POST/GET /api/webhooks/stripe');
+    console.log('✅ Retorno Stripe (solo lectura): GET/POST /api/pago-exitoso-stripe');
     console.log('✅ Retorno MP JSON: GET/POST /api/pago-exitoso');
     console.log('✅ QR reserva: POST /api/reservas/:id/generar-qr');
     console.log('✅ Perfil público: GET /api/jugador/perfil-publico/:userId');
