@@ -1659,7 +1659,57 @@ function generarGruposKnockout(equipos, torneoId, sedeId) {
   return partidos;
 }
 
-// ===== TORNEOS =====
+// ===== TORNEOS (legacy admin writes — JWT + rol sede) =====
+const LEGACY_TORNEO_ADMIN_DEPS = {
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+};
+
+function parseTorneoRouteId(raw) {
+  const n = parseInt(String(raw ?? '').trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+async function fetchTorneoSedeIdById(torneoId) {
+  const id = parseTorneoRouteId(torneoId);
+  if (id == null) return null;
+  const { data, error } = await supabaseAdmin
+    .from('torneos')
+    .select('sede_id')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  const sid = data?.sede_id;
+  return sid != null && sid !== '' ? Number(sid) : null;
+}
+
+async function requireTorneoAdminForSede(req, res, torneoSedeId) {
+  const auth = await requireAdminUser(req, res, LEGACY_TORNEO_ADMIN_DEPS);
+  if (!auth) return null;
+
+  if (auth.role.rol === 'super_admin') {
+    return auth;
+  }
+
+  if (auth.role.rol === 'admin_club') {
+    const requiredSedeId = torneoSedeId != null ? Number(torneoSedeId) : null;
+    if (requiredSedeId == null || auth.role.sede_id !== requiredSedeId) {
+      res.status(403).json({ error: 'No tenés permiso para operar torneos de otra sede' });
+      return null;
+    }
+    return auth;
+  }
+
+  res.status(403).json({ error: 'No tenés permiso para esta operación' });
+  return null;
+}
+
+async function requireTorneoAdminByTorneoId(req, res, torneoId) {
+  const sedeId = await fetchTorneoSedeIdById(torneoId);
+  return requireTorneoAdminForSede(req, res, sedeId);
+}
+
 mountTorneosFinalizadosRoutes(app, { pgPool });
 mountPushRoutes(app, {
   supabaseAdmin,
@@ -1671,6 +1721,9 @@ mountPushRoutes(app, {
 app.post('/api/torneos', async (req, res) => {
   try {
     const { nombre, sede_id, nivel_torneo, tipo_torneo, fecha_inicio, fecha_fin, cantidad_equipos, es_multisede, created_by } = req.body;
+    const targetSedeId = sede_id != null && sede_id !== '' ? Number(sede_id) : null;
+    const auth = await requireTorneoAdminForSede(req, res, targetSedeId);
+    if (!auth) return;
 
     const { data, error } = await supabase
       .from('torneos')
@@ -1779,6 +1832,9 @@ app.post('/api/torneos/confirmar-inscripcion', async (req, res) => {
 app.put('/api/torneos/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const auth = await requireTorneoAdminByTorneoId(req, res, id);
+    if (!auth) return;
+
     const { nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin } = req.body;
 
     const { data, error } = await supabase
@@ -1805,6 +1861,8 @@ app.put('/api/torneos/:id', async (req, res) => {
 app.delete('/api/torneos/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const auth = await requireTorneoAdminByTorneoId(req, res, id);
+    if (!auth) return;
 
     const { error } = await supabase
       .from('torneos')
@@ -1825,6 +1883,8 @@ app.delete('/api/torneos/:id', async (req, res) => {
 app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
   try {
     const { id } = req.params;
+    const auth = await requireTorneoAdminByTorneoId(req, res, id);
+    if (!auth) return;
 
     const { data: torneo, error: errTorneo } = await supabase
       .from('torneos')
@@ -2059,6 +2119,8 @@ function calcularClasificacion(equipos, partidos) {
 app.post('/api/torneos/:id/finalizar', async (req, res) => {
   try {
     const { id } = req.params;
+    const auth = await requireTorneoAdminByTorneoId(req, res, id);
+    if (!auth) return;
 
     // Load torneo
     const { data: torneo, error: errTorneo } = await supabase
@@ -2179,16 +2241,44 @@ app.put('/api/jugadores/:id', (req, res) => legacyWriteDisabled(res, 'PUT /api/j
 // ===== JUGADORES TORNEO =====
 app.post('/api/torneos/:torneo_id/jugadores', async (req, res) => {
   try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+    }
+
     const { torneo_id } = req.params;
     const { nombre, email, user_id, numero_camiseta, es_capitan, pais } = req.body;
+
+    const bodyUserId = user_id != null && String(user_id).trim() !== ''
+      ? String(user_id).trim()
+      : null;
+    const bodyEmail = email != null && String(email).trim() !== ''
+      ? String(email).trim().toLowerCase()
+      : null;
+    const authEmail = String(user.email || '').trim().toLowerCase();
+
+    if (bodyUserId && bodyUserId !== user.id) {
+      return res.status(403).json({ error: 'No podés inscribir a otro usuario' });
+    }
+    if (bodyEmail && authEmail && bodyEmail !== authEmail) {
+      return res.status(403).json({ error: 'No podés inscribir con otro email' });
+    }
+
+    const resolvedUserId = bodyUserId ?? user.id;
+    const resolvedEmail = bodyEmail ?? authEmail ?? null;
+    const resolvedNombre = nombre
+      ?? user.user_metadata?.full_name
+      ?? user.user_metadata?.name
+      ?? resolvedEmail
+      ?? 'Jugador';
 
     const { data, error } = await supabase
       .from('jugadores_torneo')
       .insert([{
         torneo_id: parseInt(torneo_id),
-        nombre,
-        email,
-        user_id,
+        nombre: resolvedNombre,
+        email: resolvedEmail,
+        user_id: resolvedUserId,
         numero_camiseta,
         es_capitan,
         pais: pais || null,
@@ -2218,45 +2308,10 @@ app.get('/api/torneos/:torneo_id/jugadores', async (req, res) => {
   }
 });
 
-app.delete('/api/jugadores_torneo/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const { error } = await supabase
-      .from('jugadores_torneo')
-      .delete()
-      .eq('id', id);
-
-    if (error) throw error;
-    res.json({ mensaje: 'Jugador removido del torneo' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+app.delete('/api/jugadores_torneo/:id', (req, res) => legacyWriteDisabled(res, 'DELETE /api/jugadores_torneo/:id'));
 
 // ===== EQUIPOS =====
-app.post('/api/torneos/:torneo_id/equipos', async (req, res) => {
-  try {
-    const { torneo_id } = req.params;
-    const { nombre, sede_id, jugadores } = req.body;
-
-    const { data, error } = await supabase
-      .from('equipos')
-      .insert([{
-        torneo_id: parseInt(torneo_id),
-        nombre,
-        sede_id,
-        jugadores: jugadores || [],
-        puntos_totales: 0,
-      }])
-      .select();
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+app.post('/api/torneos/:torneo_id/equipos', (req, res) => legacyWriteDisabled(res, 'POST /api/torneos/:torneo_id/equipos'));
 
 app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
   try {
@@ -2284,44 +2339,9 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
   }
 });
 
-app.put('/api/equipos/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { nombre, jugadores, puntos_totales } = req.body;
+app.put('/api/equipos/:id', (req, res) => legacyWriteDisabled(res, 'PUT /api/equipos/:id'));
 
-    const { data, error } = await supabase
-      .from('equipos')
-      .update({
-        nombre,
-        jugadores,
-        puntos_totales,
-        updated_at: new Date(),
-      })
-      .eq('id', id)
-      .select();
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/equipos/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const { error } = await supabase
-      .from('equipos')
-      .delete()
-      .eq('id', id);
-
-    if (error) throw error;
-    res.json({ mensaje: 'Equipo eliminado' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+app.delete('/api/equipos/:id', (req, res) => legacyWriteDisabled(res, 'DELETE /api/equipos/:id'));
 
 // ===== PARTIDOS ABIERTOS =====
 const partidosRouter = createPartidosRouter({
@@ -2416,126 +2436,10 @@ app.get('/api/partidos/:id', async (req, res) => {
   }
 }); 
 
-app.put('/api/partidos/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { estado, resultado } = req.body;
+app.put('/api/partidos/:id', (req, res) => legacyWriteDisabled(res, 'PUT /api/partidos/:id'));
 
-    // Obtener el partido
-    const { data: partido, error: errPartido } = await supabase
-      .from('partidos')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (errPartido) throw errPartido;
-
-    // Parsear resultado
-    const res_obj = JSON.parse(resultado);
-    const set1 = res_obj.set1.split('-').map(Number);
-    const set2 = res_obj.set2.split('-').map(Number);
-    const set3 = res_obj.set3.split('-').map(Number);
-
-    // Contar sets ganados
-    let setsA = 0, setsB = 0;
-    if (set1[0] > set1[1]) setsA++; else setsB++;
-    if (set2[0] > set2[1]) setsA++; else setsB++;
-    if (set3[0] > set3[1]) setsA++; else setsB++;
-
-    const gamesA = set1[0] + set2[0] + set3[0];
-    const gamesB = set1[1] + set2[1] + set3[1];
-
-    // TODO: When estado is finalizado, set companero_habitual_id on jugadores_perfil
-    // to each player's partner from this tournament match.
-
-    // Actualizar partido
-    const { error: errUpdate } = await supabase
-      .from('partidos')
-      .update({
-        estado,
-        resultado,
-        updated_at: new Date(),
-      })
-      .eq('id', id);
-
-    if (errUpdate) throw errUpdate;
-
-    // Actualizar equipos
-    const { data: equipoA } = await supabase
-      .from('equipos')
-      .select('*')
-      .eq('id', partido.equipo_a_id)
-      .single();
-
-    const { data: equipoB } = await supabase
-      .from('equipos')
-      .select('*')
-      .eq('id', partido.equipo_b_id)
-      .single();
-
-    if (equipoA) {
-      await supabase
-        .from('equipos')
-        .update({
-          sets_ganados: (equipoA.sets_ganados || 0) + setsA,
-          sets_perdidos: (equipoA.sets_perdidos || 0) + setsB,
-          games_ganados: (equipoA.games_ganados || 0) + gamesA,
-          games_perdidos: (equipoA.games_perdidos || 0) + gamesB,
-          puntos_totales: (equipoA.puntos_totales || 0) + (setsA > setsB ? 3 : 0),
-          partidos_jugados: (equipoA.partidos_jugados || 0) + 1,
-        })
-        .eq('id', partido.equipo_a_id);
-    }
-
-    if (equipoB) {
-      await supabase
-        .from('equipos')
-        .update({
-          sets_ganados: (equipoB.sets_ganados || 0) + setsB,
-          sets_perdidos: (equipoB.sets_perdidos || 0) + setsA,
-          games_ganados: (equipoB.games_ganados || 0) + gamesB,
-          games_perdidos: (equipoB.games_perdidos || 0) + gamesA,
-          puntos_totales: (equipoB.puntos_totales || 0) + (setsB > setsA ? 3 : 0),
-          partidos_jugados: (equipoB.partidos_jugados || 0) + 1,
-        })
-        .eq('id', partido.equipo_b_id);
-    }
-
-    const { data: updatedPartido } = await supabase
-      .from('partidos')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    res.json(updatedPartido);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ===== GAMES =====
-app.post('/api/partidos/:partido_id/games', async (req, res) => {
-  try {
-    const { partido_id } = req.params;
-    const { numero_game, equipo_a_score, equipo_b_score } = req.body;
-
-    const { data, error } = await supabase
-      .from('games')
-      .insert([{
-        partido_id: parseInt(partido_id),
-        numero_game,
-        equipo_a_score,
-        equipo_b_score,
-        estado: 'finalizado',
-      }])
-      .select();
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// ===== GAMES (legacy writes deshabilitados) =====
+app.post('/api/partidos/:partido_id/games', (req, res) => legacyWriteDisabled(res, 'POST /api/partidos/:partido_id/games'));
 
 app.get('/api/partidos/:partido_id/games', async (req, res) => {
   try {
@@ -2554,28 +2458,7 @@ app.get('/api/partidos/:partido_id/games', async (req, res) => {
   }
 });
 
-app.put('/api/games/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { equipo_a_score, equipo_b_score, estado } = req.body;
-
-    const { data, error } = await supabase
-      .from('games')
-      .update({
-        equipo_a_score,
-        equipo_b_score,
-        estado,
-        updated_at: new Date(),
-      })
-      .eq('id', id)
-      .select();
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+app.put('/api/games/:id', (req, res) => legacyWriteDisabled(res, 'PUT /api/games/:id'));
 
 // ===== CONFIG PUNTOS =====
 // Required SQL migration:
