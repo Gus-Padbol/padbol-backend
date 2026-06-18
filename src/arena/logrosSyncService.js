@@ -141,7 +141,7 @@ async function sumarXPLogroDesbloqueado(supabaseAdmin, userId, slug) {
 
   if (!error) {
     const row = Array.isArray(data) ? data[0] : data;
-    console.log('[logrosSync] sumarXP RPC OK', { userId, slug, result: row });
+    console.log('[logrosSync] sumarXP RPC OK', { userId, slug, via: 'rpc' });
     return {
       xp_sumado: row?.xp_sumado ?? xp,
       xp_total: row?.xp_total ?? null,
@@ -405,7 +405,7 @@ export async function sincronizarLogrosArena(supabaseAdmin, user, {
 } = {}) {
   const userId = user?.id ?? null;
   if (!isValidUserId(userId)) {
-    console.error('[logrosSync] sincronizarLogrosArena — user.id inválido:', userId, user?.email);
+    console.error('[logrosSync] sincronizarLogrosArena — user.id inválido:', userId);
     return {
       insertados: [],
       existentes: new Map(),

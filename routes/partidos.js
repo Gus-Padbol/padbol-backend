@@ -2553,7 +2553,7 @@ export function createPartidosRouter({
         jugadorNombre,
       );
 
-      console.log(`✓ POST /api/partidos/${partidoId}/unirse — ${user.email ?? user.id}`);
+      console.log(`✓ POST /api/partidos/${partidoId}/unirse — user ${user.id}`);
       res.json({
         success: true,
         partido_completo: partidoCompleto,
@@ -2609,7 +2609,7 @@ export function createPartidosRouter({
 
       // TODO: notify all jugadores_partido via push notification when partido is cancelled
 
-      console.log(`✓ POST /api/partidos/${partidoId}/cancelar — ${user.email ?? user.id}`);
+      console.log(`✓ POST /api/partidos/${partidoId}/cancelar — user ${user.id}`);
       res.json({ success: true });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/cancelar:', err.message);
@@ -2761,7 +2761,7 @@ export function createPartidosRouter({
 
       const hostNombre = await resolveHostName(partido, supabaseAdmin);
 
-      console.log(`✓ POST /api/partidos — partido abierto ${partido.id} por ${user.email ?? user.id}`);
+      console.log(`✓ POST /api/partidos — partido abierto ${partido.id} por user ${user.id}`);
       res.status(201).json({
         ...partido,
         hora: formatHora(partido.hora),

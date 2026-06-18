@@ -360,7 +360,7 @@ function createPublicPerfilHandler(pgPool) {
       }
 
       const parsed = parsePerfilPublicoIdentifier(identifier);
-      console.log('[PERFIL-PUBLICO] identifier parsed:', parsed?.kind, parsed?.value);
+      console.log('[PERFIL-PUBLICO] identifier parsed:', { kind: parsed?.kind ?? 'unknown' });
 
       const payload = await buildPublicPerfilPayloadPg(pgPool, identifier);
       if (!payload) {

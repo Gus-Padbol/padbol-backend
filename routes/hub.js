@@ -1,4 +1,5 @@
 import express from 'express';
+import { safeQueryLog } from '../lib/safeLog.js';
 
 const CARD_KEYS = ['reservar', 'buscar_partido', 'torneos', 'rankings', 'armar_partido'];
 
@@ -92,7 +93,7 @@ export function createHubRouter({ supabaseAdmin }) {
     try {
       console.log('GET /api/hub/imagenes hit', {
         deporte: req.query.deporte,
-        query: req.query,
+        query: safeQueryLog(req.query),
       });
 
       const deporte = String(req.query.deporte ?? 'padbol').trim().toLowerCase();
@@ -114,7 +115,6 @@ export function createHubRouter({ supabaseAdmin }) {
         console.log('GET /api/hub/imagenes DB result:', {
           deporte,
           rowCount: rows.length,
-          rows,
         });
       } catch (dbError) {
         console.warn('⚠️ hub_deporte_config no disponible, usando config estática:', dbError.message);
@@ -127,7 +127,7 @@ export function createHubRouter({ supabaseAdmin }) {
       }
 
       const payload = buildResponseFromRows(rows, deporte);
-      console.log('GET /api/hub/imagenes response payload:', payload);
+      console.log('GET /api/hub/imagenes response', { deporte, cardCount: Object.keys(payload ?? {}).length });
       res.json(payload);
     } catch (err) {
       console.error('❌ Error GET /api/hub/imagenes:', err.message);

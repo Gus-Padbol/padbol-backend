@@ -108,7 +108,7 @@ export function createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }) 
 
       if (error) throw error;
 
-      console.log(`✓ POST /api/membresias/suscribir — ${user.email ?? user.id} → ${planId}`);
+      console.log(`✓ POST /api/membresias/suscribir — user ${user.id} → plan ${planId}`);
       res.json({
         success: true,
         plan_id: data.plan_id,

@@ -293,7 +293,7 @@ export function createClasesRouter({ supabaseAdmin, getAuthenticatedUser }) {
       const newCount = (count ?? 0) + 1;
       const claseMapped = mapClaseRow(clase, { reservasCount: newCount });
 
-      console.log(`✓ POST /api/clases/${claseId}/reservar — ${user.email ?? user.id}`);
+      console.log(`✓ POST /api/clases/${claseId}/reservar — user ${user.id}`);
       res.status(201).json({
         success: true,
         reserva_id: reserva.id,

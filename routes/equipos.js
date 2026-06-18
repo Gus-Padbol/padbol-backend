@@ -1,4 +1,5 @@
 import express from 'express';
+import { maskEmail } from '../lib/safeLog.js';
 
 const DEPORTE_LIMITS = {
   padbol: { min: 2, max: 4, label: 'Padbol' },
@@ -41,10 +42,9 @@ async function sendTeamInvitationNotifications({
   inviteeEmail,
 }) {
   const perfil = await resolvePlayerProfile({ email: inviteeEmail }, supabaseAdmin);
-  const deepLink = `padbolmatch://invitacion-equipo/${equipo.id}`;
 
   console.log(
-    `[EMAIL] Invitación a equipo "${equipo.nombre}" (${equipo.deporte}) → ${inviteeEmail}. Link: ${deepLink}`,
+    `[EMAIL] Invitación equipo id=${equipo.id} (${equipo.deporte}) → ${maskEmail(inviteeEmail)}`,
   );
 
   if (perfil?.expo_push_token) {
