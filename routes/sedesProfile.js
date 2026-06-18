@@ -8,6 +8,7 @@ import {
   resolveSedeHeroFotoUrl,
 } from '../utils/sedeHero.js';
 import { fetchSedeUpcomingPartidos } from './partidos.js';
+import { SEDE_PERFIL_SELECT, pickPublicSedeRow } from '../utils/sedePublicSelect.js';
 
 function parseSedeId(raw) {
   const sedeId = parseInt(raw, 10);
@@ -182,7 +183,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
 
       const { data: sede, error } = await supabase
         .from('sedes')
-        .select('*')
+        .select(SEDE_PERFIL_SELECT)
         .eq('id', sedeId)
         .maybeSingle();
 
@@ -208,7 +209,7 @@ export function mountSedesProfileRoutes(app, { supabase, supabaseAdmin, getAuthe
       const historia = sedeEnriched.historia ?? sedeEnriched.descripcion_larga ?? null;
 
       res.json({
-        sede: sedeEnriched,
+        sede: pickPublicSedeRow(sedeEnriched),
         hero_foto_url: sedeEnriched.hero_foto_url ?? null,
         foto_portada: sedeEnriched.foto_portada ?? null,
         fotos_destacadas: sedeEnriched.fotos_destacadas ?? [],

@@ -56,7 +56,16 @@ import { enrichSedeWithHeroPhoto } from './utils/sedeHero.js';
 import { SEDE_APP_SELECT } from './utils/sedePublicSelect.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { ensureReservaPendienteParaMpPg, normalizeCrearPreferenciaReservaInput } from './routes/reservaPendienteMp.js';
-import { assertReservaOwnerOrAdmin } from './lib/reservaAccess.js';
+import { assertCancelReservaOwnerCompat, assertReservaOwnerOrAdmin } from './lib/reservaAccess.js';
+import {
+  applyReservasListScopeToQuery,
+  isAdminClubOrSuper,
+  requireAdminUser,
+  requireAuthenticatedUser,
+  resolveAuthRoleForUser,
+  resolveIngresosListScope,
+  resolveReservasListScope,
+} from './lib/authAccess.js';
 import { quoteReservaPrice, assertClientPrecioMatchesQuote } from './lib/pricing/quoteReservaPrice.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
@@ -1330,14 +1339,33 @@ mountReservaQrRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 
-// GET reservas
+// GET reservas — JWT; super_admin todas, admin_club su sede, jugador solo las propias
 app.get('/api/reservas', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const user = await requireAuthenticatedUser(req, res, getAuthenticatedUser);
+    if (!user) return;
+
+    const role = await resolveAuthRoleForUser(user, {
+      fetchUserRoleRowForAuthUser,
+      legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+    });
+
+    const ownerFilters = buildUserEmailOrIdFilters(user, { userIdFields: ['user_id'] });
+    const ownerFilter = ownerFilters.length > 0 ? ownerFilters.join(',') : null;
+    const scope = await resolveReservasListScope(role, ownerFilter, supabaseAdmin);
+
+    if (scope.kind === 'forbidden') {
+      return res.status(403).json({ error: 'No tenés permiso para consultar reservas' });
+    }
+
+    let query = supabaseAdmin
       .from('reservas')
       .select('*')
       .order('created_at', { ascending: false });
 
+    query = applyReservasListScopeToQuery(query, scope);
+
+    const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
@@ -1373,18 +1401,34 @@ app.get('/api/reservas/mis-reservas', async (req, res) => {
   }
 });
 
-// GET ingresos
+// GET ingresos — JWT admin (super_admin global, admin_club su sede)
 app.get('/api/ingresos', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const auth = await requireAdminUser(req, res, {
+      getAuthenticatedUser,
+      fetchUserRoleRowForAuthUser,
+      legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+    });
+    if (!auth) return;
+
+    const scope = await resolveIngresosListScope(auth.role, supabaseAdmin);
+    if (scope.kind === 'forbidden') {
+      return res.status(403).json({ error: 'No tenés permiso para esta operación' });
+    }
+
+    let query = supabaseAdmin
       .from('reservas')
       .select('precio')
       .eq('estado', 'confirmada');
 
+    query = applyReservasListScopeToQuery(query, scope);
+
+    const { data, error } = await query;
+
     if (error) throw error;
 
-    const total = data.reduce((sum, r) => sum + (r.precio || 0), 0);
-    res.json({ total, reservas: data.length });
+    const total = (data ?? []).reduce((sum, r) => sum + (r.precio || 0), 0);
+    res.json({ total, reservas: data?.length ?? 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2593,24 +2637,35 @@ app.put('/api/config/puntos', async (req, res) => {
   }
 });
 
-// POST /api/cancelar-reserva — Cancellation with optional credit
+// POST /api/cancelar-reserva — Cancellation with optional credit (JWT + dueño o admin)
 app.post('/api/cancelar-reserva', async (req, res) => {
   try {
+    const user = await requireAuthenticatedUser(req, res, getAuthenticatedUser);
+    if (!user) return;
+
     const { reservaId, email } = req.body;
-    if (!reservaId || !email) {
+    if (!reservaId) {
       return res.status(400).json({ error: 'Faltan campos: reservaId, email' });
     }
 
-    // Fetch the reservation and verify ownership
-    const { data: reserva, error: fetchErr } = await supabase
+    const { data: reserva, error: fetchErr } = await supabaseAdmin
       .from('reservas')
       .select('*')
       .eq('id', reservaId)
-      .eq('email', email)
       .maybeSingle();
 
     if (fetchErr) throw fetchErr;
-    if (!reserva) return res.status(404).json({ error: 'Reserva no encontrada o no pertenece a este usuario' });
+    if (!reserva) {
+      return res.status(404).json({ error: 'Reserva no encontrada o no pertenece a este usuario' });
+    }
+
+    await assertCancelReservaOwnerCompat(user, reserva, email, {
+      fetchUserRoleRowForAuthUser,
+      legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+      supabaseAdmin,
+      pgPool,
+    });
+
     if (reserva.estado === 'cancelada') return res.status(409).json({ error: 'La reserva ya está cancelada' });
 
     // Check if reservation is more than 24h away (Argentina UTC-3)
@@ -2620,8 +2675,12 @@ app.post('/api/cancelar-reserva', async (req, res) => {
     const horasHasta = (reservaDt - nowAR) / (1000 * 60 * 60);
     const eligibleForCredit = horasHasta > 24;
 
+    const reservaEmail = reserva.email
+      ? String(reserva.email).trim().toLowerCase()
+      : String(user.email || '').trim().toLowerCase();
+
     // Mark as cancelled
-    const { error: updateErr } = await supabase
+    const { error: updateErr } = await supabaseAdmin
       .from('reservas')
       .update({ estado: 'cancelada' })
       .eq('id', reservaId);
@@ -2631,8 +2690,8 @@ app.post('/api/cancelar-reserva', async (req, res) => {
     if (pgPool) {
       try {
         let userIdReputacion = reserva.user_id ? String(reserva.user_id) : null;
-        if (!userIdReputacion) {
-          userIdReputacion = await resolveUserIdByEmailPg(pgPool, email);
+        if (!userIdReputacion && reservaEmail) {
+          userIdReputacion = await resolveUserIdByEmailPg(pgPool, reservaEmail);
         }
         if (userIdReputacion) {
           reputacionCancel = await procesarReputacionTrasCancelacion(pgPool, {
@@ -2655,9 +2714,9 @@ app.post('/api/cancelar-reserva', async (req, res) => {
 
     // Credit if eligible
     let credito = null;
-    if (eligibleForCredit && reserva.precio > 0) {
+    if (eligibleForCredit && reserva.precio > 0 && reservaEmail) {
       // Look up sede_id by name
-      const { data: sedeRow } = await supabase
+      const { data: sedeRow } = await supabaseAdmin
         .from('sedes')
         .select('id')
         .eq('nombre', reserva.sede)
@@ -2666,10 +2725,10 @@ app.post('/api/cancelar-reserva', async (req, res) => {
       const venceAt = new Date();
       venceAt.setDate(venceAt.getDate() + 30);
 
-      const { data: creditData, error: creditErr } = await supabase
+      const { data: creditData, error: creditErr } = await supabaseAdmin
         .from('creditos')
         .insert([{
-          email,
+          email: reservaEmail,
           monto: reserva.precio,
           sede_id: sedeRow?.id || null,
           vence_at: venceAt.toISOString(),
@@ -2713,21 +2772,38 @@ Si necesitás ayuda, escribinos por WhatsApp.
       reputacion: reputacionCancel,
     });
   } catch (err) {
+    const st = err.status || 500;
+    if (st >= 400 && st < 500) {
+      return res.status(st).json({ error: err.message });
+    }
     console.error('❌ Error POST /api/cancelar-reserva:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/creditos/:email — active (unused, non-expired) credit balance
+// GET /api/creditos/:email — JWT; propio usuario o admin
 app.get('/api/creditos/:email', async (req, res) => {
   try {
-    const email = decodeURIComponent(req.params.email);
-    const now   = new Date().toISOString();
+    const user = await requireAuthenticatedUser(req, res, getAuthenticatedUser);
+    if (!user) return;
 
-    const { data, error } = await supabase
+    const emailParam = decodeURIComponent(req.params.email).trim().toLowerCase();
+    const userEmail = String(user.email || '').trim().toLowerCase();
+    const role = await resolveAuthRoleForUser(user, {
+      fetchUserRoleRowForAuthUser,
+      legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+    });
+
+    if (!isAdminClubOrSuper(role) && emailParam !== userEmail) {
+      return res.status(403).json({ error: 'No tenés permiso para consultar créditos de otro usuario' });
+    }
+
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabaseAdmin
       .from('creditos')
       .select('id, monto, sede_id, created_at, vence_at')
-      .eq('email', email)
+      .eq('email', emailParam)
       .eq('usado', false)
       .gt('vence_at', now)
       .order('created_at', { ascending: false })
@@ -2736,7 +2812,7 @@ app.get('/api/creditos/:email', async (req, res) => {
     if (error) throw error;
 
     const total = (data || []).reduce((sum, c) => sum + Number(c.monto), 0);
-    console.log(`✓ GET creditos ${email} — total: ${total} (${(data || []).length} registros)`);
+    console.log(`✓ GET creditos ${emailParam} — total: ${total} (${(data || []).length} registros)`);
     res.json({ total, creditos: data || [] });
   } catch (err) {
     console.error('❌ Error GET /api/creditos:', err.message);

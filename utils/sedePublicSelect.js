@@ -1,5 +1,5 @@
-/** Columnas de sedes expuestas en GET /api/sedes y GET /api/sedes/:id (incluye surge_activo). */
-export const SEDE_APP_SELECT = [
+/** Columnas públicas de sedes (sin tokens MP/Stripe ni secretos). */
+export const SEDE_PUBLIC_COLUMNS = [
   'id',
   'nombre',
   'direccion',
@@ -28,6 +28,7 @@ export const SEDE_APP_SELECT = [
   'fotos_destacadas',
   'logo_url',
   'descripcion',
+  'descripcion_larga',
   'slogan',
   'historia',
   'amenities',
@@ -45,4 +46,25 @@ export const SEDE_APP_SELECT = [
   'surge_activo',
   'surge_precio_minimo',
   'surge_precio_maximo',
-].join(', ');
+];
+
+/** Columnas de sedes expuestas en GET /api/sedes y GET /api/sedes/:id (incluye surge_activo). */
+export const SEDE_APP_SELECT = SEDE_PUBLIC_COLUMNS.filter(
+  (col) => col !== 'descripcion_larga',
+).join(', ');
+
+export const SEDE_PERFIL_SELECT = SEDE_PUBLIC_COLUMNS.join(', ');
+
+export function pickPublicSedeRow(row) {
+  if (!row || typeof row !== 'object') return row ?? null;
+  const out = {};
+  for (const key of SEDE_PUBLIC_COLUMNS) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) {
+      out[key] = row[key];
+    }
+  }
+  if (row.hero_foto_url !== undefined) {
+    out.hero_foto_url = row.hero_foto_url;
+  }
+  return out;
+}
