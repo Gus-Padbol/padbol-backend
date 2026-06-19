@@ -1,3 +1,8 @@
+import {
+  mapRankingsLeaderboardPublicRow,
+  RANKINGS_LEADERBOARD_PERFIL_SELECT,
+} from '../lib/rankingsLeaderboardPublic.js';
+
 const VALID_NIVELES = new Set(['club', 'nacional', 'fipa']);
 const VALID_DEPORTES = new Set(['padbol', 'padel', 'pickleball', 'tenis', 'futbol']);
 
@@ -10,20 +15,6 @@ function isMissingRankingsLeaderboardTable(error) {
     || message.includes('does not exist')
     || message.includes('could not find the table')
   );
-}
-
-function formatDisplayName(perfil) {
-  const apodo = String(perfil?.apodo ?? '').trim();
-  if (apodo) return apodo;
-  const nombre = String(perfil?.nombre ?? '').trim();
-  if (nombre) return nombre;
-  return 'Jugador';
-}
-
-function formatUsername(perfil) {
-  const raw = perfil?.username ?? perfil?.alias ?? '';
-  const username = String(raw).trim().replace(/^@+/, '');
-  return username || null;
 }
 
 export function mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
@@ -68,7 +59,7 @@ export function mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenti
       const userIds = [...new Set(rows.map((row) => row.user_id).filter(Boolean))];
       const { data: perfiles, error: perfilErr } = await supabaseAdmin
         .from('jugadores_perfil')
-        .select('user_id, nombre, apodo, username, alias, foto_url, email')
+        .select(RANKINGS_LEADERBOARD_PERFIL_SELECT)
         .in('user_id', userIds);
 
       if (perfilErr) throw perfilErr;
@@ -77,18 +68,14 @@ export function mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenti
         (perfiles ?? []).map((perfil) => [perfil.user_id, perfil]),
       );
 
-      const rankings = rows.map((row, index) => {
-        const perfil = perfilByUserId[row.user_id] ?? {};
-        return {
-          posicion: index + 1,
-          user_id: row.user_id,
-          email: perfil.email ?? null,
-          display_name: formatDisplayName(perfil),
-          username: formatUsername(perfil),
-          foto_url: perfil.foto_url ?? null,
-          puntos: Number(row.puntos) || 0,
-        };
-      });
+      const rankings = rows.map((row, index) =>
+        mapRankingsLeaderboardPublicRow(
+          row,
+          perfilByUserId[row.user_id] ?? {},
+          index,
+          currentUserId,
+        ),
+      );
 
       res.json({ rankings, current_user_id: currentUserId });
     } catch (err) {
