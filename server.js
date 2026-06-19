@@ -99,6 +99,7 @@ import {
 } from './lib/dto/reservaDto.js';
 import {
   chiviRateLimit,
+  aiRateLimit,
   configureRateLimitTrustProxy,
   isRateLimitDisabled,
   paymentsRateLimit,
@@ -118,6 +119,7 @@ import {
 } from './utils/push.js';
 import { createXpRouter } from './src/routes/xp.js';
 import { createChiviRouter } from './src/routes/chivi.js';
+import { createAiRouter } from './src/routes/ai.js';
 import { createArenaRouter } from './src/routes/arena.js';
 import { createRangosRouter } from './src/routes/rangos.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
@@ -2387,6 +2389,7 @@ app.get('/api/partidos-abiertos', (req, res, next) => {
 app.use('/api/partidos-abiertos', createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/xp', createXpRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/chivi', chiviRateLimit, createChiviRouter({ getAuthenticatedUser }));
+app.use('/api/ai', aiRateLimit, createAiRouter({ getAuthenticatedUser, pgPool }));
 app.use('/api/arena', createArenaRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/rangos', createRangosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
