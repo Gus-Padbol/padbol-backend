@@ -1,3 +1,5 @@
+import { mapResenaPublicRow } from '../lib/resenasPublic.js';
+
 const RESENAS_TABLE = 'resenas';
 const LIST_LIMIT = 50;
 
@@ -399,7 +401,7 @@ export function mountResenasRoutes(app, {
       );
 
       const stats = await fetchResenasStatsPg(pgPool, schema, sedeId);
-      const resenas = rows.map((row) => mapResenaRow(row, schema));
+      const resenas = rows.map((row) => mapResenaPublicRow(mapResenaRow(row, schema)));
 
       res.json({
         resenas,

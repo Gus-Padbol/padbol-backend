@@ -12,6 +12,7 @@ import {
   applyHistorialPuntoSnapshot,
 } from '../utils/scoreboardLogic.js';
 import { sendHttpError } from '../lib/httpErrors.js';
+import { mapScoreboardJugadoresTempPublic } from '../lib/scoreboardPublic.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -427,7 +428,9 @@ export function mountScoreboardRoutes(app, {
         return res.json({ activo: false });
       }
 
-      const jugadores = await fetchJugadoresTempByPartido(supabaseAdmin, partido.id);
+      const jugadores = mapScoreboardJugadoresTempPublic(
+        await fetchJugadoresTempByPartido(supabaseAdmin, partido.id),
+      );
 
       return res.json({
         partido_id: partido.id,
@@ -505,7 +508,9 @@ export function mountScoreboardRoutes(app, {
         return res.status(400).json({ error: 'partidoId inválido' });
       }
 
-      const jugadores = await fetchJugadoresTempByPartido(supabaseAdmin, partidoId);
+      const jugadores = mapScoreboardJugadoresTempPublic(
+        await fetchJugadoresTempByPartido(supabaseAdmin, partidoId),
+      );
       return res.json({ jugadores });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/jugadores-temp/:partidoId:', err.message);
