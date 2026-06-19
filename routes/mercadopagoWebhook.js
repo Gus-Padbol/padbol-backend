@@ -9,7 +9,7 @@ const ALLOWED_PRE_CONFIRM_ESTADOS = new Set(['pendiente', 'prereserva']);
 
 const RESERVA_CONFIRM_SELECT = `
   id, estado, pago_estado, sede, fecha, hora, cancha, whatsapp, telefono,
-  precio, precio_esperado, monto_pagado, mp_payment_id, user_id
+  precio, precio_esperado, moneda, monto_pagado, mp_payment_id, user_id
 `;
 
 function jsonError(res, status, message, extra = {}) {
@@ -130,6 +130,31 @@ export async function fetchMercadoPagoPaymentById(paymentId, pgPool, defaultToke
 
 function normalizeEstado(value) {
   return String(value ?? '').trim().toLowerCase();
+}
+
+export function normalizeMpCurrency(moneda) {
+  const normalized = String(moneda ?? '').trim().toLowerCase();
+  return normalized || null;
+}
+
+export function assertMpCurrencyMatchesReserva(paymentCurrencyId, reservaMoneda) {
+  const paymentCurrency = normalizeMpCurrency(paymentCurrencyId);
+  if (!paymentCurrency) {
+    const err = new Error('Pago sin moneda (currency_id)');
+    err.status = 400;
+    err.code = 'MP_CURRENCY_MISSING';
+    throw err;
+  }
+
+  const reservaCurrency = normalizeMpCurrency(reservaMoneda) || 'ars';
+  if (paymentCurrency !== reservaCurrency) {
+    const err = new Error(
+      `Moneda del pago (${paymentCurrencyId}) no coincide con la reserva (${reservaMoneda ?? 'ARS'})`,
+    );
+    err.status = 400;
+    err.code = 'MP_CURRENCY_MISMATCH';
+    throw err;
+  }
 }
 
 export function assertPaymentAmountCoversExpected(montoPagado, precioEsperado, tolerance = PAYMENT_AMOUNT_TOLERANCE) {
@@ -263,6 +288,7 @@ export async function validateVerifiedPaymentForReserva(pgPool, payment) {
     throw err;
   }
 
+  assertMpCurrencyMatchesReserva(payment.currency_id, reserva.moneda);
   assertPaymentAmountCoversExpected(montoPagado, reserva.precio_esperado);
   await assertMpPaymentIdNotUsedOnOtherReservaPg(pgPool, mpPaymentId, reservaId);
 
@@ -327,7 +353,7 @@ export async function confirmReservaAfterVerifiedPayment(pgPool, {
        WHERE id = $1
          AND lower(trim(estado)) IN ('pendiente', 'prereserva')
        RETURNING id, estado, pago_estado, sede, fecha, hora, cancha, whatsapp, telefono,
-                 precio, precio_esperado, monto_pagado, user_id`,
+                 precio, precio_esperado, moneda, monto_pagado, user_id`,
       [rid, Number.isFinite(monto) ? monto : null],
     ));
   }
