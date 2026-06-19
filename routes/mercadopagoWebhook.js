@@ -1,9 +1,14 @@
 import { MercadoPagoConfig, Payment } from 'mercadopago';
 import { mapPagoExitosoPollDto } from '../lib/dto/reservaDto.js';
-import { safeQueryLog } from '../lib/safeLog.js';
+import { resolveHttpStatus } from '../lib/httpErrors.js';
+import { safeQueryLog, summarizeError } from '../lib/safeLog.js';
 
 /** Tolerancia mínima ARS entre monto MP y precio_esperado (redondeos MP). */
 export const PAYMENT_AMOUNT_TOLERANCE = 1;
+
+export const MP_WEBHOOK_PUBLIC_ERROR = 'No se pudo procesar el webhook de Mercado Pago';
+export const MP_WEBHOOK_INVALID_PAYLOAD_ERROR = 'Solicitud de webhook inválida';
+export const MP_WEBHOOK_VERIFY_UNAVAILABLE_ERROR = 'No se pudo verificar el pago en este momento';
 
 const ALLOWED_PRE_CONFIRM_ESTADOS = new Set(['pendiente', 'prereserva']);
 
@@ -15,6 +20,36 @@ const RESERVA_CONFIRM_SELECT = `
 function jsonError(res, status, message, extra = {}) {
   if (res.headersSent) return;
   return res.status(status).json({ ok: false, error: message, ...extra });
+}
+
+export function buildMercadoPagoWebhookClientError(err, { invalidPayload = false } = {}) {
+  if (invalidPayload) {
+    return {
+      status: 400,
+      body: { ok: false, error: MP_WEBHOOK_INVALID_PAYLOAD_ERROR },
+    };
+  }
+
+  const status = resolveHttpStatus(err, 500);
+  let error = MP_WEBHOOK_PUBLIC_ERROR;
+
+  if (status === 503) {
+    error = MP_WEBHOOK_VERIFY_UNAVAILABLE_ERROR;
+  }
+
+  return {
+    status,
+    body: { ok: false, error },
+  };
+}
+
+function logMercadoPagoWebhookError(err, extra = {}) {
+  console.error('❌ MP webhook:', {
+    ...summarizeError(err),
+    code: err?.code ?? undefined,
+    status: err?.status ?? undefined,
+    ...extra,
+  });
 }
 
 export function parseReservaIdFromExternalReference(raw) {
@@ -547,7 +582,12 @@ async function handlePagoExitosoReadOnly(req, res, pgPool, deps) {
 async function handleMercadoPagoWebhook(req, res, pgPool, deps) {
   try {
     if (!pgPool) {
-      return jsonError(res, 503, 'DATABASE_URL no configurada — pgPool no disponible');
+      const err = new Error('pgPool no disponible');
+      err.status = 503;
+      err.code = 'MP_WEBHOOK_DB_UNAVAILABLE';
+      logMercadoPagoWebhookError(err);
+      const { status, body } = buildMercadoPagoWebhookClientError(err);
+      return res.status(status).json(body);
     }
 
     const paymentId = extractMercadoPagoPaymentId(req)
@@ -555,17 +595,16 @@ async function handleMercadoPagoWebhook(req, res, pgPool, deps) {
       ?? (req.query?.collection_id ? String(req.query.collection_id).trim() : null);
 
     if (!paymentId) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Falta payment_id (topic=payment&id=…, payment_id o collection_id)',
-      });
+      const { status, body } = buildMercadoPagoWebhookClientError(null, { invalidPayload: true });
+      return res.status(status).json(body);
     }
 
     const result = await procesarPagoMercadoPago(pgPool, paymentId, deps);
     return res.status(200).json(result);
   } catch (err) {
-    console.error('❌ MP webhook:', err.message);
-    return jsonError(res, err.status || 500, err.message || 'Error al procesar pago');
+    logMercadoPagoWebhookError(err);
+    const { status, body } = buildMercadoPagoWebhookClientError(err);
+    return res.status(status).json(body);
   }
 }
 
