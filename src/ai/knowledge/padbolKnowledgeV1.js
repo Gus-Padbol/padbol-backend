@@ -1,4 +1,4 @@
-export const PADBOL_KNOWLEDGE_VERSION = '1.0.0';
+export const PADBOL_KNOWLEDGE_VERSION = '1.1.0';
 
 export const PADBOL_OFFICIAL_LINKS = {
   web: 'https://www.padbol.com',
@@ -14,12 +14,11 @@ Combina elementos técnicos y tácticos inspirados en fútbol, tenis, pádel, v�
 Siempre escribir "Padbol" con P mayúscula.`,
 
   history: `HISTORIA Y ORIGEN
-La idea del Padbol surge en 2007-2008 en La Plata, provincia de Buenos Aires, Argentina.
-El deporte fue creado y registrado por Carlos Gustavo Miguens en 2008.
-La primera cancha oficial se instaló en 2010 en La Plata.
-Entre los primeros impulsores externos destacó Salvador Castiglione.
+Padbol surge en 2008 en La Plata, Argentina.
+Creador: Gustavo Miguens.
+Tras una etapa inicial de prueba, las primeras pistas oficiales se desarrollaron en La Plata.
 El crecimiento siguió un modelo de representantes locales, campeonatos nacionales, copas continentales y mundiales.
-El proyecto cuenta con más de 17 años de desarrollo y presencia validada internacionalmente.`,
+El proyecto cuenta con más de 17 años de desarrollo.`,
 
   essence: `ESENCIA DEL DEPORTE
 Deporte dinámico, inclusivo y de bajo contacto físico.
@@ -32,17 +31,16 @@ Modalidad oficial: 2 vs 2 (cuatro jugadores en total).
 No existe modalidad oficial 1 vs 1 ni 3 vs 3 en competencia estándar.`,
 
   rules: `REGLAS BÁSICAS
-Cada equipo dispone de hasta 3 toques para devolver la pelota al campo rival.
-Un mismo jugador puede tocar dos veces seguidas, sin superar el máximo de toques del equipo.
-Las paredes laterales y fondo pueden usarse de forma estratégica según reglamento oficial.
+El equipo puede usar hasta tres toques, respetando las reglas oficiales de alternancia y juego.
+Las paredes y vidrios reglamentarios son parte activa del juego.
 Si la pelota sale del campo de juego, el punto es para el rival.
 Los partidos oficiales pueden contar con árbitros certificados por FIPA.`,
 
   court: `CANCHA Y MEDIDAS
 Superficie de juego: 10 m x 6 m (60 m²).
-Altura total del cerramiento: 3,5 m (2,5 m de vidrio + 1 m de reja superior).
-Paredes de vidrio en laterales y fondos; reja en la parte superior.
-Área central roja (aprox. 2 m de ancho) y áreas laterales azules en el diseño oficial.
+Cancha cerrada con paredes/vidrios reglamentarios y red central baja que divide el campo.
+La red central es baja (no confundir con el cerramiento superior de la cancha).
+Marcado funcional con zonas de juego según reglamento oficial.
 Canchas oficiales están protegidas por propiedad intelectual; no se pueden fabricar sin autorización.`,
 
   scoring: `SISTEMA DE PUNTOS
@@ -52,7 +50,7 @@ Si el usuario pide detalle reglamentario fino (tie-break, sets exactos), indicar
 
   serve: `SAQUE
 El saque inicia cada punto según reglamento oficial FIPA.
-Debe realizarse desde la zona indicada y respetando límites de cancha y altura.
+Debe realizarse desde la zona indicada y respetando límites de cancha.
 Para reglas de saque en torneo específico, derivar al reglamento publicado por el organizador o FIPA.`,
 
   ball: `PELOTA
@@ -60,12 +58,12 @@ Se utiliza pelota oficial de Padbol, no pelota de fútbol convencional.
 La pelota oficial está diseñada para el ritmo, rebote y control del deporte.`,
 
   categories: `CATEGORÍAS EN PADBOL MATCH
-Categorías masculinas habituales en la plataforma: Principiante, 5ta, 4ta, 3ra, 2da, 1ra, Elite.
-Las categorías pueden variar según sede, torneo o país.`,
+Categorías o niveles de competencia que pueden variar según sede, torneo o país.
+Sirven para emparejar nivel en torneos y partidos abiertos cuando la sede los ofrece.`,
 
   tournaments: `TORNEOS
 Existen torneos locales, nacionales e internacionales bajo calendarios oficiales y sedes asociadas.
-Padbol Match permite consultar e inscribirse en torneos disponibles según sede y país.
+Padbol Match puede mostrar torneos disponibles según sede, país y funciones activas en la app.
 No confirmar fechas, cupos ni sedes específicas sin datos reales del sistema.`,
 
   worldCup: `COPA MUNDIAL
@@ -84,7 +82,7 @@ Licenciatario máster: representante oficial de un país ante FIPA.
 Licenciatario junior: opera instalaciones específicas bajo el marco oficial.`,
 
   international: `CRECIMIENTO INTERNACIONAL
-Padbol tiene presencia en más de 30 países, entre ellos Argentina, Brasil, México, Uruguay, Paraguay, Bolivia, Perú, Ecuador, España, Francia, Italia, Alemania, Austria, Portugal, Polonia, Rumania, Holanda, Hungría, Moldavia, Ucrania, Qatar, Emiratos Árabes Unidos, Bahréin, Kuwait, Israel, Irán, Egipto, Sudáfrica y otros.
+Padbol tiene presencia internacional y una comunidad en crecimiento en distintos países.
 La expansión combina licencias, Padbol Point, academias, torneos y tecnología Padbol Match.`,
 
   benefits: `BENEFICIOS DEPORTIVOS
@@ -93,23 +91,20 @@ Bajo riesgo de lesión comparado con deportes de contacto.
 Útil como complemento de entrenamiento para futbolistas (control, definición, coordinación).`,
 
   differences: `DIFERENCIAS CON OTROS DEPORTES
-Pádel: Padbol no es pádel; cancha, pelota, reglas y cultura son distintas. En Padbol las paredes y el ritmo tienen rol propio.
+Pádel: Padbol no es pádel; cancha, pelota, reglas y cultura son distintas.
 Fútbol / futsal: Padbol se juega 2 vs 2 en cancha cerrada con paredes y pelota oficial; no es fútbol reducido.
-Squash: comparte idea de paredes, pero Padbol es 2 vs 2 con reglas y cancha propias.
-Vóley: no hay red central ni remates por encima de red; el juego es con pelota al suelo/pared según reglamento Padbol.`,
+Squash: comparte idea de paredes, pero Padbol es 2 vs 2 con red central baja y reglas propias.
+Vóley: a diferencia del vóley, la red de Padbol es baja y el juego integra paredes, pelota oficial y técnica de fútbol.`,
 
   gettingStarted: `CÓMO EMPEZAR A JUGAR
 Buscar una sede o club con canchas oficiales en Padbol Match o en www.padbol.com.
 Reservar cancha, sumarse a partidos abiertos o inscribirse en torneos según nivel.
-No se necesita experiencia previa; muchas sedes reciben principiantes.`,
+No se necesita experiencia previa; suele haber niveles de entrada accesibles para principiantes.`,
 
   padbolMatch: `CÓMO USAR PADBOL MATCH
-Padbol Match es la plataforma tecnológica para reservar canchas, buscar partidos, ver rankings, inscribirse en torneos y gestionar clubes.
+Padbol Match permite acceder a funciones como reservas, torneos, rankings y sedes según disponibilidad de cada club, país o versión de la app.
 Deportes disponibles en la app: Padbol, Pádel, Pickleball y Tenis (según sede).
-Reservas: elegir sede, deporte, horario y completar el flujo de reserva en la app.
-Rankings: consultar posiciones según competencias y sedes habilitadas.
-Torneos: ver calendario e inscripciones cuando estén publicados.
-Clubes/sedes: listado según ubicación y deportes disponibles.
+Los horarios y precios los publica cada sede en la app (no inventar montos).
 Soporte de la app: ${PADBOL_OFFICIAL_LINKS.appSupport}`,
 
   faq: `FAQ OFICIAL
@@ -117,7 +112,7 @@ Soporte de la app: ${PADBOL_OFFICIAL_LINKS.appSupport}`,
 - ¿Se juega 1 vs 1? No en modalidad oficial; es 2 vs 2.
 - ¿Qué pelota se usa? Pelota oficial de Padbol.
 - ¿Necesito saber jugar al fútbol? No es requisito.
-- ¿Hay ranking? Sí, rankings nacionales e internacionales según país y competición.
+- ¿Hay ranking? Puede haber rankings según circuito, país, sede o funciones activas en la app.
 - ¿Cómo abro una sede o compro cancha? Formulario oficial en ${PADBOL_OFFICIAL_LINKS.collaborate}
 - ¿Propiedad intelectual? Marca, diseño de cancha y materiales oficiales están protegidos.
 - Padbol Point: modelo de centro especializado (canchas, academia, torneos, tecnología).
@@ -172,3 +167,7 @@ export function formatPadbolKnowledgeForPrompt() {
 export function getPadbolKnowledgeSectionKeys() {
   return [...SECTION_ORDER];
 }
+
+// Compat alias for tests/imports expecting flat knowledge string
+export const PADBOL_KNOWLEDGE_V1_ID = 'padbol-knowledge-v1.1';
+export const PADBOL_KNOWLEDGE_V1 = formatPadbolKnowledgeForPrompt();
