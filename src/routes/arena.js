@@ -1,4 +1,5 @@
 import express from 'express';
+import { resolveArenaLogrosTargetUserId } from '../../lib/arenaLogrosAuth.js';
 import { verificarLogrosArena } from '../arena/arenaLogrosService.js';
 import { actualizarRango } from '../rangos/rangosService.js';
 
@@ -12,7 +13,10 @@ export function createArenaRouter({ supabaseAdmin, getAuthenticatedUser }) {
         return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
       }
 
-      const targetUserId = req.body?.user_id ?? user.id;
+      const targetUserId = resolveArenaLogrosTargetUserId(user, req.body);
+      if (!targetUserId) {
+        return res.status(401).json({ error: 'No autorizado' });
+      }
       const context = req.body?.context ?? {};
 
       const desbloqueados = await verificarLogrosArena(supabaseAdmin, targetUserId, context);
