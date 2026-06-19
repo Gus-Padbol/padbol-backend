@@ -11,6 +11,7 @@ import {
 } from '../utils/reservasTime.js';
 import { reservaHoraInicioFromRow } from '../utils/reservasColumns.js';
 import { toPartidoPublicDto } from '../lib/dto/legacyPublic.js';
+import { sendHttpError } from '../lib/httpErrors.js';
 
 export {
   normalizeHoraInicioReserva,
@@ -1543,7 +1544,7 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/crear-con-prereserva:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -1623,7 +1624,7 @@ export function createPartidosRouter({
       res.json(result);
     } catch (err) {
       console.error('❌ Error GET /api/partidos/abiertos:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -1682,7 +1683,7 @@ export function createPartidosRouter({
       res.json(result);
     } catch (err) {
       console.error('❌ Error GET /api/partidos/solicitudes-pendientes:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -1734,7 +1735,7 @@ export function createPartidosRouter({
       res.json(result);
     } catch (err) {
       console.error('❌ Error GET /api/partidos/mis-partidos:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -1793,7 +1794,7 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error GET /api/partidos/:id:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -1826,7 +1827,7 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error GET /api/partidos/:id/mi-solicitud:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -1929,7 +1930,7 @@ export function createPartidosRouter({
       res.json({ ok: true });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/invitar:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2019,7 +2020,7 @@ export function createPartidosRouter({
       res.json({ ok: true });
     } catch (err) {
       console.error('❌ Error DELETE /api/partidos/:id/salir:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2164,7 +2165,7 @@ export function createPartidosRouter({
       res.json({ ok: true });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/solicitar-union:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2237,7 +2238,7 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error GET /api/partidos/:id/solicitudes:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2418,7 +2419,7 @@ export function createPartidosRouter({
       res.json({ ok: true, partido_completo: joinResult.partidoCompleto });
     } catch (err) {
       console.error('❌ Error PATCH /api/partidos/:id/solicitudes/:solicitudId:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2570,7 +2571,7 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/unirse:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2619,7 +2620,7 @@ export function createPartidosRouter({
       res.json({ success: true });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/cancelar:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2686,7 +2687,7 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/iniciar-pago:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2778,7 +2779,7 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error POST /api/partidos:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2807,7 +2808,7 @@ export function createPartidosRouter({
       res.status(result.status).json(result.body);
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/resultado:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2848,7 +2849,7 @@ export function createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUs
       res.json(await mapPartidoDetail(partido, supabaseAdmin, user));
     } catch (err) {
       console.error('❌ Error GET /api/partidos-abiertos/:id:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -2906,7 +2907,7 @@ export function createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUs
       res.json({ success: true, ganador: validation.ganador });
     } catch (err) {
       console.error('❌ Error POST /api/partidos-abiertos/:id/resultado:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 

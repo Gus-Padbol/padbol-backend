@@ -6,6 +6,7 @@ import {
   mapEquipoJugadorDto,
   mapEquipoSummaryContactFields,
 } from '../lib/dto/equiposDto.js';
+import { sendHttpError } from '../lib/httpErrors.js';
 
 const DEPORTE_LIMITS = {
   padbol: { min: 2, max: 4, label: 'Padbol' },
@@ -211,7 +212,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       );
     } catch (err) {
       console.error('❌ Error GET /api/equipos/buscar-jugador:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -268,7 +269,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       res.json(result);
     } catch (err) {
       console.error('❌ Error GET /api/equipos/mis-equipos:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -355,7 +356,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       res.status(201).json(await mapEquipoDetail(bundle, supabaseAdmin, user));
     } catch (err) {
       console.error('❌ Error POST /api/equipos:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -372,7 +373,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       res.json(await mapEquipoDetail(bundle, supabaseAdmin, user));
     } catch (err) {
       console.error('❌ Error GET /api/equipos/:id:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -437,7 +438,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       });
     } catch (err) {
       console.error(`❌ Error POST /api/equipos/:id/${nextEstado}:`, err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   }
 
@@ -505,7 +506,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       res.json(await mapEquipoDetail(updatedBundle, supabaseAdmin, user));
     } catch (err) {
       console.error('❌ Error POST /api/equipos/:id/invitar:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -549,7 +550,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       res.json(await mapEquipoDetail(updatedBundle, supabaseAdmin, user));
     } catch (err) {
       console.error('❌ Error DELETE /api/equipos/:id/jugadores/:jugadorId:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 
@@ -636,7 +637,7 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
       });
     } catch (err) {
       console.error('❌ Error POST /api/equipos/:id/inscribir-torneo:', err.message);
-      res.status(500).json({ error: err.message });
+      return sendHttpError(res, err);
     }
   });
 

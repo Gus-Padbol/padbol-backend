@@ -11,6 +11,7 @@ import {
   buildHistorialPuntoSnapshot,
   applyHistorialPuntoSnapshot,
 } from '../utils/scoreboardLogic.js';
+import { sendHttpError } from '../lib/httpErrors.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -317,7 +318,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ POST /api/scoreboard/partidos:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al crear partido' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al crear partido' });
     }
   });
 
@@ -340,7 +341,7 @@ export function mountScoreboardRoutes(app, {
       return res.json({ partidos });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/partidos:', err.message);
-      return res.status(500).json({ error: err.message || 'Error al listar partidos' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al listar partidos' });
     }
   });
 
@@ -351,7 +352,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/partidos/:id:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al obtener partido' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al obtener partido' });
     }
   });
 
@@ -398,7 +399,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ PATCH /api/scoreboard/partidos/:id:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al actualizar partido' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al actualizar partido' });
     }
   });
 
@@ -437,7 +438,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/cancha-activa/:sedeId/:cancha:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al obtener cancha activa' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al obtener cancha activa' });
     }
   });
 
@@ -493,7 +494,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ POST /api/scoreboard/jugador-temp:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al guardar jugador temporal' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al guardar jugador temporal' });
     }
   });
 
@@ -508,7 +509,7 @@ export function mountScoreboardRoutes(app, {
       return res.json({ jugadores });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/jugadores-temp/:partidoId:', err.message);
-      return res.status(500).json({ error: err.message || 'Error al obtener jugadores temporales' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al obtener jugadores temporales' });
     }
   });
 
@@ -540,7 +541,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/cancha/:sedeId/:cancha:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al obtener partido por cancha' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al obtener partido por cancha' });
     }
   });
 
@@ -568,7 +569,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ POST /api/scoreboard/partidos/:id/punto/:equipo:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al registrar punto' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al registrar punto' });
     }
   });
 
@@ -583,7 +584,7 @@ export function mountScoreboardRoutes(app, {
       return res.json({ historial });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/partidos/:id/historial:', err.message);
-      return res.status(500).json({ error: err.message || 'Error al obtener historial de puntos' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al obtener historial de puntos' });
     }
   });
 
@@ -611,7 +612,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ POST /api/scoreboard/partidos/:id/undo:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al deshacer punto' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al deshacer punto' });
     }
   });
 
@@ -633,7 +634,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ POST /api/scoreboard/partidos/:id/deshacer:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al deshacer punto' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al deshacer punto' });
     }
   });
 
@@ -655,7 +656,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ POST /api/scoreboard/partidos/:id/saque:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al cambiar saque' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al cambiar saque' });
     }
   });
 
@@ -677,7 +678,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ POST /api/scoreboard/partidos/:id/tiebreak:', err.message);
-      return res.status(st).json({ error: err.message || 'Error al iniciar tie-break' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al iniciar tie-break' });
     }
   });
 
@@ -710,7 +711,7 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ POST /api/scoreboard/partidos/:id/cronometro/:accion:', err.message);
-      return res.status(st).json({ error: err.message || 'Error en cronómetro' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error en cronómetro' });
     }
   });
 
@@ -730,7 +731,7 @@ export function mountScoreboardRoutes(app, {
       return res.json({ sponsors: data || [] });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/sponsors/:sedeId:', err.message);
-      return res.status(500).json({ error: err.message || 'Error al obtener sponsors' });
+      return sendHttpError(res, err, { fallbackMessage: 'Error al obtener sponsors' });
     }
   });
 }
