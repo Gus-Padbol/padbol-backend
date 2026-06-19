@@ -443,6 +443,9 @@ export function mountScoreboardRoutes(app, {
 
   app.post('/api/scoreboard/jugador-temp', async (req, res) => {
     try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+
       const body = req.body ?? {};
       const partidoId = String(body.partido_id ?? '').trim();
       if (!partidoId) {
@@ -460,6 +463,9 @@ export function mountScoreboardRoutes(app, {
       if (!isPartidoActivo(partido.estado)) {
         return res.status(400).json({ error: 'El partido ya terminó' });
       }
+
+      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      assertCanControlScoreboard(role, partido.sede_id);
 
       const numero = body.numero != null && body.numero !== ''
         ? resolveJerseyNumber(body.numero, slot)

@@ -1,4 +1,5 @@
 import { calculateSurgePrice, normalizeSurgeDeporte } from '../src/surge.js';
+import { requireAdminUser } from '../lib/authAccess.js';
 
 function parsePctSurge(raw, fieldName) {
   if (raw === null || raw === undefined || raw === '') {
@@ -11,7 +12,12 @@ function parsePctSurge(raw, fieldName) {
   return n;
 }
 
-export function mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
+export function mountSurgeRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails = [],
+}) {
   app.get('/api/surge/:sedeId/:deporte/:duracion', async (req, res) => {
     try {
       const result = await calculateSurgePrice(
@@ -57,15 +63,21 @@ export function mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser }) {
 
   app.post('/api/surge-config', async (req, res) => {
     try {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) {
-        return res.status(status).json({ error: authError });
-      }
+      const auth = await requireAdminUser(req, res, {
+        getAuthenticatedUser,
+        fetchUserRoleRowForAuthUser,
+        legacySuperAdminEmails,
+      });
+      if (!auth) return;
 
       const body = req.body ?? {};
       const sedeId = parseInt(String(body.sede_id), 10);
       if (!Number.isFinite(sedeId) || sedeId <= 0) {
         return res.status(400).json({ error: 'sede_id inválido' });
+      }
+
+      if (auth.role.rol === 'admin_club' && auth.role.sede_id !== sedeId) {
+        return res.status(403).json({ error: 'No tenés permiso para modificar Surge de otra sede' });
       }
 
       const deporte = normalizeSurgeDeporte(body.deporte);

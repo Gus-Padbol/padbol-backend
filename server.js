@@ -880,7 +880,12 @@ mountSedesProfileRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountCanchasRoutes(app, { supabaseAdmin });
-mountSurgeRoutes(app, { supabaseAdmin, getAuthenticatedUser });
+mountSurgeRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 mountResenasRoutes(app, {
   pgPool,
   getAuthenticatedUser,
@@ -1940,6 +1945,20 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
 });
 
 // ===== RANKINGS =====
+function mapLegacyRankingPublicRow(entry) {
+  return {
+    nombre: entry.nombre ?? null,
+    apellido: entry.apellido ?? '',
+    pais: entry.pais ?? null,
+    foto_url: entry.foto_url ?? null,
+    nivel: entry.nivel ?? null,
+    sede_id: entry.sede_id ?? null,
+    equipo_nombre: entry.equipo_nombre ?? null,
+    puntos_total: entry.puntos_total ?? 0,
+    torneos_count: entry.torneos_count ?? 0,
+  };
+}
+
 // GET /api/rankings?scope=local|nacional|internacional&sede_id=X&categoria=Y
 app.get('/api/rankings', async (req, res) => {
   const { scope = 'internacional', sede_id, categoria } = req.query;
@@ -2044,7 +2063,7 @@ app.get('/api/rankings', async (req, res) => {
     // 7. Sort by puntos_total desc, then torneos_count desc
     result.sort((a, b) => b.puntos_total - a.puntos_total || b.torneos_count - a.torneos_count);
 
-    res.json(result);
+    res.json(result.map(mapLegacyRankingPublicRow));
   } catch (err) {
     console.error('❌ Error GET /api/rankings:', err.message);
     res.status(500).json({ error: err.message });
@@ -2373,9 +2392,12 @@ console.log('Hub router registered at /api/hub (GET /api/hub/imagenes)');
 
 app.post('/api/notificaciones/zona-interes', async (req, res) => {
   try {
-    const { deporte, lat, lng, user_id, email } = req.body ?? {};
-    const auth = await getAuthenticatedUser(req);
-    const resolvedUserId = user_id ?? auth.user?.id ?? null;
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+    }
+
+    const { deporte, lat, lng } = req.body ?? {};
     const parsedLat = Number(lat);
     const parsedLng = Number(lng);
 
@@ -2386,11 +2408,11 @@ app.post('/api/notificaciones/zona-interes', async (req, res) => {
     const { error } = await supabaseAdmin
       .from('notificaciones_zona_interes')
       .insert({
-        user_id: resolvedUserId,
+        user_id: user.id,
         deporte: String(deporte).toLowerCase(),
         lat: parsedLat,
         lng: parsedLng,
-        email: email ?? auth.user?.email ?? null,
+        email: user.email ?? null,
       });
 
     if (error) throw error;
