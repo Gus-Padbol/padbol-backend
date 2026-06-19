@@ -101,6 +101,7 @@ import {
   configureRateLimitTrustProxy,
   isRateLimitDisabled,
   paymentsRateLimit,
+  publicReadRateLimitIfMatch,
   pushTokensRateLimit,
   reservasWriteRateLimit,
 } from './lib/rateLimit.js';
@@ -174,6 +175,8 @@ app.use(express.json({
     }
   },
 }));
+
+app.use(publicReadRateLimitIfMatch);
 
 // Supabase (desde .env)
 const SUPABASE_URL = process.env.SUPABASE_URL;
