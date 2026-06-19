@@ -24,6 +24,11 @@ export function parsePerfilPublicoIdentifier(raw) {
   return { kind: 'username', value: s };
 }
 
+/** Public routes must not resolve profiles by email (enumeration risk). */
+export function isEmailPublicIdentifier(raw) {
+  return parsePerfilPublicoIdentifier(raw)?.kind === 'email';
+}
+
 function parseDeportesFromPerfil(raw) {
   if (raw == null) return [];
   if (Array.isArray(raw)) return raw.map((d) => String(d).trim()).filter(Boolean);
@@ -129,18 +134,7 @@ function partidoEquipoGanadorId(partido) {
 
 async function fetchPerfilPg(pgPool, identifier) {
   const parsed = parsePerfilPublicoIdentifier(identifier);
-  if (!parsed) return null;
-
-  if (parsed.kind === 'email') {
-    const { rows } = await pgPool.query(
-      `SELECT ${PERFIL_PUBLICO_COLUMNS}
-       FROM jugadores_perfil
-       WHERE lower(trim(email)) = $1
-       LIMIT 1`,
-      [parsed.value],
-    );
-    return rows[0] ?? null;
-  }
+  if (!parsed || parsed.kind === 'email') return null;
 
   if (parsed.kind === 'user_id') {
     const { rows } = await pgPool.query(
@@ -350,10 +344,6 @@ export async function buildPublicPerfilPayloadPg(pgPool, identifier) {
 function createPublicPerfilHandler(pgPool) {
   return async (req, res) => {
     try {
-      if (!pgPool) return pgUnavailable(res);
-
-      console.log('[PERFIL-PUBLICO] userId recibido:', req.params.userId);
-
       const identifier = req.params.userId ?? req.params.user_id ?? req.params.identifier ?? '';
       if (!String(identifier).trim()) {
         return res.status(400).json({ error: 'Identificador de jugador requerido' });
@@ -361,6 +351,12 @@ function createPublicPerfilHandler(pgPool) {
 
       const parsed = parsePerfilPublicoIdentifier(identifier);
       console.log('[PERFIL-PUBLICO] identifier parsed:', { kind: parsed?.kind ?? 'unknown' });
+
+      if (parsed?.kind === 'email') {
+        return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+      }
+
+      if (!pgPool) return pgUnavailable(res);
 
       const payload = await buildPublicPerfilPayloadPg(pgPool, identifier);
       if (!payload) {
