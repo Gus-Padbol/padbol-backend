@@ -190,7 +190,7 @@ async function fetchReservaForPaymentConfirmPg(pgPool, reservaId) {
   return rows[0] ?? null;
 }
 
-async function assertMpPaymentIdNotUsedOnOtherReservaPg(pgPool, mpPaymentId, reservaId) {
+export async function assertMpPaymentIdNotUsedOnOtherReservaPg(pgPool, mpPaymentId, reservaId) {
   if (!mpPaymentId) return null;
 
   let rows;
@@ -201,9 +201,11 @@ async function assertMpPaymentIdNotUsedOnOtherReservaPg(pgPool, mpPaymentId, res
        LIMIT 1`,
       [mpPaymentId, reservaId],
     ));
-  } catch (err) {
-    if (!/mp_payment_id|colum|column/i.test(String(err.message || ''))) throw err;
-    return null;
+  } catch {
+    const err = new Error('No se pudo verificar unicidad del pago de Mercado Pago');
+    err.status = 503;
+    err.code = 'MP_PAYMENT_ID_CHECK_FAILED';
+    throw err;
   }
 
   if (rows[0]) {
