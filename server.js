@@ -73,6 +73,8 @@ import {
 } from './lib/authAccess.js';
 import { quoteReservaPrice, assertClientPrecioMatchesQuote } from './lib/pricing/quoteReservaPrice.js';
 import { envConfigured, maskEmail, maskPhone, safeQueryLog, summarizeError } from './lib/safeLog.js';
+import { applySecurityHeaders } from './lib/httpSecurity.js';
+import { buildClientErrorPayload, logServerError, sanitizeClientErrorMessage, sendHttpError } from './lib/httpErrors.js';
 import {
   EQUIPO_TORNEO_PUBLIC_SELECT,
   JUGADOR_PUBLIC_SELECT,
@@ -164,6 +166,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   credentials: true,
 }));
+applySecurityHeaders(app);
 app.use(express.json({
   verify: (req, _res, buf) => {
     if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe') {
@@ -715,7 +718,7 @@ async function handleGetMiRol(req, res) {
     return res.json(buildMiRolJsonPayload(email, row));
   } catch (err) {
     console.error('❌ GET mi-rol:', err.message);
-    return res.status(500).json({ error: err.message || 'Error al obtener rol' });
+    return sendHttpError(res, err, { fallbackMessage: 'Error al obtener rol' });
   }
 }
 
@@ -868,7 +871,7 @@ app.get('/api/sedes', async (req, res) => {
     res.json(data || []);
   } catch (err) {
     console.error('❌ Error GET /api/sedes:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -987,7 +990,7 @@ app.get('/api/sedes/:id', async (req, res) => {
     res.json(enrichSedeWithHeroPhoto(data));
   } catch (err) {
     console.error('❌ Error GET /api/sedes/:id:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1028,7 +1031,7 @@ app.get('/api/sedes/:id/extras', async (req, res) => {
       details: err?.details,
       stack: err?.stack,
     });
-    res.status(500).json({ error: err.message || String(err) });
+    sendHttpError(res, err);
   }
 });
 
@@ -1058,7 +1061,7 @@ app.get('/api/disponibilidad', async (req, res) => {
     res.json({ slots });
   } catch (err) {
     console.error('❌ Error GET /api/disponibilidad:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1092,7 +1095,7 @@ app.get('/api/disponibilidad/bloqueos', async (req, res) => {
     res.json(occupancy);
   } catch (err) {
     console.error('❌ Error GET /api/disponibilidad/bloqueos:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1129,7 +1132,7 @@ app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
 
     res.json(filterBlockingReservas([...merged.values()]));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1360,7 +1363,7 @@ app.post('/api/reservas', reservasWriteRateLimit, async (req, res) => {
       return res.status(409).json({ error: 'Este horario ya está reservado' });
     }
     console.error('❌ Error POST reserva:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1413,7 +1416,7 @@ app.get('/api/reservas', async (req, res) => {
     if (error) throw error;
     res.json((data || []).map((row) => mapReservaListDto(row, { isAdmin })));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1441,7 +1444,7 @@ app.get('/api/reservas/mis-reservas', async (req, res) => {
     res.json((data || []).map(mapMisReservaRow));
   } catch (err) {
     console.error('❌ Error GET /api/reservas/mis-reservas:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1474,7 +1477,7 @@ app.get('/api/ingresos', async (req, res) => {
     const total = (data ?? []).reduce((sum, r) => sum + (r.precio || 0), 0);
     res.json({ total, reservas: data?.length ?? 0 });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1527,9 +1530,9 @@ app.put('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
   } catch (err) {
     const st = err.status || 500;
     if (st >= 400 && st < 500) {
-      return res.status(st).json({ error: err.message });
+      return res.status(st).json({ error: sanitizeClientErrorMessage(err, st) });
     }
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1583,9 +1586,9 @@ app.delete('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
   } catch (err) {
     const st = err.status || 500;
     if (st >= 400 && st < 500) {
-      return res.status(st).json({ error: err.message });
+      return res.status(st).json({ error: sanitizeClientErrorMessage(err, st) });
     }
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1749,7 +1752,7 @@ app.post('/api/torneos', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1763,7 +1766,7 @@ app.get('/api/torneos', async (req, res) => {
     if (error) throw error;
     res.json((data || []).map(mapTorneoPublicRow));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1805,7 +1808,7 @@ app.get('/api/torneos/mis-inscripciones', async (req, res) => {
     res.json((data || []).map(mapMisInscripcionRow));
   } catch (err) {
     console.error('❌ Error GET /api/torneos/mis-inscripciones:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1822,7 +1825,7 @@ app.get('/api/torneos/:id', async (req, res) => {
     if (error) throw error;
     res.json(mapTorneoPublicRow(data));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1859,7 +1862,7 @@ app.put('/api/torneos/:id', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1877,7 +1880,7 @@ app.delete('/api/torneos/:id', async (req, res) => {
     if (error) throw error;
     res.json({ mensaje: 'Torneo eliminado' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -1940,7 +1943,7 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
     res.json({ partidos, total: partidos.length, formato: torneo.tipo_torneo });
   } catch (err) {
     console.error('❌ Error generar-partidos:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2066,7 +2069,7 @@ app.get('/api/rankings', async (req, res) => {
     res.json(result.map(mapLegacyRankingPublicRow));
   } catch (err) {
     console.error('❌ Error GET /api/rankings:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2214,7 +2217,7 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Error finalizar torneo:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2232,7 +2235,7 @@ app.get('/api/jugadores', async (req, res) => {
     if (error) throw error;
     res.json((data || []).map(mapJugadorPublicRow));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2251,7 +2254,7 @@ app.get('/api/jugadores/:id', async (req, res) => {
     if (error) throw error;
     res.json(mapJugadorPublicRow(data));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2307,7 +2310,7 @@ app.post('/api/torneos/:torneo_id/jugadores', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2323,7 +2326,7 @@ app.get('/api/torneos/:torneo_id/jugadores', async (req, res) => {
     if (error) throw error;
     res.json((data || []).map(mapJugadorTorneoPublicRow));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2354,7 +2357,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     const result = (equipos || []).map(eq => mapEquipoTorneoPublicRow(eq, grupoMap[eq.id] || null));
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2419,7 +2422,7 @@ app.post('/api/notificaciones/zona-interes', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('❌ Error POST /api/notificaciones/zona-interes:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2437,7 +2440,7 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
     if (error) throw error;
     res.json((data || []).map(mapPartidoTorneoPublicRow));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2454,7 +2457,7 @@ app.get('/api/partidos/:id', async (req, res) => {
     if (error) throw error;
     res.json(mapPartidoTorneoPublicRow(data));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 }); 
 
@@ -2476,7 +2479,7 @@ app.get('/api/partidos/:partido_id/games', async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2541,7 +2544,7 @@ app.put('/api/config/puntos', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('❌ Error PUT /api/config/puntos:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2682,10 +2685,10 @@ Si necesitás ayuda, escribinos por WhatsApp.
   } catch (err) {
     const st = err.status || 500;
     if (st >= 400 && st < 500) {
-      return res.status(st).json({ error: err.message });
+      return res.status(st).json({ error: sanitizeClientErrorMessage(err, st) });
     }
     console.error('❌ Error POST /api/cancelar-reserva:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -2724,7 +2727,7 @@ app.get('/api/creditos/:email', async (req, res) => {
     res.json({ total, creditos: data || [] });
   } catch (err) {
     console.error('❌ Error GET /api/creditos:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -3752,7 +3755,7 @@ async function handleGetAuthenticatedPerfil(req, res) {
     res.json(await buildAuthenticatedPerfilPayload(data, user, deportes));
   } catch (err) {
     console.error('❌ Error GET jugador perfil:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 }
 
@@ -3846,7 +3849,7 @@ async function handlePutAuthenticatedPerfil(req, res) {
     res.json(await buildAuthenticatedPerfilPayload(perfil, user, resolvedDeportes));
   } catch (err) {
     console.error('❌ Error PUT jugador perfil:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 }
 
@@ -3890,7 +3893,7 @@ jugadorRouter.get('/perfiles', async (req, res) => {
     })));
   } catch (err) {
     console.error('❌ Error GET /api/jugador/perfiles:', err.message);
-    return res.status(500).json({ error: err.message });
+    return sendHttpError(res, err);
   }
 });
 
@@ -3906,7 +3909,7 @@ jugadorRouter.get('/rankings', async (req, res) => {
     res.json({ rankings });
   } catch (err) {
     console.error('❌ Error GET /api/jugador/rankings:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -3942,7 +3945,7 @@ usuariosRouter.post('/push-token', pushTokensRateLimit, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('❌ Error POST /api/usuarios/push-token:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -3994,7 +3997,7 @@ usuariosRouter.get('/check-username', async (req, res) => {
     res.json({ available: !taken });
   } catch (err) {
     console.error('❌ Error GET /api/usuarios/check-username:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -4074,7 +4077,7 @@ usuariosRouter.get('/buscar', async (req, res) => {
     res.json(results);
   } catch (err) {
     console.error('❌ Error GET /api/usuarios/buscar:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -4208,7 +4211,7 @@ usuariosRouter.post('/perfil', async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Error POST /api/usuarios/perfil:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -4282,7 +4285,7 @@ usuariosRouter.post('/foto-perfil', async (req, res) => {
     res.json({ foto_url });
   } catch (err) {
     console.error('❌ Error POST /api/usuarios/foto-perfil:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -4388,7 +4391,7 @@ checkinRouter.post('/verificar', async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Error POST /api/checkin/verificar:', err.message);
-    res.status(500).json({ error: err.message });
+    sendHttpError(res, err);
   }
 });
 
@@ -4399,12 +4402,10 @@ app.use((_req, res) => {
 });
 
 app.use((err, _req, res, _next) => {
-  console.error('❌ Error no capturado:', err?.message || err);
+  logServerError('Error no capturado', err);
   if (!res.headersSent) {
-    res.status(Number(err?.status) || 500).json({
-      ok: false,
-      error: err?.message || 'Error interno del servidor',
-    });
+    const { status, body } = buildClientErrorPayload(err);
+    res.status(status).json(body);
   }
 });
 
