@@ -197,6 +197,27 @@ export async function persistStripeCheckoutSessionPg(pgPool, reservaId, sessionI
   }
 }
 
+export async function persistMercadoPagoPreferencePg(pgPool, reservaId, preferenceId, {
+  payment_provider = 'mercadopago',
+} = {}) {
+  if (!pgPool || !reservaId) return;
+
+  const prefId = preferenceId != null ? String(preferenceId).trim() : '';
+  if (!prefId) return;
+
+  try {
+    await pgPool.query(
+      `UPDATE reservas
+       SET mp_preference_id = $2,
+           payment_provider = COALESCE($3, payment_provider, 'mercadopago')
+       WHERE id = $1`,
+      [reservaId, prefId, payment_provider],
+    );
+  } catch (err) {
+    if (!/mp_preference|payment_provider|colum|column/i.test(String(err.message || ''))) throw err;
+  }
+}
+
 /**
  * Inserta reserva en estado pendiente antes del checkout MP.
  * Si ya viene reserva_id (p. ej. prereserva de partido), la reutiliza.

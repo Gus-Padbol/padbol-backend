@@ -59,6 +59,7 @@ import { mountStripeWebhookRoutes } from './routes/stripeWebhook.js';
 import {
   ensureReservaPendienteParaMpPg,
   normalizeCrearPreferenciaReservaInput,
+  persistMercadoPagoPreferencePg,
   persistStripeCheckoutSessionPg,
 } from './routes/reservaPendienteMp.js';
 import { assertCancelReservaOwnerCompat, assertReservaOwnerOrAdmin, buildAdminReservaPutUpdates, buildNormalUserReservaPutUpdates, resolveReservaAccess } from './lib/reservaAccess.js';
@@ -2883,6 +2884,7 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
       const pending = await ensureReservaPendienteParaMpPg(pgPool, req.body, {
         authUser: user,
         quote,
+        paymentProvider: 'mercadopago',
       });
       reservaIdParaMp = pending.reserva_id;
       console.log(`[POST /api/crear-preferencia] reserva pendiente id=${reservaIdParaMp} (created=${pending.created})`);
@@ -2923,6 +2925,8 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
         notification_url: `${process.env.BACKEND_URL || 'https://padbol-backend.onrender.com'}/api/webhooks/mercadopago`,
       },
     });
+
+    await persistMercadoPagoPreferencePg(pgPool, reservaIdParaMp, response.id);
 
     console.log(`✓ MP preferencia creada: ${response.id} | reserva_id: ${reservaIdParaMp} | total: ${quote.total} | sede: ${sedeNombre || '—'}`);
     res.json({
