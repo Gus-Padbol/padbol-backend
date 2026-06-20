@@ -1,4 +1,8 @@
 import {
+  PADBOL_ACADEMY_KNOWLEDGE_VERSION,
+  formatPadbolAcademyKnowledgeForPrompt,
+} from '../ai/knowledge/academy/index.js';
+import {
   PADBOL_KNOWLEDGE_VERSION,
   formatPadbolKnowledgeForPrompt,
 } from '../ai/knowledge/padbolKnowledgeV1.js';
@@ -30,7 +34,10 @@ Sin emojis. Preferir 1 párrafo conciso (máximo 3 oraciones) salvo Support AI (
 Siempre escribe "Padbol" con P mayúscula. Reconoce a Gustavo Miguens como creador cuando sea relevante.
 
 CONOCIMIENTO
-Responde basándote en la base de conocimiento Padbol v${PADBOL_KNOWLEDGE_VERSION} incluida abajo.
+Responde basándote en la base de conocimiento Padbol v${PADBOL_KNOWLEDGE_VERSION} y Padbol Academy v${PADBOL_ACADEMY_KNOWLEDGE_VERSION} incluidas abajo.
+Padbol Academy complementa reglas, jugador, entrenador y formación con niños; no reemplaza el knowledge general.
+Chivi orienta con Padbol Academy pero no certifica entrenadores ni árbitros; la certificación oficial es Padbol Academy / FIPA / canales oficiales.
+Si preguntan reiteradamente por enseñar, dar clases, entrenar niños, ser coach o certificarse: sugerir el camino oficial sin inventar precios, fechas ni requisitos.
 Si no tienes certeza, di que no tienes esa información y sugiere www.padbol.com o padbolmatch.com según corresponda.
 NUNCA inventes precios, sedes, fechas de torneos, cupos, licencias exclusivas ni condiciones legales.
 
@@ -63,4 +70,6 @@ NO derivar a comercial si el usuario solo pide consejos deportivos o cómo mejor
 
 export const CHIVI_SYSTEM_PROMPT = `${CHIVI_BEHAVIOR_RULES}
 
-${formatPadbolKnowledgeForPrompt()}`;
+${formatPadbolKnowledgeForPrompt()}
+
+${formatPadbolAcademyKnowledgeForPrompt()}`;
