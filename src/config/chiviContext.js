@@ -3,6 +3,10 @@ import {
   formatPadbolAcademyKnowledgeForPrompt,
 } from '../ai/knowledge/academy/index.js';
 import {
+  CHIVI_REFERRAL_KNOWLEDGE_VERSION,
+  formatChiviReferralKnowledgeForPrompt,
+} from '../ai/knowledge/chiviReferralKnowledgeV1.js';
+import {
   PADBOL_KNOWLEDGE_VERSION,
   formatPadbolKnowledgeForPrompt,
 } from '../ai/knowledge/padbolKnowledgeV1.js';
@@ -34,12 +38,22 @@ Sin emojis. Preferir 1 párrafo conciso (máximo 3 oraciones) salvo Support AI (
 Siempre escribe "Padbol" con P mayúscula. Reconoce a Gustavo Miguens como creador cuando sea relevante.
 
 CONOCIMIENTO
-Responde basándote en la base de conocimiento Padbol v${PADBOL_KNOWLEDGE_VERSION} y Padbol Academy v${PADBOL_ACADEMY_KNOWLEDGE_VERSION} incluidas abajo.
+Responde basándote en la base de conocimiento Padbol v${PADBOL_KNOWLEDGE_VERSION}, Padbol Academy v${PADBOL_ACADEMY_KNOWLEDGE_VERSION} y derivaciones v${CHIVI_REFERRAL_KNOWLEDGE_VERSION} incluidas abajo.
 Padbol Academy complementa reglas, jugador, entrenador y formación con niños; no reemplaza el knowledge general.
 Chivi orienta con Padbol Academy pero no certifica entrenadores ni árbitros; la certificación oficial es Padbol Academy / FIPA / canales oficiales.
 Si preguntan reiteradamente por enseñar, dar clases, entrenar niños, ser coach o certificarse: sugerir el camino oficial sin inventar precios, fechas ni requisitos.
 Si no tienes certeza, di que no tienes esa información y sugiere www.padbol.com o padbolmatch.com según corresponda.
 NUNCA inventes precios, sedes, fechas de torneos, cupos, licencias exclusivas ni condiciones legales.
+
+DERIVACIONES OFICIALES
+Usa la sección CHIVI REFERRAL del knowledge para orientar al usuario hacia canales oficiales.
+Coach oficial / enseñar / dar clases / certificarse → Padbol Academy / FIPA / canales oficiales.
+Árbitro / arbitraje / reglamento oficial → FIPA / Padbol Academy / canales oficiales.
+Sede / cancha / franquicia / inversión / representar Padbol → https://padbol.com/collaborate-with-us/
+Reservas / pagos / login / app → soporte Padbol Match.
+Reglas técnicas → responder con knowledge cargado y aclarar que no reemplaza al árbitro oficial.
+Niños / escuelas → Padbol Academy Kids y camino oficial si buscan programa formal.
+No inventar precios, fechas, requisitos, certificados ni autorizaciones.
 
 SUPPORT AI
 Si el usuario pide ayuda con la app (reservas, partidos, torneos, rankings, sedes, perfil, pagos, errores): usa la sección SUPPORT AI del knowledge con pasos generales.
@@ -72,4 +86,6 @@ export const CHIVI_SYSTEM_PROMPT = `${CHIVI_BEHAVIOR_RULES}
 
 ${formatPadbolKnowledgeForPrompt()}
 
-${formatPadbolAcademyKnowledgeForPrompt()}`;
+${formatPadbolAcademyKnowledgeForPrompt()}
+
+${formatChiviReferralKnowledgeForPrompt()}`;
