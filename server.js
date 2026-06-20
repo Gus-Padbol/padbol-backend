@@ -2378,6 +2378,7 @@ const partidosRouter = createPartidosRouter({
   getAuthenticatedUser,
   computePartidoDeadlineCancel,
   triggerPartidoCreatorPayment,
+  pgPool,
 });
 app.use('/api/partidos', partidosRouter);
 /** Alias legacy (SedePublica fallback): misma respuesta que GET /api/partidos/abiertos */

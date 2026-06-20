@@ -1,6 +1,11 @@
 import express from 'express';
 import { notifyPartidoJugadorUnido, sendPushToUser } from '../utils/push.js';
 import { createNotificacion } from '../utils/notificaciones.js';
+import { MatchSummaryPayloadError } from '../src/partidos/matchSummaryPayload.js';
+import {
+  MatchSummaryServiceError,
+  generateMatchSummaryForPartido,
+} from '../src/partidos/matchSummaryService.js';
 import { procesarResultadoPartidoCasual } from '../src/partidos/resultadoService.js';
 import { generarIniciosMinutosSlotReserva, generarIniciosSmartSlots, minutosAHoraReserva } from '../lib/reservaSlotsHorarios.js';
 import {
@@ -1365,12 +1370,47 @@ export async function fetchSedeUpcomingPartidos(supabaseAdmin, sedeId, user, { l
   );
 }
 
+export const PARTIDO_RESUMEN_ROUTE_PATH = '/:id/resumen';
+
+export function mapMatchSummaryHttpError(err) {
+  if (err instanceof MatchSummaryPayloadError || err instanceof MatchSummaryServiceError) {
+    return {
+      status: err.status ?? 500,
+      body: {
+        ok: false,
+        error: err.message,
+        code: err.code ?? null,
+      },
+    };
+  }
+
+  return null;
+}
+
+export async function fetchPartidoResumenPayload({
+  partidoId,
+  userId,
+  pgPool,
+  generateSummary = generateMatchSummaryForPartido,
+}) {
+  if (!pgPool) {
+    throw new MatchSummaryPayloadError('Servicio de resumen no disponible', {
+      status: 503,
+      code: 'PG_POOL_UNAVAILABLE',
+    });
+  }
+
+  return generateSummary({ partidoId, userId, pgPool });
+}
+
 export function createPartidosRouter({
   supabase,
   supabaseAdmin,
   getAuthenticatedUser,
   computePartidoDeadlineCancel,
   triggerPartidoCreatorPayment,
+  pgPool = null,
+  generateMatchSummary = generateMatchSummaryForPartido,
 }) {
   const resolveDeadline = computePartidoDeadlineCancel ?? computeDeadlineCancel;
 
@@ -1794,6 +1834,46 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error GET /api/partidos/:id:', err.message);
+      return sendHttpError(res, err);
+    }
+  });
+
+  router.get(PARTIDO_RESUMEN_ROUTE_PATH, async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ ok: false, error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ ok: false, error: 'ID de partido inválido' });
+      }
+
+      const result = await fetchPartidoResumenPayload({
+        partidoId,
+        userId: user.id,
+        pgPool,
+        generateSummary: generateMatchSummary,
+      });
+
+      console.log(
+        `✓ GET /api/partidos/${partidoId}/resumen — cached=${result.cached}`,
+      );
+
+      return res.status(200).json({
+        ok: true,
+        resumen: result.summary,
+        cached: result.cached,
+        generated_at: result.summary.generated_at ?? null,
+      });
+    } catch (err) {
+      const mapped = mapMatchSummaryHttpError(err);
+      if (mapped) {
+        return res.status(mapped.status).json(mapped.body);
+      }
+
+      console.error('❌ Error GET /api/partidos/:id/resumen:', err.message);
       return sendHttpError(res, err);
     }
   });
