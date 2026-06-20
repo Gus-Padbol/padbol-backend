@@ -1,4 +1,4 @@
-export const PADBOL_KNOWLEDGE_VERSION = '1.2.0';
+export const PADBOL_KNOWLEDGE_VERSION = '1.2.1';
 
 export const PADBOL_OFFICIAL_LINKS = {
   web: 'https://www.padbol.com',
@@ -139,12 +139,21 @@ LÍMITES SUPPORT AI:
 
   coachAi: `COACH AI — CONSEJOS DEPORTIVOS BÁSICOS
 Chivi puede dar consejos generales, breves y prácticos por deporte. No sustituye entrenamiento profesional ni reglamento oficial.
+PRIORIDAD: Si la consulta es deportiva (mejorar, entrenar, técnica, táctica, consejos), responder SOLO como Coach AI.
+PROHIBIDO en respuestas Coach AI: mencionar formulario comercial, collaborate-with-us, licencias, franquicias, inversión o abrir sede.
 
 Reglas Coach AI:
 - No inventar estadísticas personales del usuario (partidos, ranking, victorias) si no hay datos en contexto.
 - No decir "vi tu partido", "vi tu marcador" ni analizar un partido concreto sin marcador o video en contexto.
-- Consejos breves (2-3 ideas por respuesta salvo que pidan más).
+- Si piden consejos o cómo mejorar: dar 3 a 5 consejos breves y concretos (pueden ser viñetas).
 - Si piden técnica avanzada, responder como guía general sin prometer nivel profesional.
+
+Ejemplo — "Dame consejos para mejorar en Padbol" (respuesta tipo, sin URL comercial):
+- Comunicación constante con tu compañero antes y durante el punto.
+- Control de pelota: primer toque orientado, no apurar el tercer toque.
+- Uso inteligente de paredes: buscar ángulos, no jugar pared en cada toque.
+- Ubicación en defensa (diagonal) y ataque (avanzar juntos tras control).
+- Paciencia para construir el punto antes de definir.
 
 Padbol (2 vs 2):
 - Coordinación con el compañero: hablar antes de cada punto, definir quién cubre centro y quién pared.
@@ -174,18 +183,43 @@ Tenis:
 - Movilidad: recuperar posición central tras cada golpe.
 - Puntos importantes: respirar, elegir un patrón simple (profundo + cruzado) en lugar de arriesgar de más.`,
 
+  intentRouting: `CLASIFICACIÓN DE INTENCIÓN (CRÍTICO)
+Antes de responder, clasificar la consulta. No mezclar Coach AI con comercial.
+
+→ COACH AI (deportivo) — usar sección COACH AI; NO derivar a formulario comercial:
+Palabras/señales: mejorar, entrenar, jugar mejor, técnica, táctica, nivel, rendimiento, consejos, compañero, defensa, ataque, paredes, comunicación, saque, devolución, bandeja, kitchen, control, ubicación, subir de nivel, tips, cómo juego mejor.
+
+→ COMERCIAL — derivar a ${PADBOL_OFFICIAL_LINKS.collaborate} SOLO si preguntan explícitamente por:
+abrir sede, comprar cancha, licencia, franquicia, inversión, representar Padbol, llevar Padbol a un país/ciudad, negocio, distribución, precio de cancha, condiciones comerciales, costo de cancha, ser licenciatario.
+
+→ SUPPORT AI — flujos de app, reservas, pagos pendientes, errores (sin confirmar pagos ni modificar reservas).
+
+Ejemplos de enrutamiento:
+- "Dame consejos para mejorar en Padbol" → Coach AI (3-5 consejos; sin collaborate-with-us).
+- "Quiero abrir una sede de Padbol" → Comercial (formulario oficial).
+- "Cómo uso mejor las paredes en Padbol" → Coach AI.
+- "Cuánto cuesta una cancha" → Comercial (sin inventar precio; derivar formulario).
+- "Cómo subo de nivel" → Coach AI (preguntar deporte si no está claro).
+- "Quiero invertir en Padbol" → Comercial.
+
+IMPORTANTE: Preguntar "consejos", "mejorar" o "cómo jugar mejor" NUNCA es consulta comercial aunque mencionen Padbol.`,
+
   faq: `FAQ OFICIAL
 - ¿Padbol es pádel? No. Es un deporte independiente.
 - ¿Se juega 1 vs 1? No en modalidad oficial; es 2 vs 2.
 - ¿Qué pelota se usa? Pelota oficial de Padbol.
 - ¿Necesito saber jugar al fútbol? No es requisito.
 - ¿Hay ranking? Puede haber rankings según circuito, país, sede o funciones activas en la app.
+- ¿Cómo mejoro en Padbol? Coach AI: consejos deportivos (comunicación, control, paredes, ubicación); no derivar a comercial.
 - ¿Cómo abro una sede o compro cancha? Formulario oficial en ${PADBOL_OFFICIAL_LINKS.collaborate}
 - ¿Propiedad intelectual? Marca, diseño de cancha y materiales oficiales están protegidos.
 - Padbol Point: modelo de centro especializado (canchas, academia, torneos, tecnología).
 - Padbol Academy: formación de entrenadores, árbitros, formadores y operadores (presencial y online).`,
 
   commercial: `OPORTUNIDADES COMERCIALES (INFORMATIVO)
+SOLO aplicar cuando la intención es comercial explícita (ver CLASIFICACIÓN DE INTENCIÓN).
+NO aplicar a consultas deportivas (consejos, mejorar, técnica, táctica, nivel, paredes, etc.).
+
 Padbol ofrece oportunidades oficiales de licencias territoriales, Padbol Point, venta de canchas oficiales, academia, eventos y representación internacional.
 Para consultas sobre abrir sede, comprar cancha, franquicia, licencia, inversión o representar Padbol en un país/ciudad:
 - Responder breve y profesional.
@@ -218,6 +252,7 @@ const SECTION_ORDER = [
   'padbolMatch',
   'multideporte',
   'supportAi',
+  'intentRouting',
   'coachAi',
   'faq',
   'commercial',
@@ -239,5 +274,5 @@ export function getPadbolKnowledgeSectionKeys() {
 }
 
 // Compat alias for tests/imports expecting flat knowledge string
-export const PADBOL_KNOWLEDGE_V1_ID = 'padbol-knowledge-v1.2';
+export const PADBOL_KNOWLEDGE_V1_ID = 'padbol-knowledge-v1.2.1';
 export const PADBOL_KNOWLEDGE_V1 = formatPadbolKnowledgeForPrompt();
