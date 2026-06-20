@@ -1,79 +1,88 @@
-export const PADBOL_ACADEMY_RULES_TECHNIQUE_KNOWLEDGE_VERSION = '1.1.0';
+export const PADBOL_ACADEMY_RULES_TECHNIQUE_KNOWLEDGE_VERSION = '1.2.0';
 
 /**
- * Conocimiento técnico básico Padbol Academy (reglas y técnica de juego).
- * Resumen formativo; no sustituye el manual completo ni certificaciones oficiales.
+ * Reglas y técnica Padbol Academy — resumen basado en Padbol Official Game Rules.
+ * Orientación formativa; Chivi orienta, no reemplaza al árbitro oficial.
  */
 export const PADBOL_ACADEMY_RULES_TECHNIQUE_SECTIONS = {
   courtAndBasicGame: `PISTA Y JUEGO BÁSICO
-Pista oficial: 10 m x 6 m, con red central baja que divide el campo.
-Los cristales (paredes de vidrio) son parte activa del juego, no solo límites.
+Cancha oficial: 10 m x 6 m.
+Red central de 100 cm de altura según reglamento oficial.
+Paredes/cristales y malla metálica forman parte de las instalaciones de juego.
+Puertas laterales de acceso en la pista.
+Zonas reglamentarias: servicio, recepción, zona roja/ataque y exterior.
 Modalidad: 2 vs 2 (cuatro jugadores).
-Puntuación: sistema tipo tenis/pádel según reglamento del torneo o partido.
-Regla de toques: máximo tres toques por equipo para devolver la pelota al campo rival.
-Obligación de combinar con el compañero antes de pasar al rival, salvo excepciones reglamentarias oficiales.
-Chivi no certifica entrenadores; para reglamento fino, derivar a FIPA o material oficial Padbol Academy.`,
+Pelota oficial: color blanco o amarillo; peso aprox. 380-400 g; presión 7-8 libras.`,
 
-  serviceBasics: `FUNDAMENTOS DEL SERVICIO
-Servicio cruzado hacia el cuadrante diagonal del rival.
-Bote previo obligatorio antes del impacto, según reglamento de saque.
-Respetar zona de servicio y zona de recepción oficiales.
-Variantes básicas de saque:
-- Servicio directo al cuadrante rival.
-- Servicio con cristal lateral (usar el vidrio para entrar al juego).
-- Servicio a doble cristal (pelota que toca dos cristales según reglamento).
-- Servicio a puerta (orientado hacia la puerta/zona de recepción rival).
-Consejos de ejecución:
-- Impactar en el punto alto del bote.
-- Control con interior del pie para mayor precisión.
-- Cuando ya domina la base, variar superficie de contacto para generar efecto y sorpresa.`,
+  serviceBasics: `SERVICIO (REGLAMENTO OFICIAL)
+El servidor debe estar detrás de la línea de servicio.
+Inicio desde el lado derecho; alternancia derecha/izquierda según reglamento.
+Saque cruzado hacia el área de recepción válida del rival.
+Bote previo obligatorio dentro de la zona de servicio antes del impacto.
+Servicio directo al cuadrante rival o servicio con rebote en cristales (según reglamento).
+Malla metálica en el saque: solo válida si la pelota rebotó antes en cristal.
+Segundo servicio si el primero es falta.
+Let si la pelota toca red/cinta y entra correctamente en el cuadrante de recepción.
+Consejo técnico: impactar en el punto alto del bote; control con interior del pie.`,
 
-  positioningBasics: `UBICACIÓN EN PISTA
-Ubicación ideal según perfil:
-- Jugador diestro suele rendir mejor en la banda izquierda; zurdo, en la derecha.
-- Si ambos son diestros, probar posiciones hasta diferenciar roles de colocador y rematador.
-Recepción de saque:
-- Colocarse cerca de puerta o fondo según pierna dominante y tipo de saque rival.
-- Ajustar distancia a la red/puerta para tener tiempo de primer toque y lectura del cristal.`,
+  ballInPlayAndTouches: `PELOTA EN JUEGO Y TOQUES
+La pelota entra en juego desde el servicio válido.
+Entre compañeros: mínimo dos toques y máximo tres antes de devolver al campo rival.
+Tras el tercer toque del equipo, la pelota debe enviarse al campo adversario.
+Se puede usar pared/cristal para devolver si cumple el reglamento.
+Brazos, antebrazos y manos no están permitidos para jugar la pelota.`,
 
-  glassUsage: `USO DE LOS CRISTALES
-Tres usos principales: defensivo, combinativo y ofensivo.
-Defensivo: ganar tiempo, recuperar posición y prolongar el punto con control.
-Combinativo: construir jugada con compañero usando paredes para cambiar ángulo.
-Ofensivo: buscar salidas incómodas para el rival con ángulos sobre cristal.
-En pases combinativos, evitar la zona media-baja del cristal (rebote menos predecible).
-Preferir la zona más alta del cristal para pases más cómodos y controlados.
-Los cristales son recurso de continuidad, defensa y construcción del punto.`,
+  volleyAndAttackZone: `VOLEA Y ZONA DE ATAQUE
+Tras el saque, el receptor no puede volear la pelota de recepción.
+La volea está permitida después, en la zona roja/ataque.
+Zona roja/ataque: 1 m a cada lado de la red (según marcado oficial).
+Para volear válidamente, debe cumplirse el contacto con la zona de ataque según la regla oficial (consultar reglamento completo en duda).`,
 
-  firstSecondThirdTouch: `PRIMER, SEGUNDO Y TERCER TOQUE
-Estructura típica del equipo (similar a recepción → colocación → remate):
-Primer toque: evitar devolver al punto rival; iniciar salida de presión o ataque.
-Segundo toque: colocación — preparar al compañero o abrir ángulo hacia cristal o rival.
-Tercer toque: finalización o remate cuando la jugada lo permite.
-No forzar remate en el segundo toque si aún no hay ventaja; construir con paciencia.`,
+  scoringAndMatchFormat: `PUNTUACIÓN Y FORMATO DE PARTIDO
+Puntuación por juego: 15, 30, 40 y juego.
+Ventaja en caso de iguales (40-40).
+Set a 6 juegos con diferencia de 2.
+Tie-break o sudden death cuando corresponda según formato del torneo o partido.
+Partidos al mejor de 3 sets, con opción de mejor de 5 según competencia.`,
 
-  finishingBasics: `FINALIZACIÓN BÁSICA
-Opciones de cierre según situación:
-- Cabeza: definición aérea o de cabeza cuando la pelota queda alta y controlada.
-- Volea: impacto en vuelo para cerrar antes del segundo bote.
-- Chilena: recurso avanzado; solo mencionar como opción avanzada, sin enseñar ejecución de riesgo sin supervisión.
-- Remates generales: buscar precisión antes que potencia en nivel básico.
-Chivi ofrece orientación general; no promete dominar técnica avanzada sin práctica guiada en pista.`,
+  lostPointAndFaults: `PÉRDIDA DE PUNTO Y FALTAS (RESUMEN)
+Pierde el punto quien:
+- Deja que la pelota bote en su propio campo tras un toque válido del rival.
+- No juega antes del segundo bote en su campo cuando debía hacerlo.
+- Toca la pelota con brazos, antebrazos o manos.
+- Toca la red o elementos no permitidos según la situación reglamentaria.
+- Volea fuera de la zona permitida o antes de tiempo (p. ej. recepción de saque).
+- Invade o salta la red durante el punto.
+Chivi resume reglas; ante disputa, prevalece el árbitro oficial.`,
 
-  defensiveBasics: `DEFENSA BÁSICA
-Buena defensa habilita el contraataque; no solo “salvar” el punto.
-Posicionamiento sincronizado con el compañero (diagonal, cobertura de huecos).
-Leer al rival antes de su ataque: preparación de cuerpo, orientación de pierna, tipo de saque o tercer toque.
-Ante voleas o chilenas rivales: bloqueo controlado y cobertura activa del compañero.
-Mantener calma tras defender cristal; el siguiente toque puede ser transición a ataque.`,
+  positioningBasics: `UBICACIÓN EN PISTA (TÉCNICA)
+Jugador diestro suele rendir mejor en banda izquierda; zurdo, en derecha.
+Si ambos son diestros, probar roles de colocador y rematador.
+Recepción cerca de puerta o fondo según pierna dominante y tipo de saque rival.`,
+
+  glassUsage: `USO DE CRISTALES (TÉCNICA)
+Uso defensivo, combinativo y ofensivo según situación.
+En pases combinativos, evitar zona media-baja del cristal; preferir zona alta.
+Los cristales permiten continuidad y construcción cuando el reglamento lo autoriza.`,
+
+  finishingBasics: `FINALIZACIÓN (TÉCNICA BÁSICA)
+Cabeza, volea en zona de ataque y remates con preción antes que potencia.
+Chilena: recurso avanzado; solo con supervisión en entrenamiento.`,
+
+  defensiveBasics: `DEFENSA (TÉCNICA BÁSICA)
+Posicionamiento sincronizado con compañero; lectura del rival.
+Bloqueo y cobertura ante voleas o remates rivales dentro de reglas.`,
 };
 
 export const PADBOL_ACADEMY_RULES_TECHNIQUE_SECTION_ORDER = [
   'courtAndBasicGame',
   'serviceBasics',
+  'ballInPlayAndTouches',
+  'volleyAndAttackZone',
+  'scoringAndMatchFormat',
+  'lostPointAndFaults',
   'positioningBasics',
   'glassUsage',
-  'firstSecondThirdTouch',
   'finishingBasics',
   'defensiveBasics',
 ];
@@ -89,7 +98,7 @@ export function formatPadbolAcademyRulesTechniqueKnowledgeForPrompt() {
 
   return [
     `PADBOL ACADEMY — RULES & TECHNIQUE (v${PADBOL_ACADEMY_RULES_TECHNIQUE_KNOWLEDGE_VERSION})`,
-    'Conocimiento técnico básico de Padbol Academy. Orientación formativa; no certifica entrenadores ni árbitros.',
+    'Resumen basado en Padbol Official Game Rules. Chivi orienta; no reemplaza al árbitro oficial ni otorga certificaciones.',
     ...blocks,
   ].join('\n\n');
 }
