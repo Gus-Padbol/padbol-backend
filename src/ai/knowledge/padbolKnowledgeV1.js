@@ -1,4 +1,4 @@
-export const PADBOL_KNOWLEDGE_VERSION = '1.1.0';
+export const PADBOL_KNOWLEDGE_VERSION = '1.1.1';
 
 export const PADBOL_OFFICIAL_LINKS = {
   web: 'https://www.padbol.com',
@@ -82,7 +82,9 @@ Licenciatario máster: representante oficial de un país ante FIPA.
 Licenciatario junior: opera instalaciones específicas bajo el marco oficial.`,
 
   international: `CRECIMIENTO INTERNACIONAL
-Padbol tiene presencia internacional y una comunidad en crecimiento en distintos países.
+Padbol tiene presencia internacional en la cantidad de países indicada por la web oficial de Padbol (www.padbol.com), con una red que continúa creciendo.
+No usar listas cerradas de países en respuestas; la información territorial vigente está en padbol.com.
+Si se menciona un número concreto de países, aclarar: según la información oficial publicada en padbol.com.
 La expansión combina licencias, Padbol Point, academias, torneos y tecnología Padbol Match.`,
 
   benefits: `BENEFICIOS DEPORTIVOS
