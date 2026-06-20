@@ -4,6 +4,12 @@ import {
   CHIVI_GENERAL_PROMPT_VERSION,
   CHIVI_GENERAL_SYSTEM_PROMPT,
 } from './chiviGeneralV1.js';
+import {
+  MATCH_SUMMARY_MAX_TOKENS,
+  MATCH_SUMMARY_PROMPT_ID,
+  MATCH_SUMMARY_PROMPT_SEMVER,
+  MATCH_SUMMARY_SYSTEM_PROMPT,
+} from './matchSummaryV1.js';
 
 const PROMPTS_BY_SKILL = {
   'chivi-general': {
@@ -11,6 +17,12 @@ const PROMPTS_BY_SKILL = {
     version: CHIVI_GENERAL_PROMPT_VERSION,
     system: CHIVI_GENERAL_SYSTEM_PROMPT,
     maxTokens: CHIVI_GENERAL_MAX_TOKENS,
+  },
+  'match-summary': {
+    id: MATCH_SUMMARY_PROMPT_ID,
+    version: MATCH_SUMMARY_PROMPT_SEMVER,
+    system: MATCH_SUMMARY_SYSTEM_PROMPT,
+    maxTokens: MATCH_SUMMARY_MAX_TOKENS,
   },
 };
 
