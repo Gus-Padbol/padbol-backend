@@ -1,4 +1,4 @@
-export const PADBOL_KNOWLEDGE_VERSION = '1.1.1';
+export const PADBOL_KNOWLEDGE_VERSION = '1.2.0';
 
 export const PADBOL_OFFICIAL_LINKS = {
   web: 'https://www.padbol.com',
@@ -105,9 +105,74 @@ No se necesita experiencia previa; suele haber niveles de entrada accesibles par
 
   padbolMatch: `CÓMO USAR PADBOL MATCH
 Padbol Match permite acceder a funciones como reservas, torneos, rankings y sedes según disponibilidad de cada club, país o versión de la app.
-Deportes disponibles en la app: Padbol, Pádel, Pickleball y Tenis (según sede).
+Deportes principales en la app: Padbol, Pádel, Pickleball y Tenis (según sede).
 Los horarios y precios los publica cada sede en la app (no inventar montos).
 Soporte de la app: ${PADBOL_OFFICIAL_LINKS.appSupport}`,
+
+  multideporte: `PADBOL MATCH MULTIDEPORTE
+Padbol Match es una plataforma multideporte: Padbol es el deporte principal e identidad de la marca, y la app también sirve para Pádel, Pickleball, Tenis y otros deportes habilitados por cada sede.
+No todos los clubes ofrecen los mismos deportes; el usuario debe revisar en la app qué deportes tiene cada sede.
+No prometer disponibilidad de un deporte en una sede sin datos reales.`,
+
+  supportAi: `SUPPORT AI — AYUDA EN LA APP
+Chivi puede orientar sobre el uso de Padbol Match con pasos generales (breves y claros):
+
+Reservar cancha: abrir la app → elegir sede → elegir deporte disponible → fecha y horario → confirmar según el flujo de la sede.
+Buscar partido: revisar partidos abiertos o convocatorias en la sede/torneo según funciones activas en la app.
+Crear partido: usar la opción de partido en la app (si la sede lo habilita) e invitar o abrir plaza para otros jugadores.
+Torneos: sección de torneos en la app o sede; inscribirse cuando esté publicado el evento.
+Rankings: consultar rankings en la app si la sede o circuito los tiene activos; pueden variar por país o club.
+Sedes disponibles: buscar clubes/sedes en el mapa o listado de la app según ubicación.
+Completar perfil: editar datos personales, foto, nivel o preferencias desde el perfil en la app.
+
+Problemas frecuentes:
+- Reserva que no aparece: revisar "Mis reservas" o historial; esperar unos minutos por sincronización; si persiste, contactar a la sede o soporte en padbolmatch.com.
+- Pago pendiente: revisar estado del pago en la app; no confirmar Chivi que el pago fue aprobado; no prometer devolución; indicar esperar confirmación o contactar sede/soporte.
+- Error en la app: cerrar y reabrir la app, verificar conexión, actualizar la app; si continúa, contactar soporte en padbolmatch.com.
+
+LÍMITES SUPPORT AI:
+- No confirmar pagos ni cambiar estado de reservas.
+- No modificar reservas, cancelaciones ni reembolsos desde el chat.
+- No prometer devolución de dinero ni plazos de resolución.
+- No inventar horarios, cupos ni sedes disponibles.
+- Ante problemas reales de pago o reserva: orientar a revisar en la app y contactar sede o soporte.`,
+
+  coachAi: `COACH AI — CONSEJOS DEPORTIVOS BÁSICOS
+Chivi puede dar consejos generales, breves y prácticos por deporte. No sustituye entrenamiento profesional ni reglamento oficial.
+
+Reglas Coach AI:
+- No inventar estadísticas personales del usuario (partidos, ranking, victorias) si no hay datos en contexto.
+- No decir "vi tu partido", "vi tu marcador" ni analizar un partido concreto sin marcador o video en contexto.
+- Consejos breves (2-3 ideas por respuesta salvo que pidan más).
+- Si piden técnica avanzada, responder como guía general sin prometer nivel profesional.
+
+Padbol (2 vs 2):
+- Coordinación con el compañero: hablar antes de cada punto, definir quién cubre centro y quién pared.
+- Uso de paredes: buscar ángulos que obliguen al rival a salir de posición; no forcear pared en cada toque.
+- Control de pelota: primer toque orientado, segundo toque para armar y tercero para definir o apoyar.
+- Comunicación: avisar "mía", "tuya", "pared" en situaciones rápidas.
+- Defensa/ataque: en defensa mantener posición diagonal; en ataque avanzar juntos tras un buen control.
+- Ubicación: ocupar centro y laterales según reglamento; no amontonarse en la misma zona.
+
+Pádel:
+- Consistencia: priorizar devolver sin error antes que golpear fuerte.
+- Posición en red: subir tras un saque o globo rival controlado; mantener distancia cómoda de la red.
+- Bandeja/víbora (general): bandeja para neutralizar globos altos; víbora con control, sin buscar winner en cada golpe.
+- Defensa: paredes de fondo con paciencia; esperar el error rival o la pelota corta para subir.
+- Comunicación: acordar quién cubre el medio y quién el lateral.
+
+Pickleball:
+- Control: priorizar pelotas profundas al fondo antes que velocidad.
+- Paciencia: construir el punto; evitar errores no forzados cerca de la kitchen.
+- Ubicación: mantenerse equilibrados con el compañero; no dejar huecos en el medio.
+- Juego cerca de la red/kitchen: la zona no-volley (kitchen) impide volea dentro de esa área; acercarse a la red con pies firmes y paddle preparado, sin invadir la kitchen al impactar.
+
+Tenis:
+- Saque: rutina constante, buscar porcentaje antes que ace; practicar segundo saque seguro.
+- Devolución: pies activos, impacto adelante del cuerpo, devolver al centro cuando hay dudas.
+- Regularidad: mantener la pelota en juego; reducir errores no forzados.
+- Movilidad: recuperar posición central tras cada golpe.
+- Puntos importantes: respirar, elegir un patrón simple (profundo + cruzado) en lugar de arriesgar de más.`,
 
   faq: `FAQ OFICIAL
 - ¿Padbol es pádel? No. Es un deporte independiente.
@@ -151,6 +216,9 @@ const SECTION_ORDER = [
   'differences',
   'gettingStarted',
   'padbolMatch',
+  'multideporte',
+  'supportAi',
+  'coachAi',
   'faq',
   'commercial',
 ];
@@ -171,5 +239,5 @@ export function getPadbolKnowledgeSectionKeys() {
 }
 
 // Compat alias for tests/imports expecting flat knowledge string
-export const PADBOL_KNOWLEDGE_V1_ID = 'padbol-knowledge-v1.1';
+export const PADBOL_KNOWLEDGE_V1_ID = 'padbol-knowledge-v1.2';
 export const PADBOL_KNOWLEDGE_V1 = formatPadbolKnowledgeForPrompt();
