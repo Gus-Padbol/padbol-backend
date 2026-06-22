@@ -1,5 +1,29 @@
 export const MATCH_SUMMARY_PAYLOAD_VERSION = '1.0.0';
 
+const SCOREBOARD_TERMINADO_ESTADOS = new Set(['terminado', 'finalizado']);
+
+const SCOREBOARD_SELECT = `
+  id,
+  estado,
+  sets_a,
+  sets_b,
+  games_a,
+  games_b,
+  score_a,
+  score_b,
+  historial_sets,
+  historial_puntos,
+  cronometro_segundos,
+  cronometro_inicio,
+  cronometro_pausado,
+  equipo_a_nombre,
+  equipo_b_nombre,
+  equipo_a_jugadores,
+  equipo_b_jugadores,
+  created_at,
+  updated_at
+`;
+
 export class MatchSummaryPayloadError extends Error {
   constructor(message, { status = 422, code = 'MATCH_SUMMARY_PAYLOAD_ERROR' } = {}) {
     super(message);
@@ -234,7 +258,150 @@ export function buildMatchSummaryDisclaimers(payload = {}) {
       payload?.confirmacion?.estado === 'confirmado'
         ? 'Marcador confirmado por ambos capitanes en Padbol Match.'
         : 'Marcador sujeto a confirmación de capitanes.',
+    datos_marcador: payload?.scoreboard_opcional
+      ? 'El resumen puede usar datos del marcador registrados en el tanteador Padbol Match.'
+      : 'No hay marcador vinculado registrado para este partido.',
   };
+}
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function parseJsonValue(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function computeDuracionAproximadaMinutos(cronometroSegundos) {
+  if (cronometroSegundos == null || cronometroSegundos === '') {
+    return null;
+  }
+
+  const seconds = Number(cronometroSegundos);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return null;
+  }
+
+  return Math.max(0, Math.round(seconds / 60));
+}
+
+export function pickBestScoreboardRow(rows = []) {
+  if (!rows.length) return null;
+
+  const sorted = [...rows].sort((a, b) => {
+    const aTerminado = SCOREBOARD_TERMINADO_ESTADOS.has(String(a.estado ?? '').toLowerCase()) ? 0 : 1;
+    const bTerminado = SCOREBOARD_TERMINADO_ESTADOS.has(String(b.estado ?? '').toLowerCase()) ? 0 : 1;
+    if (aTerminado !== bTerminado) return aTerminado - bTerminado;
+
+    const aUpdated = new Date(a.updated_at ?? 0).getTime();
+    const bUpdated = new Date(b.updated_at ?? 0).getTime();
+    if (aUpdated !== bUpdated) return bUpdated - aUpdated;
+
+    const aCreated = new Date(a.created_at ?? 0).getTime();
+    const bCreated = new Date(b.created_at ?? 0).getTime();
+    return bCreated - aCreated;
+  });
+
+  return sorted[0] ?? null;
+}
+
+async function fetchScoreboardRowsByLink(pgPool, column, value) {
+  if (value == null || value === '') return [];
+
+  const sqlByColumn = {
+    partido_abierto_id: `
+      SELECT ${SCOREBOARD_SELECT}
+      FROM scoreboard_partidos
+      WHERE partido_abierto_id = $1
+    `,
+    reserva_id: `
+      SELECT ${SCOREBOARD_SELECT}
+      FROM scoreboard_partidos
+      WHERE reserva_id = $1
+    `,
+  };
+
+  const sql = sqlByColumn[column];
+  if (!sql) return [];
+
+  const { rows } = await pgPool.query(sql, [value]);
+  return rows ?? [];
+}
+
+async function fetchHistorialPuntosCount(pgPool, scoreboardId) {
+  if (!scoreboardId) return 0;
+
+  const { rows } = await pgPool.query(
+    `SELECT COUNT(*)::int AS total
+     FROM scoreboard_historial_puntos
+     WHERE partido_id = $1`,
+    [scoreboardId],
+  );
+
+  return Number(rows?.[0]?.total) || 0;
+}
+
+export function buildScoreboardOpcional(scoreboardRow, historialPuntosCount = 0) {
+  if (!scoreboardRow) return null;
+
+  const historialPuntosJson = parseJsonArray(scoreboardRow.historial_puntos);
+  const duracionAproximadaMinutos = computeDuracionAproximadaMinutos(
+    scoreboardRow.cronometro_segundos,
+  );
+
+  return {
+    scoreboard_id: scoreboardRow.id,
+    estado: scoreboardRow.estado ?? null,
+    sets_a: Number(scoreboardRow.sets_a) || 0,
+    sets_b: Number(scoreboardRow.sets_b) || 0,
+    games_a: Number(scoreboardRow.games_a) || 0,
+    games_b: Number(scoreboardRow.games_b) || 0,
+    score_a: Number(scoreboardRow.score_a) || 0,
+    score_b: Number(scoreboardRow.score_b) || 0,
+    historial_sets: parseJsonArray(scoreboardRow.historial_sets),
+    historial_puntos_resumen: {
+      registros_tabla: historialPuntosCount,
+      snapshots_json: historialPuntosJson.length,
+    },
+    cronometro_segundos:
+      scoreboardRow.cronometro_segundos == null
+        ? null
+        : Number(scoreboardRow.cronometro_segundos) || 0,
+    duracion_aproximada_minutos: duracionAproximadaMinutos,
+    equipo_a_nombre: scoreboardRow.equipo_a_nombre ?? null,
+    equipo_b_nombre: scoreboardRow.equipo_b_nombre ?? null,
+    equipo_a_jugadores: parseJsonValue(scoreboardRow.equipo_a_jugadores) ?? [],
+    equipo_b_jugadores: parseJsonValue(scoreboardRow.equipo_b_jugadores) ?? [],
+  };
+}
+
+export async function fetchLinkedScoreboard(pgPool, { partidoId, reservaId }) {
+  const byPartido = await fetchScoreboardRowsByLink(pgPool, 'partido_abierto_id', partidoId);
+  const selectedByPartido = pickBestScoreboardRow(byPartido);
+  if (selectedByPartido) return selectedByPartido;
+
+  if (!reservaId) return null;
+
+  const byReserva = await fetchScoreboardRowsByLink(pgPool, 'reserva_id', reservaId);
+  return pickBestScoreboardRow(byReserva);
 }
 
 function buildEquipoJugador(row, perfil, capitanUserId) {
@@ -495,6 +662,17 @@ export async function buildMatchSummaryPayload({ partidoId, userId = null, pgPoo
 
   const xpOpcional = await fetchXpForPartido(pgPool, parsedPartidoId).catch(() => null);
 
+  const linkedScoreboard = await fetchLinkedScoreboard(pgPool, {
+    partidoId: parsedPartidoId,
+    reservaId: partido.reserva_id ?? null,
+  }).catch(() => null);
+
+  const historialPuntosCount = linkedScoreboard
+    ? await fetchHistorialPuntosCount(pgPool, linkedScoreboard.id).catch(() => 0)
+    : 0;
+
+  const scoreboardOpcional = buildScoreboardOpcional(linkedScoreboard, historialPuntosCount);
+
   const payload = {
     schema_version: MATCH_SUMMARY_PAYLOAD_VERSION,
     partido_id: parsedPartidoId,
@@ -521,7 +699,7 @@ export async function buildMatchSummaryPayload({ partidoId, userId = null, pgPoo
       capitanes_user_ids: capitanes.capitanes,
     },
     xp_opcional: xpOpcional,
-    scoreboard_opcional: null,
+    scoreboard_opcional: scoreboardOpcional,
     disclaimers: null,
   };
 
