@@ -1,3 +1,8 @@
+import {
+  resolveEquiposPartido,
+  sortJugadoresRowsForEquipos,
+} from './equiposService.js';
+
 export const MATCH_SUMMARY_PAYLOAD_VERSION = '1.0.0';
 
 const SCOREBOARD_TERMINADO_ESTADOS = new Set(['terminado', 'finalizado']);
@@ -251,9 +256,13 @@ export function buildMatchSummaryDisclaimers(payload = {}) {
     sin_jugadas_ni_estadisticas:
       'No incluye jugadas ni estadísticas no registradas.',
     equipos_derivados:
-      derivacion === 'joined_at_split'
-        ? 'Los equipos se armaron por orden de unión al partido; no hay asignación persistida.'
-        : 'Los equipos provienen de los datos disponibles del partido.',
+      derivacion === 'capitan_manual'
+        ? 'Los equipos fueron definidos por el capitán del partido.'
+        : derivacion === 'sorteo'
+          ? 'Los equipos se definieron por sorteo registrado en Padbol Match.'
+          : derivacion === 'joined_at_split'
+            ? 'Los equipos se armaron por orden de unión al partido; no hay asignación persistida.'
+            : 'Los equipos provienen de los datos disponibles del partido.',
     resultado_cargado_por_capitanes:
       payload?.confirmacion?.estado === 'confirmado'
         ? 'Marcador confirmado por ambos capitanes en Padbol Match.'
@@ -415,36 +424,6 @@ function buildEquipoJugador(row, perfil, capitanUserId) {
   };
 }
 
-function sortJugadoresRows(rows, capitanUserId, capitanEmail) {
-  const sorted = [...(rows ?? [])].sort(
-    (a, b) => new Date(a.joined_at ?? 0) - new Date(b.joined_at ?? 0),
-  );
-
-  if (
-    capitanUserId
-    && !sorted.some((row) => row.user_id && String(row.user_id) === String(capitanUserId))
-  ) {
-    sorted.unshift({
-      user_id: capitanUserId,
-      email: capitanEmail ?? null,
-      joined_at: null,
-    });
-  }
-
-  return sorted;
-}
-
-function resolveCapitanesFromRows(jugadoresRows, capitanUserId) {
-  const midpoint = Math.ceil(jugadoresRows.length / 2);
-  const capitanEquipo2 = jugadoresRows[midpoint]?.user_id ?? null;
-
-  return {
-    capitan1: capitanUserId ?? null,
-    capitan2: capitanEquipo2,
-    capitanes: [capitanUserId, capitanEquipo2].filter(Boolean),
-  };
-}
-
 async function fetchPartidoById(pgPool, partidoId) {
   const { rows } = await pgPool.query(
     `SELECT
@@ -464,6 +443,8 @@ async function fetchPartidoById(pgPool, partidoId) {
       pa.resultado,
       pa.resultado_json,
       pa.deporte,
+      pa.equipos_asignacion,
+      pa.jugadores_requeridos,
       s.nombre AS sede_nombre_join,
       s.ciudad AS sede_ciudad
     FROM partidos_abiertos pa
@@ -620,32 +601,51 @@ export async function buildMatchSummaryPayload({ partidoId, userId = null, pgPoo
   }
 
   const capitanUserId = partido.capitan_user_id ?? null;
-  const jugadoresRows = sortJugadoresRows(
+  const jugadoresRows = sortJugadoresRowsForEquipos(
     jugadoresRowsRaw,
     capitanUserId,
     partido.capitan_email ?? null,
   );
 
-  const capitanes = resolveCapitanesFromRows(jugadoresRows, capitanUserId);
+  const equiposResueltos = resolveEquiposPartido({
+    jugadoresRows,
+    capitanUserId,
+    capitanEmail: partido.capitan_email ?? null,
+    equiposAsignacion: partido.equipos_asignacion ?? null,
+    jugadoresRequeridos: partido.jugadores_requeridos ?? 4,
+  });
+
+  const capitanEquipo2 = equiposResueltos.equipo2Rows[0]?.user_id ?? null;
+  const capitanes = {
+    capitan1: capitanUserId ?? null,
+    capitan2: capitanEquipo2,
+    capitanes: [capitanUserId, capitanEquipo2].filter(Boolean),
+  };
+
   const perfilByUserId = await fetchPerfilesByUserIds(
     pgPool,
     jugadoresRows.map((row) => row.user_id).filter(Boolean),
   );
 
-  const jugadores = jugadoresRows.map((row) => {
+  const buildEquipoJugadores = (rows, capitanId) => rows.map((row) => {
     const perfil = row.user_id ? perfilByUserId[row.user_id] ?? null : null;
-    return buildEquipoJugador(row, perfil, capitanUserId);
+    const jugador = buildEquipoJugador(row, perfil, capitanUserId);
+    return {
+      ...jugador,
+      es_capitan:
+        String(jugador.user_id) === String(capitanUserId)
+        || String(jugador.user_id) === String(capitanId),
+    };
   });
 
-  const midpoint = Math.ceil(jugadores.length / 2);
-  const equipo1Jugadores = jugadores.slice(0, midpoint).map((j) => ({
-    ...j,
-    es_capitan: j.es_capitan || String(j.user_id) === String(capitanes.capitan1),
-  }));
-  const equipo2Jugadores = jugadores.slice(midpoint).map((j) => ({
-    ...j,
-    es_capitan: String(j.user_id) === String(capitanes.capitan2),
-  }));
+  const equipo1Jugadores = buildEquipoJugadores(
+    equiposResueltos.equipo1Rows,
+    capitanes.capitan1,
+  );
+  const equipo2Jugadores = buildEquipoJugadores(
+    equiposResueltos.equipo2Rows,
+    capitanes.capitan2,
+  );
 
   const resultado = normalizeMatchResult({
     resultado: partido.resultado,
@@ -688,7 +688,7 @@ export async function buildMatchSummaryPayload({ partidoId, userId = null, pgPoo
       reserva_id: partido.reserva_id ?? null,
     },
     equipos: {
-      derivacion: 'joined_at_split',
+      derivacion: equiposResueltos.derivacion,
       equipo1: { jugadores: equipo1Jugadores },
       equipo2: { jugadores: equipo2Jugadores },
     },

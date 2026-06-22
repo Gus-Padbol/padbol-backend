@@ -3,6 +3,11 @@ import { verificarLogrosArena } from '../arena/arenaLogrosService.js';
 import { actualizarRango } from '../rangos/rangosService.js';
 import { sendPushToUser } from '../../utils/push.js';
 import { createNotificacion } from '../../utils/notificaciones.js';
+import {
+  isEquiposAsignacionValida,
+  normalizeEquipoUserIds,
+  sortJugadoresRowsForEquipos,
+} from './equiposService.js';
 
 function parseResultadoBody(body) {
   const resultado = body?.resultado ?? body;
@@ -49,17 +54,40 @@ export function partidoTieneResultadoCargado(partido) {
 }
 
 export async function resolveCapitanesPartido(supabaseAdmin, partidoId, capitanUserId) {
+  const { data: partido, error: partidoErr } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select('equipos_asignacion, capitan_email')
+    .eq('id', partidoId)
+    .maybeSingle();
+
+  if (partidoErr) throw partidoErr;
+
   const { data: jugadores, error } = await supabaseAdmin
     .from('partidos_abiertos_jugadores')
-    .select('user_id, joined_at')
+    .select('user_id, email, joined_at')
     .eq('partido_id', partidoId)
     .order('joined_at', { ascending: true });
 
   if (error) throw error;
 
-  const rows = jugadores ?? [];
-  const midpoint = Math.ceil(rows.length / 2);
-  const capitanEquipo2 = rows[midpoint]?.user_id ?? null;
+  if (isEquiposAsignacionValida(partido?.equipos_asignacion)) {
+    const equipo2Ids = normalizeEquipoUserIds(partido.equipos_asignacion.equipo2);
+    const capitanEquipo2 = equipo2Ids[0] ?? null;
+
+    return {
+      capitan1: capitanUserId ?? null,
+      capitan2: capitanEquipo2,
+      capitanes: [capitanUserId, capitanEquipo2].filter(Boolean),
+    };
+  }
+
+  const sorted = sortJugadoresRowsForEquipos(
+    jugadores ?? [],
+    capitanUserId,
+    partido?.capitan_email ?? null,
+  );
+  const midpoint = Math.ceil(sorted.length / 2);
+  const capitanEquipo2 = sorted[midpoint]?.user_id ?? null;
 
   return {
     capitan1: capitanUserId ?? null,

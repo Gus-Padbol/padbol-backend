@@ -7,6 +7,11 @@ import {
   generateMatchSummaryForPartido,
 } from '../src/partidos/matchSummaryService.js';
 import { procesarResultadoPartidoCasual } from '../src/partidos/resultadoService.js';
+import {
+  EquiposPartidoError,
+  procesarDefinirEquiposPartido,
+  resolveEquiposPartido,
+} from '../src/partidos/equiposService.js';
 import { generarIniciosMinutosSlotReserva, generarIniciosSmartSlots, minutosAHoraReserva } from '../lib/reservaSlotsHorarios.js';
 import {
   normalizeHoraInicioReserva,
@@ -108,6 +113,7 @@ const PARTIDO_SELECT = `
   pago_url,
   ganador,
   resultado,
+  equipos_asignacion,
   deporte,
   created_at,
   sedes ( nombre, direccion, ciudad, pais ),
@@ -1263,24 +1269,34 @@ async function addJugadorToPartido(supabaseAdmin, partido, user, { triggerPaymen
 
 async function mapPartidoDetail(partido, supabaseAdmin, user) {
   const base = await mapPartidoRow(partido, supabaseAdmin, user);
-  const jugadoresRows = [...(partido.partidos_abiertos_jugadores ?? [])]
-    .sort((a, b) => new Date(a.joined_at ?? 0) - new Date(b.joined_at ?? 0));
+  const jugadoresRows = [...(partido.partidos_abiertos_jugadores ?? [])];
+  const capitanUserId = getCapitanUserId(partido);
 
-  const jugadores = await Promise.all(
-    jugadoresRows.map(async (row) => ({
-      user_id: row.user_id,
-      email: row.email ?? null,
-      nombre: await resolveJugadorName(row, supabaseAdmin),
-    })),
-  );
+  const equiposResueltos = resolveEquiposPartido({
+    jugadoresRows,
+    capitanUserId,
+    capitanEmail: getCapitanEmail(partido),
+    equiposAsignacion: partido.equipos_asignacion ?? null,
+    jugadoresRequeridos: getJugadoresRequeridos(partido),
+  });
 
-  const midpoint = Math.ceil(jugadores.length / 2);
+  const mapRow = async (row) => ({
+    user_id: row.user_id,
+    email: row.email ?? null,
+    nombre: await resolveJugadorName(row, supabaseAdmin),
+  });
+
+  const jugadores = await Promise.all(equiposResueltos.allRows.map(mapRow));
+  const equipo1 = await Promise.all(equiposResueltos.equipo1Rows.map(mapRow));
+  const equipo2 = await Promise.all(equiposResueltos.equipo2Rows.map(mapRow));
 
   return {
     ...base,
     jugadores,
-    equipo1: jugadores.slice(0, midpoint),
-    equipo2: jugadores.slice(midpoint),
+    equipo1,
+    equipo2,
+    equipos_derivacion: equiposResueltos.derivacion,
+    equipos_asignacion: equiposResueltos.equipos_asignacion ?? partido.equipos_asignacion ?? null,
   };
 }
 
@@ -2859,6 +2875,39 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error POST /api/partidos:', err.message);
+      return sendHttpError(res, err);
+    }
+  });
+
+  router.put('/:id/equipos', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const result = await procesarDefinirEquiposPartido({
+        supabaseAdmin,
+        partidoId,
+        user,
+        body: req.body,
+      });
+
+      console.log(`✓ PUT /api/partidos/${partidoId}/equipos — ${req.body?.modo ?? 'ok'}`);
+      res.status(result.status).json(result.body);
+    } catch (err) {
+      if (err instanceof EquiposPartidoError) {
+        return res.status(err.status ?? 400).json({
+          error: err.message,
+          code: err.code ?? null,
+        });
+      }
+      console.error('❌ Error PUT /api/partidos/:id/equipos:', err.message);
       return sendHttpError(res, err);
     }
   });
