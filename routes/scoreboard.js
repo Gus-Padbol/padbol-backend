@@ -46,8 +46,37 @@ function parseSedeId(raw) {
   return Number.isFinite(sid) && sid > 0 ? sid : null;
 }
 
+export function parseOptionalScoreboardLinkId(raw, label) {
+  if (raw == null || raw === '') return null;
+
+  const parsed = parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw Object.assign(new Error(`${label} inválido`), { status: 400 });
+  }
+
+  return parsed;
+}
+
+export function pickScoreboardPartidoLinks(body = {}) {
+  const out = {};
+
+  if (Object.prototype.hasOwnProperty.call(body, 'partido_abierto_id')) {
+    out.partido_abierto_id = parseOptionalScoreboardLinkId(
+      body.partido_abierto_id,
+      'partido_abierto_id',
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, 'reserva_id')) {
+    out.reserva_id = parseOptionalScoreboardLinkId(body.reserva_id, 'reserva_id');
+  }
+
+  return out;
+}
+
 const SCOREBOARD_PARTIDO_SELECT = [
   'id', 'sede_id', 'torneo_id', 'torneo_nombre', 'cancha',
+  'partido_abierto_id', 'reserva_id',
   'equipo_a_nombre', 'equipo_b_nombre', 'equipo_a_jugadores', 'equipo_b_jugadores',
   'jersey_a1', 'jersey_a2', 'jersey_a3', 'jersey_a4',
   'jersey_b1', 'jersey_b2', 'jersey_b3', 'jersey_b4',
@@ -274,6 +303,7 @@ export function mountScoreboardRoutes(app, {
         torneo_id: torneo_id || null,
         torneo_nombre: torneo_nombre ? String(torneo_nombre).trim() : null,
         cancha,
+        ...pickScoreboardPartidoLinks(req.body),
         equipo_a_nombre: String(equipo_a_nombre).trim(),
         equipo_b_nombre: String(equipo_b_nombre).trim(),
         equipo_a_jugadores: jugadoresA.map((j, idx) => ({
