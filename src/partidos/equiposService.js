@@ -4,6 +4,9 @@ export const EQUIPOS_DERIVACION = {
   JOINED_AT_SPLIT: 'joined_at_split',
 };
 
+export const DEFAULT_EQUIPO1_NOMBRE = 'Equipo 1';
+export const DEFAULT_EQUIPO2_NOMBRE = 'Equipo 2';
+
 export const EQUIPOS_PARTIDO_ESTADOS_PERMITIDOS = new Set(['abierto', 'completo']);
 export const EQUIPOS_PARTIDO_ESTADOS_BLOQUEADOS = new Set(['finalizado', 'en_disputa', 'cancelado']);
 
@@ -39,6 +42,42 @@ function splitBalancedUserIds(userIds) {
   return {
     equipo1: userIds.slice(0, midpoint),
     equipo2: userIds.slice(midpoint),
+  };
+}
+
+export function sanitizeEquipoNombre(value, fallback = DEFAULT_EQUIPO1_NOMBRE) {
+  if (value == null || typeof value !== 'string') return fallback;
+  const cleaned = value.replace(/[\n\r\t<>]/g, '').trim();
+  return cleaned.slice(0, 80) || fallback;
+}
+
+export function resolveEquipoNombres(equiposAsignacion) {
+  return {
+    equipo1_nombre: sanitizeEquipoNombre(
+      equiposAsignacion?.equipo1_nombre,
+      DEFAULT_EQUIPO1_NOMBRE,
+    ),
+    equipo2_nombre: sanitizeEquipoNombre(
+      equiposAsignacion?.equipo2_nombre,
+      DEFAULT_EQUIPO2_NOMBRE,
+    ),
+  };
+}
+
+function applyEquipoNombresToAsignacion(
+  asignacion,
+  { equipo1Nombre = undefined, equipo2Nombre = undefined } = {},
+) {
+  const nombres = resolveEquipoNombres({
+    ...asignacion,
+    ...(equipo1Nombre !== undefined ? { equipo1_nombre: equipo1Nombre } : {}),
+    ...(equipo2Nombre !== undefined ? { equipo2_nombre: equipo2Nombre } : {}),
+  });
+
+  return {
+    ...asignacion,
+    equipo1_nombre: nombres.equipo1_nombre,
+    equipo2_nombre: nombres.equipo2_nombre,
   };
 }
 
@@ -109,6 +148,8 @@ export function buildManualEquiposAsignacion({
   capitanUserId,
   participantUserIds,
   jugadoresRequeridos = 4,
+  equipo1Nombre,
+  equipo2Nombre,
   definidoAt = new Date().toISOString(),
 }) {
   const validation = validateEquiposAsignacion({
@@ -126,14 +167,14 @@ export function buildManualEquiposAsignacion({
     throw new EquiposPartidoError('Capitán inválido', { status: 400, code: 'CAPITAN_INVALIDO' });
   }
 
-  return {
+  return applyEquipoNombresToAsignacion({
     modo: 'manual',
     equipo1: validation.equipo1,
     equipo2: validation.equipo2,
     definido_por: String(capitanUserId),
     definido_at: definidoAt,
     bloqueado: true,
-  };
+  }, { equipo1Nombre, equipo2Nombre });
 }
 
 export function buildSorteoEquiposAsignacion({
@@ -141,6 +182,8 @@ export function buildSorteoEquiposAsignacion({
   capitanUserId,
   jugadoresRequeridos = 4,
   randomFn = Math.random,
+  equipo1Nombre,
+  equipo2Nombre,
   definidoAt = new Date().toISOString(),
 }) {
   const participants = normalizeEquipoUserIds(participantUserIds);
@@ -166,14 +209,14 @@ export function buildSorteoEquiposAsignacion({
     throw new EquiposPartidoError(validation.error, { code: 'EQUIPOS_SORTEO_INVALIDO' });
   }
 
-  return {
+  return applyEquipoNombresToAsignacion({
     modo: 'sorteo',
     equipo1: validation.equipo1,
     equipo2: validation.equipo2,
     definido_por: String(capitanUserId),
     definido_at: definidoAt,
     bloqueado: true,
-  };
+  }, { equipo1Nombre, equipo2Nombre });
 }
 
 export function sortJugadoresRowsForEquipos(rows, capitanUserId, capitanEmail) {
@@ -271,6 +314,35 @@ export function resolveCapitan2FromEquiposResueltos(resolved, capitanUserId) {
   return null;
 }
 
+export function assertPuedeEditarNombresEquipos(partido) {
+  if (!partido) {
+    throw new EquiposPartidoError('Partido no encontrado', { status: 404, code: 'PARTIDO_NOT_FOUND' });
+  }
+
+  const estado = String(partido.estado ?? '').toLowerCase();
+
+  if (estado === 'finalizado') {
+    throw new EquiposPartidoError(
+      'No se pueden editar nombres de equipos en un partido finalizado',
+      { status: 409, code: 'PARTIDO_FINALIZADO' },
+    );
+  }
+
+  if (EQUIPOS_PARTIDO_ESTADOS_BLOQUEADOS.has(estado)) {
+    throw new EquiposPartidoError(
+      'No se pueden editar nombres de equipos en el estado actual del partido',
+      { status: 409, code: 'PARTIDO_ESTADO_NO_PERMITIDO' },
+    );
+  }
+
+  if (!isEquiposAsignacionValida(partido.equipos_asignacion)) {
+    throw new EquiposPartidoError(
+      'Primero debés definir los equipos',
+      { status: 409, code: 'EQUIPOS_NO_DEFINIDOS' },
+    );
+  }
+}
+
 export function assertPuedeDefinirEquipos(partido) {
   if (!partido) {
     throw new EquiposPartidoError('Partido no encontrado', { status: 404, code: 'PARTIDO_NOT_FOUND' });
@@ -293,7 +365,7 @@ export function assertPuedeDefinirEquipos(partido) {
   }
 }
 
-export async function hasActiveScoreboardForPartido(supabaseAdmin, partidoId) {
+export async function fetchActiveScoreboardForPartido(supabaseAdmin, partidoId) {
   const { data, error } = await supabaseAdmin
     .from('scoreboard_partidos')
     .select('id, estado')
@@ -302,7 +374,31 @@ export async function hasActiveScoreboardForPartido(supabaseAdmin, partidoId) {
     .limit(1);
 
   if (error) throw error;
-  return Boolean(data?.length);
+  return data?.[0] ?? null;
+}
+
+export async function hasActiveScoreboardForPartido(supabaseAdmin, partidoId) {
+  const row = await fetchActiveScoreboardForPartido(supabaseAdmin, partidoId);
+  return Boolean(row);
+}
+
+async function syncScoreboardEquiposNombres(
+  supabaseAdmin,
+  partidoId,
+  { equipo1Nombre, equipo2Nombre },
+) {
+  const scoreboard = await fetchActiveScoreboardForPartido(supabaseAdmin, partidoId);
+  if (!scoreboard) return;
+
+  const { error } = await supabaseAdmin
+    .from('scoreboard_partidos')
+    .update({
+      equipo_a_nombre: equipo1Nombre,
+      equipo_b_nombre: equipo2Nombre,
+    })
+    .eq('id', scoreboard.id);
+
+  if (error) throw error;
 }
 
 async function fetchParticipantUserIds(supabaseAdmin, partidoId, capitanUserId) {
@@ -322,9 +418,118 @@ async function fetchParticipantUserIds(supabaseAdmin, partidoId, capitanUserId) 
   return [...new Set(ids)];
 }
 
+async function buildEquiposPartidoResponse({
+  supabaseAdmin,
+  partidoId,
+  partido,
+  updated,
+}) {
+  const capitanUserId = updated.capitan_user_id ?? partido.capitan_user_id ?? null;
+
+  const { data: jugadoresRows, error: jugadoresErr } = await supabaseAdmin
+    .from('partidos_abiertos_jugadores')
+    .select('user_id, email, joined_at')
+    .eq('partido_id', partidoId)
+    .order('joined_at', { ascending: true });
+
+  if (jugadoresErr) throw jugadoresErr;
+
+  const resolved = resolveEquiposPartido({
+    jugadoresRows: jugadoresRows ?? [],
+    capitanUserId,
+    capitanEmail: updated.capitan_email ?? partido.capitan_email ?? null,
+    equiposAsignacion: updated.equipos_asignacion,
+    jugadoresRequeridos: updated.jugadores_requeridos ?? partido.jugadores_requeridos ?? 4,
+  });
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      equipos_asignacion: updated.equipos_asignacion,
+      equipos_derivacion: resolved.derivacion,
+      equipo1: resolved.equipo1Rows.map((row) => ({
+        user_id: row.user_id,
+        email: row.email ?? null,
+      })),
+      equipo2: resolved.equipo2Rows.map((row) => ({
+        user_id: row.user_id,
+        email: row.email ?? null,
+      })),
+    },
+  };
+}
+
+function assertCapitanEquipos(partido, user) {
+  const capitanUserId = partido.capitan_user_id ?? null;
+  if (!capitanUserId || String(capitanUserId) !== String(user.id)) {
+    throw new EquiposPartidoError('Solo el capitán puede definir equipos', {
+      status: 403,
+      code: 'EQUIPOS_SOLO_CAPITAN',
+    });
+  }
+  return capitanUserId;
+}
+
 /**
  * PUT /api/partidos/:id/equipos
  */
+export async function procesarActualizarNombresEquiposPartido({
+  supabaseAdmin,
+  partidoId,
+  user,
+  body,
+}) {
+  const { data: partido, error: fetchErr } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select('id, capitan_user_id, capitan_email, estado, jugadores_requeridos, equipos_asignacion')
+    .eq('id', partidoId)
+    .maybeSingle();
+
+  if (fetchErr) throw fetchErr;
+  assertPuedeEditarNombresEquipos(partido);
+  assertCapitanEquipos(partido, user);
+
+  const equipo1NombreProvided = body?.equipo1_nombre != null;
+  const equipo2NombreProvided = body?.equipo2_nombre != null;
+
+  if (!equipo1NombreProvided && !equipo2NombreProvided) {
+    throw new EquiposPartidoError(
+      'Debés enviar al menos equipo1_nombre o equipo2_nombre',
+      { code: 'EQUIPOS_NOMBRES_REQUERIDOS' },
+    );
+  }
+
+  const equiposAsignacion = applyEquipoNombresToAsignacion(partido.equipos_asignacion, {
+    ...(equipo1NombreProvided ? { equipo1Nombre: body.equipo1_nombre } : {}),
+    ...(equipo2NombreProvided ? { equipo2Nombre: body.equipo2_nombre } : {}),
+  });
+
+  const { data: updated, error: updateErr } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .update({ equipos_asignacion: equiposAsignacion })
+    .eq('id', partidoId)
+    .select('id, capitan_user_id, capitan_email, equipos_asignacion, jugadores_requeridos')
+    .maybeSingle();
+
+  if (updateErr) throw updateErr;
+  if (!updated) {
+    throw new EquiposPartidoError('Partido no encontrado', { status: 404, code: 'PARTIDO_NOT_FOUND' });
+  }
+
+  await syncScoreboardEquiposNombres(supabaseAdmin, partidoId, {
+    equipo1Nombre: equiposAsignacion.equipo1_nombre,
+    equipo2Nombre: equiposAsignacion.equipo2_nombre,
+  });
+
+  return buildEquiposPartidoResponse({
+    supabaseAdmin,
+    partidoId,
+    partido,
+    updated,
+  });
+}
+
 export async function procesarDefinirEquiposPartido({
   supabaseAdmin,
   partidoId,
@@ -332,6 +537,19 @@ export async function procesarDefinirEquiposPartido({
   body,
   randomFn = Math.random,
 }) {
+  const modoRaw = body?.modo;
+  const hasModo = modoRaw != null && String(modoRaw).trim() !== '';
+  const hasNombreFields = body?.equipo1_nombre != null || body?.equipo2_nombre != null;
+
+  if (!hasModo && hasNombreFields) {
+    return procesarActualizarNombresEquiposPartido({
+      supabaseAdmin,
+      partidoId,
+      user,
+      body,
+    });
+  }
+
   const { data: partido, error: fetchErr } = await supabaseAdmin
     .from('partidos_abiertos')
     .select('id, capitan_user_id, capitan_email, estado, jugadores_requeridos, equipos_asignacion')
@@ -341,13 +559,7 @@ export async function procesarDefinirEquiposPartido({
   if (fetchErr) throw fetchErr;
   assertPuedeDefinirEquipos(partido);
 
-  const capitanUserId = partido.capitan_user_id ?? null;
-  if (!capitanUserId || String(capitanUserId) !== String(user.id)) {
-    throw new EquiposPartidoError('Solo el capitán puede definir equipos', {
-      status: 403,
-      code: 'EQUIPOS_SOLO_CAPITAN',
-    });
-  }
+  const capitanUserId = assertCapitanEquipos(partido, user);
 
   if (await hasActiveScoreboardForPartido(supabaseAdmin, partidoId)) {
     throw new EquiposPartidoError(
@@ -362,7 +574,7 @@ export async function procesarDefinirEquiposPartido({
     capitanUserId,
   );
 
-  const modo = String(body?.modo ?? '').trim().toLowerCase();
+  const modo = String(modoRaw ?? '').trim().toLowerCase();
   let equiposAsignacion;
 
   if (modo === 'manual') {
@@ -372,6 +584,8 @@ export async function procesarDefinirEquiposPartido({
       capitanUserId,
       participantUserIds,
       jugadoresRequeridos: partido.jugadores_requeridos ?? 4,
+      equipo1Nombre: body?.equipo1_nombre,
+      equipo2Nombre: body?.equipo2_nombre,
     });
   } else if (modo === 'sorteo') {
     equiposAsignacion = buildSorteoEquiposAsignacion({
@@ -379,6 +593,8 @@ export async function procesarDefinirEquiposPartido({
       capitanUserId,
       jugadoresRequeridos: partido.jugadores_requeridos ?? 4,
       randomFn,
+      equipo1Nombre: body?.equipo1_nombre,
+      equipo2Nombre: body?.equipo2_nombre,
     });
   } else {
     throw new EquiposPartidoError('modo debe ser "manual" o "sorteo"', {
@@ -398,36 +614,10 @@ export async function procesarDefinirEquiposPartido({
     throw new EquiposPartidoError('Partido no encontrado', { status: 404, code: 'PARTIDO_NOT_FOUND' });
   }
 
-  const { data: jugadoresRows, error: jugadoresErr } = await supabaseAdmin
-    .from('partidos_abiertos_jugadores')
-    .select('user_id, email, joined_at')
-    .eq('partido_id', partidoId)
-    .order('joined_at', { ascending: true });
-
-  if (jugadoresErr) throw jugadoresErr;
-
-  const resolved = resolveEquiposPartido({
-    jugadoresRows: jugadoresRows ?? [],
-    capitanUserId,
-    capitanEmail: partido.capitan_email ?? null,
-    equiposAsignacion: updated.equipos_asignacion,
-    jugadoresRequeridos: updated.jugadores_requeridos ?? 4,
+  return buildEquiposPartidoResponse({
+    supabaseAdmin,
+    partidoId,
+    partido,
+    updated,
   });
-
-  return {
-    status: 200,
-    body: {
-      success: true,
-      equipos_asignacion: updated.equipos_asignacion,
-      equipos_derivacion: resolved.derivacion,
-      equipo1: resolved.equipo1Rows.map((row) => ({
-        user_id: row.user_id,
-        email: row.email ?? null,
-      })),
-      equipo2: resolved.equipo2Rows.map((row) => ({
-        user_id: row.user_id,
-        email: row.email ?? null,
-      })),
-    },
-  };
 }

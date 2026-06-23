@@ -1,7 +1,9 @@
 import {
   resolveEquiposPartido,
+  resolveEquipoNombres,
   sortJugadoresRowsForEquipos,
 } from './equiposService.js';
+import { buildMatchSummaryDeterministicAnalysis } from './matchSummaryDeterministicAnalysis.js';
 
 export const MATCH_SUMMARY_PAYLOAD_VERSION = '1.0.0';
 
@@ -305,11 +307,11 @@ export function computeDuracionAproximadaMinutos(cronometroSegundos) {
   }
 
   const seconds = Number(cronometroSegundos);
-  if (!Number.isFinite(seconds) || seconds < 0) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
     return null;
   }
 
-  return Math.max(0, Math.round(seconds / 60));
+  return Math.max(1, Math.round(seconds / 60));
 }
 
 export function pickBestScoreboardRow(rows = []) {
@@ -673,6 +675,8 @@ export async function buildMatchSummaryPayload({ partidoId, userId = null, pgPoo
 
   const scoreboardOpcional = buildScoreboardOpcional(linkedScoreboard, historialPuntosCount);
 
+  const equipoNombres = resolveEquipoNombres(partido.equipos_asignacion);
+
   const payload = {
     schema_version: MATCH_SUMMARY_PAYLOAD_VERSION,
     partido_id: parsedPartidoId,
@@ -689,8 +693,8 @@ export async function buildMatchSummaryPayload({ partidoId, userId = null, pgPoo
     },
     equipos: {
       derivacion: equiposResueltos.derivacion,
-      equipo1: { jugadores: equipo1Jugadores },
-      equipo2: { jugadores: equipo2Jugadores },
+      equipo1: { nombre: equipoNombres.equipo1_nombre, jugadores: equipo1Jugadores },
+      equipo2: { nombre: equipoNombres.equipo2_nombre, jugadores: equipo2Jugadores },
     },
     resultado,
     confirmacion: {
@@ -704,6 +708,7 @@ export async function buildMatchSummaryPayload({ partidoId, userId = null, pgPoo
   };
 
   payload.disclaimers = buildMatchSummaryDisclaimers(payload);
+  payload.analisis_previo = buildMatchSummaryDeterministicAnalysis(payload);
 
   return payload;
 }
