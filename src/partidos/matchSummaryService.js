@@ -172,7 +172,7 @@ export async function generateMatchSummaryForPartido({
     });
   }
 
-  const parsed = parseAiSummaryResponse(aiReply);
+  const parsed = parseAiSummaryResponse(aiReply, payload);
   let aiResponse = parsed.valid ? parsed.response : null;
 
   if (!aiResponse) {

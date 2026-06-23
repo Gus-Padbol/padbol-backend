@@ -3,13 +3,48 @@ const MESES_ES = [
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
 ];
 
-const DEFAULT_EQUIPO1_NOMBRE = 'Equipo 1';
-const DEFAULT_EQUIPO2_NOMBRE = 'Equipo 2';
+export const DEFAULT_EQUIPO1_NOMBRE = 'Equipo 1';
+export const DEFAULT_EQUIPO2_NOMBRE = 'Equipo 2';
+
+function isDefaultEquipoNombre(nombre, defaultName) {
+  if (!nombre || typeof nombre !== 'string') return true;
+  return String(nombre).trim() === defaultName;
+}
+
+function mapJugadores(equipo) {
+  return (equipo?.jugadores ?? [])
+    .map((jugador) => {
+      const name = jugador?.nombre_display;
+      if (!name || typeof name !== 'string') return null;
+      const cleaned = name.trim();
+      if (!cleaned || cleaned.includes('@')) return null;
+      return cleaned;
+    })
+    .filter(Boolean);
+}
+
+export function formatEquipoPorJugadores(jugadores = []) {
+  const names = jugadores.filter(Boolean);
+  if (names.length === 0) return null;
+  if (names.length === 1) return `el equipo formado por ${names[0]}`;
+  if (names.length === 2) return `el equipo formado por ${names[0]} y ${names[1]}`;
+  return `el equipo formado por ${names.slice(0, -1).join(', ')} y ${names[names.length - 1]}`;
+}
+
+export function resolveEquipoDisplayName(equipo, defaultName) {
+  const customNombre = equipo?.nombre;
+  if (!isDefaultEquipoNombre(customNombre, defaultName)) {
+    return String(customNombre).trim();
+  }
+
+  const porJugadores = formatEquipoPorJugadores(mapJugadores(equipo));
+  return porJugadores ?? defaultName;
+}
 
 function resolveEquipoLabels(payload) {
   return {
-    equipo1: payload?.equipos?.equipo1?.nombre ?? DEFAULT_EQUIPO1_NOMBRE,
-    equipo2: payload?.equipos?.equipo2?.nombre ?? DEFAULT_EQUIPO2_NOMBRE,
+    equipo1: resolveEquipoDisplayName(payload?.equipos?.equipo1, DEFAULT_EQUIPO1_NOMBRE),
+    equipo2: resolveEquipoDisplayName(payload?.equipos?.equipo2, DEFAULT_EQUIPO2_NOMBRE),
   };
 }
 
@@ -59,6 +94,10 @@ function gamesDifference(set) {
   return Math.abs(set.eq1 - set.eq2);
 }
 
+function sumTotalGames(setsDetalle) {
+  return setsDetalle.reduce((total, set) => total + set.eq1 + set.eq2, 0);
+}
+
 export function formatFechaEspanol(fecha) {
   if (!fecha) return null;
 
@@ -88,10 +127,30 @@ function resolveDuracionMinutos(payload) {
   return Math.max(1, Math.round(seconds / 60));
 }
 
-function mapJugadores(equipo) {
-  return (equipo?.jugadores ?? [])
-    .map((jugador) => jugador?.nombre_display)
-    .filter(Boolean);
+function resolvePlantillaFallback({
+  fue2_0,
+  fue2_1,
+  tercerSetDecisivo,
+  perdedorReaccionoSegundoSet,
+  ganadorCerroFuerteUltimoSet,
+  partidoAjustado,
+  dominioClaro2_0,
+}) {
+  if (fue2_0) {
+    return dominioClaro2_0 ? '2_0_claro' : '2_0_solido';
+  }
+
+  if (fue2_1 && tercerSetDecisivo) {
+    if (ganadorCerroFuerteUltimoSet && !partidoAjustado) {
+      return '2_1_cierre_fuerte';
+    }
+    if (perdedorReaccionoSegundoSet && partidoAjustado) {
+      return '2_1_ajustado';
+    }
+    return ganadorCerroFuerteUltimoSet ? '2_1_cierre_fuerte' : '2_1_ajustado';
+  }
+
+  return 'sets_generico';
 }
 
 function analyzeSetsMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
@@ -148,6 +207,25 @@ function analyzeSetsMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
   });
 
   const partidoCambiante = fue2_1 && perdedorReaccionoSegundoSet;
+  const partidoAjustado = Boolean(
+    setMasParejo?.diferencia_games != null && setMasParejo.diferencia_games <= 2,
+  ) || Math.abs(diferenciaTotalGames) <= 3;
+  const partidoParejo = Math.abs(diferenciaTotalGames) <= 3 || partidoAjustado;
+  const dominioClaro2_0 = Boolean(
+    fue2_0
+    && setsDetalle.length >= 2
+    && setsDetalle.every((set) => ganadorGanoSet(ganadorKey, set) && gamesDifference(set) >= 2),
+  );
+
+  const plantillaFallback = resolvePlantillaFallback({
+    fue2_0,
+    fue2_1,
+    tercerSetDecisivo,
+    perdedorReaccionoSegundoSet,
+    ganadorCerroFuerteUltimoSet,
+    partidoAjustado,
+    dominioClaro2_0,
+  });
 
   return {
     formato: 'sets',
@@ -168,19 +246,28 @@ function analyzeSetsMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
     parciales: setsDetalle.map(formatSetScore),
     parciales_texto: formatParcialesList(setsDetalle),
     sets_detalle: setsDetalle,
+    total_games: sumTotalGames(setsDetalle),
     fue_2_0: fue2_0,
     fue_2_1: fue2_1,
     tercer_set_decisivo: tercerSetDecisivo,
     perdedor_reacciono_segundo_set: perdedorReaccionoSegundoSet,
     ganador_cerro_fuerte_ultimo_set: ganadorCerroFuerteUltimoSet,
+    partido_ajustado: partidoAjustado,
+    partido_parejo: partidoParejo,
+    dominio_claro_2_0: dominioClaro2_0,
     set_mas_parejo: setMasParejo,
     set_mas_dominante: setMasDominante,
     diferencia_total_games: diferenciaTotalGames,
+    plantilla_fallback: plantillaFallback,
     frases_sugeridas: {
+      partido_ajustado: partidoAjustado,
+      partido_parejo: partidoParejo,
       partido_cambiante: partidoCambiante,
       definido_en_tercer_set: tercerSetDecisivo,
       reaccion_segundo_parcial: perdedorReaccionoSegundoSet,
       cierre_con_autoridad: ganadorCerroFuerteUltimoSet,
+      dominio_claro: dominioClaro2_0,
+      buen_nivel_perdedor: partidoParejo,
     },
     formatSetScoreForTeam,
   };
@@ -210,14 +297,22 @@ function analyzePuntosMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
     tercer_set_decisivo: false,
     perdedor_reacciono_segundo_set: false,
     ganador_cerro_fuerte_ultimo_set: false,
+    partido_ajustado: false,
+    partido_parejo: false,
+    dominio_claro_2_0: false,
     set_mas_parejo: null,
     set_mas_dominante: null,
     diferencia_total_games: null,
+    plantilla_fallback: 'puntos_agregados',
     frases_sugeridas: {
+      partido_ajustado: false,
+      partido_parejo: false,
       partido_cambiante: false,
       definido_en_tercer_set: false,
       reaccion_segundo_parcial: false,
       cierre_con_autoridad: false,
+      dominio_claro: false,
+      buen_nivel_perdedor: false,
     },
     formatSetScoreForTeam,
   };
@@ -261,11 +356,16 @@ export function buildMatchSummaryDeterministicAnalysis(payload = {}) {
       resultado_final_sets: null,
       parciales: [],
       parciales_texto: null,
+      plantilla_fallback: 'insuficiente',
       frases_sugeridas: {
+        partido_ajustado: false,
+        partido_parejo: false,
         partido_cambiante: false,
         definido_en_tercer_set: false,
         reaccion_segundo_parcial: false,
         cierre_con_autoridad: false,
+        dominio_claro: false,
+        buen_nivel_perdedor: false,
       },
     };
   }

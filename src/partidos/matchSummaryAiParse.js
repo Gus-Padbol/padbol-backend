@@ -9,10 +9,26 @@ import {
   resolveEquipoLabels,
 } from './matchSummaryDeterministicAnalysis.js';
 
-const ORDINAL_SET_LABELS = ['primer', 'segundo', 'tercer', 'cuarto', 'quinto'];
+const EMAIL_RE = /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/i;
 
-function buildLocationSuffix(analisis) {
-  return analisis?.sede ? ` en ${analisis.sede}` : '';
+const FRASES_RESPALDADAS = [
+  { pattern: /partido cambiante/i, flag: 'partido_cambiante' },
+  { pattern: /partido ajustado|muy disputado|muy parejo|duelo fue cambiante/i, flag: 'partido_ajustado' },
+  { pattern: /reaccionó en el segundo/i, flag: 'reaccion_segundo_parcial' },
+  { pattern: /(dominó|de principio a fin|sin ceder sets|actuación sólida)/i, flag: 'dominio_claro', requires2_0: true },
+  { pattern: /(cerró mejor|cerró con autoridad|mostró mayor firmeza)/i, flag: 'cierre_con_autoridad' },
+  { pattern: /(compitió a buen nivel|compitió a gran nivel|sostuvo un nivel)/i, flag: 'buen_nivel_perdedor' },
+  { pattern: /tercer set/i, flag: 'definido_en_tercer_set' },
+];
+
+function stablePickVariant(seed, count) {
+  let hash = 0;
+  const str = String(seed ?? '0');
+  for (let i = 0; i < str.length; i += 1) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash) % Math.max(1, count);
 }
 
 function buildFechaSuffix(analisis) {
@@ -21,39 +37,83 @@ function buildFechaSuffix(analisis) {
   return ` Partido disputado el ${analisis.fecha_espanol}.`;
 }
 
-function buildSetsSummaryText(payload, analisis) {
-  const ganadorKey = analisis?.ganador?.key ?? payload?.resultado?.ganador ?? null;
-  const ganadorLabel = analisis?.ganador?.nombre ?? 'El ganador';
-  const perdedorLabel = analisis?.perdedor?.nombre ?? 'su rival';
-  const setsDetalle = analisis?.sets_detalle ?? [];
-  const resultadoSets = analisis?.resultado_final_sets;
-
-  if (!ganadorKey || !resultadoSets) {
-    return 'Partido finalizado con resultado confirmado.';
+function buildParejoSuffix(analisis) {
+  if (!analisis?.partido_parejo && !analisis?.frases_sugeridas?.buen_nivel_perdedor) {
+    return '';
   }
 
-  let summary = `${ganadorLabel} venció a ${perdedorLabel} por ${resultadoSets.texto_sets}${buildLocationSuffix(analisis)}.`;
+  return ` ${analisis.perdedor.nombre} compitió a buen nivel y exigió hasta el cierre, pero ${analisis.ganador.nombre} fue más efectivo en los momentos decisivos.`;
+}
 
-  if (analisis.fue_2_1 && setsDetalle.length >= 3 && analisis.perdedor_reacciono_segundo_set) {
-    const s1 = setsDetalle[0];
-    const s2 = setsDetalle[1];
-    const s3 = setsDetalle[2];
+function buildDuracionSuffix(analisis) {
+  if (!(analisis?.duracion_minutos > 0)) return '';
+  return ` Duración aproximada: ${analisis.duracion_minutos} minutos.`;
+}
 
-    summary += ` Fue un partido cambiante: ${ganadorLabel} se llevó el primer set ${formatSetScoreForTeam(ganadorKey, s1)}, ${perdedorLabel} reaccionó en el segundo ${formatSetScoreForTeam(analisis.perdedor.key, s2)} y forzó la definición, pero ${ganadorLabel} recuperó el control en el tercero para cerrarlo ${formatSetScoreForTeam(ganadorKey, s3)}.`;
-  } else if (analisis.fue_2_0 && setsDetalle.length >= 2) {
-    const s1 = setsDetalle[0];
-    const s2 = setsDetalle[1];
-    summary += ` ${ganadorLabel} dominó el encuentro con parciales ${formatSetScoreForTeam(ganadorKey, s1)} y ${formatSetScoreForTeam(ganadorKey, s2)}.`;
-  } else if (setsDetalle.length === 1) {
-    summary += ` El partido se definió en un solo set (${formatSetScoreForTeam(ganadorKey, setsDetalle[0])}).`;
-  } else if (analisis.parciales_texto) {
-    summary += ` Parciales: ${analisis.parciales_texto}.`;
+function formatTeamReference(name, preposition = 'a') {
+  const value = String(name ?? '').trim();
+  if (!value) return preposition === 'a' ? 'a su rival' : value;
+  if (preposition === 'a' && value.startsWith('el ')) {
+    return `al ${value.slice(4)}`;
+  }
+  return `${preposition} ${value}`;
+}
+
+function buildTemplateContext(analisis) {
+  const setsDetalle = analisis.sets_detalle ?? [];
+  const ganadorKey = analisis.ganador.key;
+  const perdedorKey = analisis.perdedor.key;
+
+  return {
+    ganador: analisis.ganador.nombre,
+    perdedor: analisis.perdedor.nombre,
+    perdedorRef: formatTeamReference(analisis.perdedor.nombre, 'a'),
+    sede: analisis.sede,
+    location: analisis.sede ? ` en ${analisis.sede}` : '',
+    textoSets: analisis.resultado_final_sets.texto_sets,
+    parciales: analisis.parciales_texto,
+    set1: setsDetalle[0] ? formatSetScoreForTeam(ganadorKey, setsDetalle[0]) : null,
+    set2: setsDetalle[1] ? formatSetScoreForTeam(perdedorKey, setsDetalle[1]) : null,
+    set3: setsDetalle[2] ? formatSetScoreForTeam(ganadorKey, setsDetalle[2]) : null,
+  };
+}
+
+function buildSetsSummaryFromTemplates(payload, analisis) {
+  const ctx = buildTemplateContext(analisis);
+  const seed = payload?.partido_id ?? payload?.contexto?.fecha ?? '0';
+  let summary = '';
+
+  if (analisis.plantilla_fallback === '2_1_ajustado') {
+    const variants = [
+      `${ctx.ganador} se impuso ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}, en un partido cambiante y muy disputado. ${ctx.ganador} arrancó mejor y se llevó el primer set ${ctx.set1}, ${ctx.perdedor} reaccionó en el segundo parcial ${ctx.set2}, pero ${ctx.ganador} recuperó el control en el tercero y lo cerró ${ctx.set3}.`,
+      `En un partido ajustado${ctx.location}, ${ctx.ganador} terminó imponiéndose ${ctx.perdedorRef} por ${ctx.textoSets}. El duelo fue cambiante: ${ctx.ganador} ganó el primer set ${ctx.set1}, ${ctx.perdedor} respondió en el segundo ${ctx.set2} y la definición quedó para el tercero, donde ${ctx.ganador} cerró ${ctx.set3}.`,
+    ];
+    summary = variants[stablePickVariant(seed, variants.length)];
+  } else if (analisis.plantilla_fallback === '2_1_cierre_fuerte') {
+    const variants = [
+      `${ctx.ganador} tuvo que trabajar hasta el final para vencer ${ctx.perdedorRef} por ${ctx.textoSets}. Tras repartirse los dos primeros parciales (${ctx.set1} y ${ctx.set2}), el partido se definió en el tercer set, donde ${ctx.ganador} mostró mayor firmeza y cerró la victoria ${ctx.set3}.`,
+      `${ctx.ganador} se impuso ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. ${ctx.perdedor} empujó en el segundo set (${ctx.set2}), pero ${ctx.ganador} cerró mejor en el tercero y se llevó el partido ${ctx.set3}.`,
+    ];
+    summary = variants[stablePickVariant(`${seed}-cierre`, variants.length)];
+  } else if (analisis.plantilla_fallback === '2_0_claro') {
+    const variants = [
+      `${ctx.ganador} venció ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}, con una actuación sólida de principio a fin. Los parciales ${ctx.set1} y ${ctx.set2} reflejaron su superioridad y le permitieron cerrar el partido sin ceder sets.`,
+      `${ctx.ganador} dominó de principio a fin ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. Con parciales ${ctx.set1} y ${ctx.set2}, controló el ritmo del encuentro y no cedió sets.`,
+    ];
+    summary = variants[stablePickVariant(`${seed}-20`, variants.length)];
+  } else if (analisis.plantilla_fallback === '2_0_solido') {
+    summary = `${ctx.ganador} venció ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. Se impuso en los dos sets (${ctx.set1} y ${ctx.set2}) y cerró el partido sin ceder parciales.`;
+  } else if (analisis.sets_detalle?.length === 1) {
+    summary = `${ctx.ganador} venció ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. El partido se definió en un solo set (${ctx.set1}).`;
+  } else {
+    summary = `${ctx.ganador} venció ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. Parciales: ${ctx.parciales}.`;
   }
 
-  if (analisis?.duracion_minutos > 0) {
-    summary += ` Duración aproximada: ${analisis.duracion_minutos} minutos.`;
+  if (analisis.fue_2_1 && analisis.partido_parejo) {
+    summary += buildParejoSuffix(analisis);
   }
 
+  summary += buildDuracionSuffix(analisis);
   summary += buildFechaSuffix(analisis);
   return summary.trim();
 }
@@ -65,7 +125,14 @@ function buildPuntosSummaryText(payload, analisis) {
     ?? payload?.resultado?.marcador_texto
     ?? `${payload?.resultado?.puntos_agregados?.equipo1}-${payload?.resultado?.puntos_agregados?.equipo2}`;
 
-  let summary = `${ganadorLabel} venció a ${perdedorLabel} por ${String(marcador).replace('-', ' a ')}${buildLocationSuffix(analisis)}.`;
+  const perdedorRef = formatTeamReference(perdedorLabel, 'a');
+  const seed = payload?.partido_id ?? '0';
+  const variants = [
+    `${ganadorLabel} se impuso ${perdedorRef} por ${String(marcador).replace('-', ' a ')}${analisis?.sede ? ` en ${analisis.sede}` : ''}.`,
+    `En ${analisis?.sede ?? 'el partido'}, ${ganadorLabel} venció ${perdedorRef} por ${String(marcador).replace('-', ' a ')}.`,
+  ];
+
+  let summary = variants[stablePickVariant(seed, variants.length)];
   summary += buildFechaSuffix(analisis);
   return summary.trim();
 }
@@ -89,7 +156,9 @@ function buildDeterministicHighlights(payload, analisis) {
 
   const ganadorLabel = analisis?.ganador?.nombre;
   const perdedorLabel = analisis?.perdedor?.nombre;
+  const perdedorKey = analisis?.perdedor?.key;
   const resultadoSets = analisis?.resultado_final_sets;
+  const setsDetalle = analisis?.sets_detalle ?? [];
 
   if (payload?.resultado?.formato === 'sets' && resultadoSets) {
     highlights.push({
@@ -109,23 +178,27 @@ function buildDeterministicHighlights(payload, analisis) {
         type: 'momento',
         text: 'El tercer set definió el partido.',
       });
-    } else if (analisis?.fue_2_0 && analisis?.set_mas_dominante?.parcial) {
+    } else if (analisis?.perdedor_reacciono_segundo_set && setsDetalle[1]) {
       highlights.push({
         type: 'momento',
-        text: `El set más dominante fue el ${ORDINAL_SET_LABELS[analisis.set_mas_dominante.indice - 1] ?? analisis.set_mas_dominante.indice} (${analisis.set_mas_dominante.parcial}).`,
+        text: `${perdedorLabel} reaccionó en el segundo set (${formatSetScoreForTeam(perdedorKey, setsDetalle[1])}).`,
+      });
+    } else if (analisis?.ganador_cerro_fuerte_ultimo_set && setsDetalle.length) {
+      const last = setsDetalle[setsDetalle.length - 1];
+      highlights.push({
+        type: 'momento',
+        text: `${ganadorLabel} cerró mejor el último set (${formatSetScoreForTeam(ganadorKey, last)}).`,
+      });
+    } else if (analisis?.fue_2_0) {
+      highlights.push({
+        type: 'momento',
+        text: `${ganadorLabel} no cedió sets en el partido.`,
       });
     }
   } else if (payload?.resultado?.marcador_texto) {
     highlights.push({
       type: 'resultado',
       text: `Resultado final: ${payload.resultado.marcador_texto}.`,
-    });
-  }
-
-  if (analisis?.duracion_minutos > 0 && highlights.length < 3) {
-    highlights.push({
-      type: 'contexto',
-      text: `Duración aproximada del tanteador: ${analisis.duracion_minutos} minutos.`,
     });
   }
 
@@ -155,7 +228,7 @@ export function buildDeterministicMatchSummary(payload) {
   let summary = 'Partido finalizado con resultado confirmado.';
 
   if (resultado.formato === 'sets') {
-    summary = buildSetsSummaryText(payload, analisis);
+    summary = buildSetsSummaryFromTemplates(payload, analisis);
   } else if (resultado.formato === 'puntos_agregados') {
     summary = buildPuntosSummaryText(payload, analisis);
   } else if (resultado.marcador_texto) {
@@ -176,9 +249,7 @@ export function extractJsonFromAiResponse(rawText) {
   const text = String(rawText ?? '').trim();
   if (!text) return [];
 
-  const candidates = [];
-
-  candidates.push(text);
+  const candidates = [text];
 
   const fencedFull = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   if (fencedFull?.[1]) {
@@ -243,6 +314,158 @@ function validateAiSummaryResponse(parsed) {
   return { valid: true, response: parsed };
 }
 
+export function countSummarySentences(text) {
+  return String(text ?? '')
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 3)
+    .length;
+}
+
+function resolveAnalisisForValidation(payload) {
+  return payload?.analisis_previo ?? buildMatchSummaryDeterministicAnalysis(payload);
+}
+
+function summaryMentionsParciales(summary, analisis) {
+  const parciales = analisis?.parciales ?? [];
+  if (!parciales.length) return true;
+
+  const hits = parciales.filter((parcial) => String(summary ?? '').includes(parcial)).length;
+  return hits >= Math.min(2, parciales.length);
+}
+
+function highlightsIncludeParciales(highlights, analisis) {
+  if (!analisis?.parciales_texto) return true;
+
+  return (highlights ?? []).some((highlight) => (
+    highlight?.type === 'sets'
+    || /Parciales:/i.test(String(highlight?.text ?? ''))
+  ));
+}
+
+function combinedSummaryHighlightsText(summary, highlights) {
+  const highlightText = (highlights ?? []).map((item) => item?.text ?? '').join(' ');
+  return `${summary ?? ''} ${highlightText}`.trim();
+}
+
+function summaryContainsEmail(text) {
+  return EMAIL_RE.test(String(text ?? ''));
+}
+
+function summaryUsesUnsupportedPhrases(summary, analisis) {
+  const frases = analisis?.frases_sugeridas ?? {};
+  const text = String(summary ?? '');
+
+  for (const rule of FRASES_RESPALDADAS) {
+    if (!rule.pattern.test(text)) continue;
+    if (rule.requires2_0 && !analisis?.fue_2_0) {
+      return true;
+    }
+    if (rule.flag && frases[rule.flag] === false) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function summaryIsTooGeneric(summary, analisis) {
+  const text = String(summary ?? '').trim();
+  if (!text) return true;
+
+  const genericPatterns = [
+    /^Equipo \d ganó\b/i,
+    /^Equipo \d venció a Equipo \d por 2 a 1\.?$/i,
+    /^Equipo \d venció a Equipo \d por 2 sets a 1\.?$/i,
+  ];
+
+  if (genericPatterns.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+
+  if (analisis?.parciales?.length && !summaryMentionsParciales(text, analisis)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Rechaza respuestas IA demasiado pobres cuando hay parciales de sets.
+ * @param {object|null} payload
+ * @param {object} response
+ */
+export function validateAiSummaryQuality(payload, response) {
+  const analisis = resolveAnalisisForValidation(payload);
+  const summary = response?.summary ?? '';
+  const highlights = response?.highlights ?? [];
+
+  if (summaryContainsEmail(summary) || summaryContainsEmail(JSON.stringify(highlights))) {
+    return { valid: false, error: 'summary contiene emails visibles' };
+  }
+
+  if (summaryUsesUnsupportedPhrases(summary, analisis)) {
+    return { valid: false, error: 'summary usa frases no respaldadas por analisis_previo' };
+  }
+
+  if (payload?.resultado?.formato !== 'sets') {
+    if (summaryIsTooGeneric(summary, analisis)) {
+      return { valid: false, error: 'summary demasiado genérico' };
+    }
+    return { valid: true };
+  }
+
+  const parciales = analisis?.parciales ?? [];
+  if (!parciales.length) {
+    return { valid: true };
+  }
+
+  const sentenceCount = countSummarySentences(summary);
+  if (sentenceCount < 2) {
+    return {
+      valid: false,
+      error: 'summary demasiado breve para partido con parciales (mínimo 2 frases)',
+    };
+  }
+
+  if (sentenceCount > 4) {
+    return {
+      valid: false,
+      error: 'summary excede 4 frases para partido con parciales',
+    };
+  }
+
+  if (summaryIsTooGeneric(summary, analisis)) {
+    return { valid: false, error: 'summary demasiado genérico para partido con parciales' };
+  }
+
+  if (!summaryMentionsParciales(summary, analisis)) {
+    return {
+      valid: false,
+      error: 'summary no menciona parciales cuando existen',
+    };
+  }
+
+  if (!highlightsIncludeParciales(highlights, analisis)) {
+    return {
+      valid: false,
+      error: 'highlights no incluyen parciales cuando existen',
+    };
+  }
+
+  if (analisis?.tercer_set_decisivo) {
+    const combined = combinedSummaryHighlightsText(summary, highlights);
+    if (!/tercer/i.test(combined)) {
+      return {
+        valid: false,
+        error: 'summary/highlights no mencionan el tercer set decisivo',
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
 /**
  * @param {{ payload?: object|null, parseError?: string|null }|string|null} input
  */
@@ -278,33 +501,33 @@ export function buildFallbackMatchSummaryResponse(input = null) {
 
 /**
  * @param {string} rawReply
+ * @param {object|null} [payload]
  * @returns {{ valid: true, response: object, fallback?: boolean } | { valid: false, error: string }}
  */
-export function parseAiSummaryResponse(rawReply) {
+export function parseAiSummaryResponse(rawReply, payload = null) {
   const candidates = extractJsonFromAiResponse(rawReply);
-
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate);
-      const validated = validateAiSummaryResponse(parsed);
-      if (validated.valid) {
-        return validated;
-      }
-    } catch {
-      // try next candidate
-    }
-  }
-
   let lastValidationError = 'Respuesta IA no es JSON válido';
+
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate);
       const validated = validateAiSummaryResponse(parsed);
       if (!validated.valid) {
         lastValidationError = validated.error;
+        continue;
       }
+
+      const quality = payload
+        ? validateAiSummaryQuality(payload, validated.response)
+        : { valid: true };
+
+      if (quality.valid) {
+        return validated;
+      }
+
+      lastValidationError = quality.error;
     } catch {
-      // ignore
+      // try next candidate
     }
   }
 
