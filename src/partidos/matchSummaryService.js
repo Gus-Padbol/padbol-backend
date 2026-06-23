@@ -59,15 +59,10 @@ function buildSummaryResult({ row, aiResponse, payload, cached }) {
       partido_id: payload.partido_id,
       generated_at: row.generated_at ?? new Date().toISOString(),
       cached,
-      prompt_version: row.prompt_version ?? MATCH_SUMMARY_PROMPT_VERSION,
-      payload_hash: row.payload_hash,
       title: aiResponse.title,
       summary: aiResponse.summary,
       highlights: aiResponse.highlights,
       disclaimers: aiResponse.disclaimers,
-      source_fields_used: aiResponse.source_fields_used,
-      analisis: aiResponse.analisis ?? '',
-      metadata: aiResponse.metadata ?? null,
       resultado_eco: payload.resultado?.marcador_texto
         ? {
           ganador: payload.resultado.ganador ?? null,
@@ -76,6 +71,7 @@ function buildSummaryResult({ row, aiResponse, payload, cached }) {
         : null,
     },
     cached,
+    storedResponse: aiResponse,
   };
 }
 
