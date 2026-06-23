@@ -1,3 +1,10 @@
+import {
+  isTrustworthyPlayerDisplayName,
+  sanitizePlayerDisplayNameForSummary,
+  summaryContainsAdministrativeLanguage,
+  summaryContainsUntrustworthyIdentifiers,
+} from './matchSummaryDisplayNames.js';
+
 const MESES_ES = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
@@ -13,22 +20,8 @@ function isDefaultEquipoNombre(nombre, defaultName) {
 
 function mapJugadores(equipo) {
   return (equipo?.jugadores ?? [])
-    .map((jugador) => {
-      const name = jugador?.nombre_display;
-      if (!name || typeof name !== 'string') return null;
-      const cleaned = name.trim();
-      if (!cleaned || cleaned.includes('@')) return null;
-      return cleaned;
-    })
+    .map((jugador) => sanitizePlayerDisplayNameForSummary(jugador?.nombre_display, null))
     .filter(Boolean);
-}
-
-export function formatEquipoPorJugadores(jugadores = []) {
-  const names = jugadores.filter(Boolean);
-  if (names.length === 0) return null;
-  if (names.length === 1) return `el equipo formado por ${names[0]}`;
-  if (names.length === 2) return `el equipo formado por ${names[0]} y ${names[1]}`;
-  return `el equipo formado por ${names.slice(0, -1).join(', ')} y ${names[names.length - 1]}`;
 }
 
 export function resolveEquipoDisplayName(equipo, defaultName) {
@@ -37,8 +30,7 @@ export function resolveEquipoDisplayName(equipo, defaultName) {
     return String(customNombre).trim();
   }
 
-  const porJugadores = formatEquipoPorJugadores(mapJugadores(equipo));
-  return porJugadores ?? defaultName;
+  return defaultName;
 }
 
 function resolveEquipoLabels(payload) {

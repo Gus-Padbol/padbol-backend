@@ -8,6 +8,10 @@ import {
   normalizeSetDetail,
   resolveEquipoLabels,
 } from './matchSummaryDeterministicAnalysis.js';
+import {
+  summaryContainsAdministrativeLanguage,
+  summaryContainsUntrustworthyIdentifiers,
+} from './matchSummaryDisplayNames.js';
 
 const EMAIL_RE = /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/i;
 
@@ -63,6 +67,7 @@ function buildTemplateContext(analisis) {
   const setsDetalle = analisis.sets_detalle ?? [];
   const ganadorKey = analisis.ganador.key;
   const perdedorKey = analisis.perdedor.key;
+  const canonicalSetScore = (set) => `${set.eq1}-${set.eq2}`;
 
   return {
     ganador: analisis.ganador.nombre,
@@ -72,9 +77,11 @@ function buildTemplateContext(analisis) {
     location: analisis.sede ? ` en ${analisis.sede}` : '',
     textoSets: analisis.resultado_final_sets.texto_sets,
     parciales: analisis.parciales_texto,
-    set1: setsDetalle[0] ? formatSetScoreForTeam(ganadorKey, setsDetalle[0]) : null,
-    set2: setsDetalle[1] ? formatSetScoreForTeam(perdedorKey, setsDetalle[1]) : null,
-    set3: setsDetalle[2] ? formatSetScoreForTeam(ganadorKey, setsDetalle[2]) : null,
+    set1: setsDetalle[0] ? canonicalSetScore(setsDetalle[0]) : null,
+    set2: setsDetalle[1] ? canonicalSetScore(setsDetalle[1]) : null,
+    set3: setsDetalle[2] ? canonicalSetScore(setsDetalle[2]) : null,
+    perdedorKey,
+    ganadorKey,
   };
 }
 
@@ -225,7 +232,7 @@ function buildSourceFieldsUsed(payload) {
 export function buildDeterministicMatchSummary(payload) {
   const analisis = payload?.analisis_previo ?? buildMatchSummaryDeterministicAnalysis(payload);
   const resultado = payload?.resultado ?? {};
-  let summary = 'Partido finalizado con resultado confirmado.';
+  let summary = 'Partido finalizado.';
 
   if (resultado.formato === 'sets') {
     summary = buildSetsSummaryFromTemplates(payload, analisis);
@@ -400,8 +407,24 @@ export function validateAiSummaryQuality(payload, response) {
   const summary = response?.summary ?? '';
   const highlights = response?.highlights ?? [];
 
+  if (summaryContainsAdministrativeLanguage(summary)) {
+    return { valid: false, error: 'summary contiene lenguaje administrativo' };
+  }
+
   if (summaryContainsEmail(summary) || summaryContainsEmail(JSON.stringify(highlights))) {
     return { valid: false, error: 'summary contiene emails visibles' };
+  }
+
+  if (summaryContainsUntrustworthyIdentifiers(summary, payload)) {
+    return { valid: false, error: 'summary usa identificadores técnicos o no deportivos' };
+  }
+
+  if (summaryContainsAdministrativeLanguage(JSON.stringify(highlights))) {
+    return { valid: false, error: 'highlights contienen lenguaje administrativo' };
+  }
+
+  if (summaryContainsUntrustworthyIdentifiers(JSON.stringify(highlights), payload)) {
+    return { valid: false, error: 'highlights usan identificadores técnicos o no deportivos' };
   }
 
   if (summaryUsesUnsupportedPhrases(summary, analisis)) {
