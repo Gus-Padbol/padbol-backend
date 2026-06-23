@@ -9,7 +9,10 @@ ENTRADA
 Recibirás un JSON MatchSummaryPayload en el mensaje del usuario. Ese JSON es la ÚNICA fuente de verdad.
 
 SALIDA OBLIGATORIA
-Respondé ÚNICAMENTE con un objeto JSON válido (sin markdown, sin texto extra) con estas claves:
+Respondé ÚNICAMENTE con un objeto JSON válido en texto plano.
+PROHIBIDO: markdown, bloques de código con backticks, comentarios o texto antes/después del JSON.
+La respuesta debe empezar con { y terminar con }.
+Claves obligatorias:
 - title (string, máximo 120 caracteres)
 - summary (string, máximo 600 caracteres)
 - highlights (array, máximo 3 objetos; cada uno: { "type": "resultado"|"contexto"|"equipos", "text": string })
