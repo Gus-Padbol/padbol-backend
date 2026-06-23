@@ -313,3 +313,26 @@ export async function markMatchSummaryFailed({
 
   return mapMatchSummaryRow(rows[0] ?? null);
 }
+
+/**
+ * Elimina resúmenes cacheados de un partido para forzar regeneración.
+ * @param {{ partidoId: number|string, pgPool: import('pg').Pool }} params
+ */
+export async function deleteMatchSummariesForPartido({ partidoId, pgPool }) {
+  assertPgPool(pgPool);
+
+  const parsedPartidoId = parseInt(String(partidoId), 10);
+  if (!Number.isFinite(parsedPartidoId) || parsedPartidoId <= 0) {
+    const err = new Error('partidoId inválido');
+    err.status = 400;
+    err.code = 'PARTIDO_ID_INVALIDO';
+    throw err;
+  }
+
+  const { rowCount } = await pgPool.query(
+    'DELETE FROM partido_resumenes WHERE partido_id = $1',
+    [parsedPartidoId],
+  );
+
+  return { deleted: rowCount ?? 0 };
+}

@@ -12,8 +12,31 @@ import {
   summaryContainsAdministrativeLanguage,
   summaryContainsUntrustworthyIdentifiers,
 } from './matchSummaryDisplayNames.js';
+import {
+  buildPerdedorReference,
+  pickNarrativeReference,
+  summaryRepeatsGenericTeamsTooMuch,
+} from './matchSummaryNarrativeNames.js';
 
 const EMAIL_RE = /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/i;
+
+const PERDEDOR_REACCION_FRASES = [
+  'la dupla rival reaccionó',
+  'la pareja perdedora reaccionó',
+  'los vencidos reaccionaron',
+];
+
+const GANADOR_CIERRE_FRASES = [
+  'la pareja vencedora cerró mejor',
+  'los ganadores cerraron mejor',
+  'la dupla ganadora cerró mejor',
+];
+
+const GANADOR_PRIMERO_SET_FRASES = [
+  'Se quedó con el primer parcial',
+  'Arrancó mejor y se llevó el primer parcial',
+  'Ganó el primer parcial',
+];
 
 const FRASES_RESPALDADAS = [
   { pattern: /partido cambiante/i, flag: 'partido_cambiante' },
@@ -21,7 +44,10 @@ const FRASES_RESPALDADAS = [
   { pattern: /reaccionó en el segundo/i, flag: 'reaccion_segundo_parcial' },
   { pattern: /(dominó|de principio a fin|sin ceder sets|actuación sólida)/i, flag: 'dominio_claro', requires2_0: true },
   { pattern: /(cerró mejor|cerró con autoridad|mostró mayor firmeza)/i, flag: 'cierre_con_autoridad' },
-  { pattern: /(compitió a buen nivel|compitió a gran nivel|sostuvo un nivel)/i, flag: 'buen_nivel_perdedor' },
+  {
+    pattern: /(compitió a buen nivel|compitió a gran nivel|sostuvo un nivel|exigió hasta el final|lucharon hasta el cierre|sostuvieron el partido)/i,
+    flag: 'buen_nivel_perdedor',
+  },
   { pattern: /tercer set/i, flag: 'definido_en_tercer_set' },
 ];
 
@@ -41,12 +67,19 @@ function buildFechaSuffix(analisis) {
   return ` Partido disputado el ${analisis.fecha_espanol}.`;
 }
 
-function buildParejoSuffix(analisis) {
+function buildParejoSuffix(analisis, ctx) {
   if (!analisis?.partido_parejo && !analisis?.frases_sugeridas?.buen_nivel_perdedor) {
     return '';
   }
 
-  return ` ${analisis.perdedor.nombre} compitió a buen nivel y exigió hasta el cierre, pero ${analisis.ganador.nombre} fue más efectivo en los momentos decisivos.`;
+  const variants = [
+    ' Los vencidos lucharon hasta el cierre y sostuvieron el partido hasta el último tramo, pero los ganadores fueron más efectivos en los momentos decisivos.',
+    ' La pareja perdedora exigió hasta el final, pero la pareja vencedora cerró mejor en los momentos decisivos.',
+    ' La dupla rival compitió a buen nivel y mantuvo el duelo parejo, aunque la dupla ganadora tuvo la última palabra en el tramo decisivo.',
+  ];
+
+  const seed = ctx.seed ?? '0';
+  return variants[stablePickVariant(`${seed}-parejo`, variants.length)];
 }
 
 function buildDuracionSuffix(analisis) {
@@ -60,19 +93,28 @@ function formatTeamReference(name, preposition = 'a') {
   if (preposition === 'a' && value.startsWith('el ')) {
     return `al ${value.slice(4)}`;
   }
+  if (preposition === 'a' && value.startsWith('La dupla de ')) {
+    return `a la dupla de ${value.slice(13)}`;
+  }
   return `${preposition} ${value}`;
 }
 
-function buildTemplateContext(analisis) {
+function buildTemplateContext(payload, analisis) {
   const setsDetalle = analisis.sets_detalle ?? [];
   const ganadorKey = analisis.ganador.key;
   const perdedorKey = analisis.perdedor.key;
+  const seed = payload?.partido_id ?? payload?.contexto?.fecha ?? '0';
   const canonicalSetScore = (set) => `${set.eq1}-${set.eq2}`;
 
   return {
+    seed,
     ganador: analisis.ganador.nombre,
+    ganadorAlias1: pickNarrativeReference(analisis.ganador.referencias, seed, 'g1'),
+    ganadorAlias2: pickNarrativeReference(analisis.ganador.referencias, seed, 'g2'),
     perdedor: analisis.perdedor.nombre,
-    perdedorRef: formatTeamReference(analisis.perdedor.nombre, 'a'),
+    perdedorAlias1: pickNarrativeReference(analisis.perdedor.referencias, seed, 'p1'),
+    perdedorAlias2: pickNarrativeReference(analisis.perdedor.referencias, seed, 'p2'),
+    perdedorRef: buildPerdedorReference(analisis.perdedor),
     sede: analisis.sede,
     location: analisis.sede ? ` en ${analisis.sede}` : '',
     textoSets: analisis.resultado_final_sets.texto_sets,
@@ -82,42 +124,59 @@ function buildTemplateContext(analisis) {
     set3: setsDetalle[2] ? canonicalSetScore(setsDetalle[2]) : null,
     perdedorKey,
     ganadorKey,
+    perdedorReaccionFrase: pickNarrativeReference(PERDEDOR_REACCION_FRASES, seed, 'pr'),
+    ganadorCierreFrase: pickNarrativeReference(GANADOR_CIERRE_FRASES, seed, 'gc'),
+    ganadorPrimerSetFrase: pickNarrativeReference(GANADOR_PRIMERO_SET_FRASES, seed, 's1'),
+    ganadorEsGenerico: analisis.ganador.es_generico,
+    perdedorEsGenerico: analisis.perdedor.es_generico,
   };
 }
 
+function buildSetsOpening(ctx) {
+  if (ctx.ganadorEsGenerico) {
+    return `${ctx.ganador} se impuso por ${ctx.textoSets}${ctx.location}`;
+  }
+
+  if (ctx.perdedorEsGenerico) {
+    return `${ctx.ganador} se impuso por ${ctx.textoSets}${ctx.location}`;
+  }
+
+  return `${ctx.ganador} se impuso ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}`;
+}
+
 function buildSetsSummaryFromTemplates(payload, analisis) {
-  const ctx = buildTemplateContext(analisis);
-  const seed = payload?.partido_id ?? payload?.contexto?.fecha ?? '0';
+  const ctx = buildTemplateContext(payload, analisis);
+  const seed = ctx.seed;
   let summary = '';
 
   if (analisis.plantilla_fallback === '2_1_ajustado') {
     const variants = [
-      `${ctx.ganador} se impuso ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}, en un partido cambiante y muy disputado. ${ctx.ganador} arrancó mejor y se llevó el primer set ${ctx.set1}, ${ctx.perdedor} reaccionó en el segundo parcial ${ctx.set2}, pero ${ctx.ganador} recuperó el control en el tercero y lo cerró ${ctx.set3}.`,
-      `En un partido ajustado${ctx.location}, ${ctx.ganador} terminó imponiéndose ${ctx.perdedorRef} por ${ctx.textoSets}. El duelo fue cambiante: ${ctx.ganador} ganó el primer set ${ctx.set1}, ${ctx.perdedor} respondió en el segundo ${ctx.set2} y la definición quedó para el tercero, donde ${ctx.ganador} cerró ${ctx.set3}.`,
+      `${buildSetsOpening(ctx)}, en un partido cambiante y muy disputado. ${ctx.ganadorPrimerSetFrase} ${ctx.set1}, ${ctx.perdedorReaccionFrase} en el segundo set ${ctx.set2} y llevó la definición al tercero, donde ${ctx.ganadorCierreFrase} para ganar ${ctx.set3}.`,
+      `En un partido ajustado${ctx.location}, ${buildSetsOpening(ctx)}. El duelo fue cambiante: ${ctx.ganadorPrimerSetFrase.toLowerCase()} ${ctx.set1}, ${ctx.perdedorReaccionFrase} en el segundo ${ctx.set2} y la definición quedó para el tercero, donde ${ctx.ganadorCierreFrase} con un ${ctx.set3}.`,
     ];
     summary = variants[stablePickVariant(seed, variants.length)];
   } else if (analisis.plantilla_fallback === '2_1_cierre_fuerte') {
     const variants = [
-      `${ctx.ganador} tuvo que trabajar hasta el final para vencer ${ctx.perdedorRef} por ${ctx.textoSets}. Tras repartirse los dos primeros parciales (${ctx.set1} y ${ctx.set2}), el partido se definió en el tercer set, donde ${ctx.ganador} mostró mayor firmeza y cerró la victoria ${ctx.set3}.`,
-      `${ctx.ganador} se impuso ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. ${ctx.perdedor} empujó en el segundo set (${ctx.set2}), pero ${ctx.ganador} cerró mejor en el tercero y se llevó el partido ${ctx.set3}.`,
+      `${ctx.ganador} tuvo que trabajar hasta el tramo final para imponerse por ${ctx.textoSets}${ctx.location}. Tras repartirse los dos primeros parciales (${ctx.set1} y ${ctx.set2}), el partido se definió en el tercer set, donde ${ctx.ganadorCierreFrase} con un ${ctx.set3}.`,
+      `${buildSetsOpening(ctx)}. ${ctx.perdedorReaccionFrase} en el segundo set (${ctx.set2}), pero ${ctx.ganadorCierreFrase} en el tercero y se llevó el partido ${ctx.set3}.`,
     ];
     summary = variants[stablePickVariant(`${seed}-cierre`, variants.length)];
   } else if (analisis.plantilla_fallback === '2_0_claro') {
     const variants = [
-      `${ctx.ganador} venció ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}, con una actuación sólida de principio a fin. Los parciales ${ctx.set1} y ${ctx.set2} reflejaron su superioridad y le permitieron cerrar el partido sin ceder sets.`,
-      `${ctx.ganador} dominó de principio a fin ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. Con parciales ${ctx.set1} y ${ctx.set2}, controló el ritmo del encuentro y no cedió sets.`,
+      `${buildSetsOpening(ctx)}, con una actuación sólida de principio a fin. Los parciales ${ctx.set1} y ${ctx.set2} reflejaron la superioridad de ${ctx.ganadorAlias1}, que cerró sin ceder sets.`,
+      `${ctx.ganador} dominó de principio a fin por ${ctx.textoSets}${ctx.location}. Con parciales ${ctx.set1} y ${ctx.set2}, ${ctx.ganadorAlias1} controló el ritmo del encuentro y no cedió sets.`,
     ];
     summary = variants[stablePickVariant(`${seed}-20`, variants.length)];
   } else if (analisis.plantilla_fallback === '2_0_solido') {
-    summary = `${ctx.ganador} venció ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. Se impuso en los dos sets (${ctx.set1} y ${ctx.set2}) y cerró el partido sin ceder parciales.`;
+    summary = `${buildSetsOpening(ctx)}. ${ctx.ganadorAlias1} se impuso en los dos sets (${ctx.set1} y ${ctx.set2}) y cerró el partido sin ceder parciales.`;
   } else if (analisis.sets_detalle?.length === 1) {
-    summary = `${ctx.ganador} venció ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. El partido se definió en un solo set (${ctx.set1}).`;
+    summary = `${buildSetsOpening(ctx)}. El partido se definió en un solo set (${ctx.set1}).`;
   } else {
-    summary = `${ctx.ganador} venció ${ctx.perdedorRef} por ${ctx.textoSets}${ctx.location}. Parciales: ${ctx.parciales}.`;
+    summary = `${buildSetsOpening(ctx)}. Parciales: ${ctx.parciales}.`;
   }
 
   if (analisis.fue_2_1 && analisis.partido_parejo) {
-    summary += buildParejoSuffix(analisis);
+    summary += buildParejoSuffix(analisis, ctx);
   }
 
   summary += buildDuracionSuffix(analisis);
@@ -126,18 +185,25 @@ function buildSetsSummaryFromTemplates(payload, analisis) {
 }
 
 function buildPuntosSummaryText(payload, analisis) {
+  const seed = payload?.partido_id ?? '0';
   const ganadorLabel = analisis?.ganador?.nombre ?? 'El ganador';
-  const perdedorLabel = analisis?.perdedor?.nombre ?? 'su rival';
+  const ganadorAlias = pickNarrativeReference(analisis?.ganador?.referencias, seed, 'pg1');
   const marcador = analisis?.marcador_texto
     ?? payload?.resultado?.marcador_texto
     ?? `${payload?.resultado?.puntos_agregados?.equipo1}-${payload?.resultado?.puntos_agregados?.equipo2}`;
 
-  const perdedorRef = formatTeamReference(perdedorLabel, 'a');
-  const seed = payload?.partido_id ?? '0';
-  const variants = [
-    `${ganadorLabel} se impuso ${perdedorRef} por ${String(marcador).replace('-', ' a ')}${analisis?.sede ? ` en ${analisis.sede}` : ''}.`,
-    `En ${analisis?.sede ?? 'el partido'}, ${ganadorLabel} venció ${perdedorRef} por ${String(marcador).replace('-', ' a ')}.`,
-  ];
+  const perdedorRef = analisis?.perdedor?.es_generico
+    ? 'sobre su rival'
+    : buildPerdedorReference(analisis?.perdedor);
+  const variants = analisis?.perdedor?.es_generico
+    ? [
+      `${ganadorLabel} se impuso por ${String(marcador).replace('-', ' a ')}${analisis?.sede ? ` en ${analisis.sede}` : ''}.`,
+      `En ${analisis?.sede ?? 'el partido'}, ${ganadorAlias} venció por ${String(marcador).replace('-', ' a ')}.`,
+    ]
+    : [
+      `${ganadorLabel} se impuso ${perdedorRef} por ${String(marcador).replace('-', ' a ')}${analisis?.sede ? ` en ${analisis.sede}` : ''}.`,
+      `En ${analisis?.sede ?? 'el partido'}, ${ganadorAlias} venció ${perdedorRef} por ${String(marcador).replace('-', ' a ')}.`,
+    ];
 
   let summary = variants[stablePickVariant(seed, variants.length)];
   summary += buildFechaSuffix(analisis);
@@ -188,18 +254,18 @@ function buildDeterministicHighlights(payload, analisis) {
     } else if (analisis?.perdedor_reacciono_segundo_set && setsDetalle[1]) {
       highlights.push({
         type: 'momento',
-        text: `${perdedorLabel} reaccionó en el segundo set (${formatSetScoreForTeam(perdedorKey, setsDetalle[1])}).`,
+        text: `${pickNarrativeReference(analisis.perdedor.referencias, payload?.partido_id, 'hp1')} reaccionó en el segundo set (${formatSetScoreForTeam(perdedorKey, setsDetalle[1])}).`,
       });
     } else if (analisis?.ganador_cerro_fuerte_ultimo_set && setsDetalle.length) {
       const last = setsDetalle[setsDetalle.length - 1];
       highlights.push({
         type: 'momento',
-        text: `${ganadorLabel} cerró mejor el último set (${formatSetScoreForTeam(ganadorKey, last)}).`,
+        text: `${pickNarrativeReference(analisis.ganador.referencias, payload?.partido_id, 'hp2')} cerró mejor el último set (${formatSetScoreForTeam(ganadorKey, last)}).`,
       });
     } else if (analisis?.fue_2_0) {
       highlights.push({
         type: 'momento',
-        text: `${ganadorLabel} no cedió sets en el partido.`,
+        text: `${pickNarrativeReference(analisis.ganador.referencias, payload?.partido_id, 'hp3')} no cedió sets en el partido.`,
       });
     }
   } else if (payload?.resultado?.marcador_texto) {
@@ -355,6 +421,16 @@ function combinedSummaryHighlightsText(summary, highlights) {
   return `${summary ?? ''} ${highlightText}`.trim();
 }
 
+function hasHistorialPuntosJustification(payload) {
+  const historial = payload?.scoreboard_opcional?.historial_puntos;
+  return Array.isArray(historial) && historial.length > 0;
+}
+
+function summaryMentionsUltimoPuntoSinRespaldo(text, payload) {
+  if (!/último punto/i.test(String(text ?? ''))) return false;
+  return !hasHistorialPuntosJustification(payload);
+}
+
 function summaryContainsEmail(text) {
   return EMAIL_RE.test(String(text ?? ''));
 }
@@ -425,6 +501,19 @@ export function validateAiSummaryQuality(payload, response) {
 
   if (summaryContainsUntrustworthyIdentifiers(JSON.stringify(highlights), payload)) {
     return { valid: false, error: 'highlights usan identificadores técnicos o no deportivos' };
+  }
+
+  if (summaryContainsUntrustworthyIdentifiers(JSON.stringify(highlights), payload)) {
+    return { valid: false, error: 'highlights usan identificadores técnicos o no deportivos' };
+  }
+
+  const combined = combinedSummaryHighlightsText(summary, highlights);
+  if (summaryRepeatsGenericTeamsTooMuch(combined)) {
+    return { valid: false, error: 'summary repite Equipo 1 o Equipo 2 demasiadas veces' };
+  }
+
+  if (summaryMentionsUltimoPuntoSinRespaldo(combined, payload)) {
+    return { valid: false, error: 'summary menciona último punto sin respaldo en historial_puntos' };
   }
 
   if (summaryUsesUnsupportedPhrases(summary, analisis)) {

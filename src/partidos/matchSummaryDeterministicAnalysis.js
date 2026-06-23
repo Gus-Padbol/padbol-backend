@@ -4,14 +4,18 @@ import {
   summaryContainsAdministrativeLanguage,
   summaryContainsUntrustworthyIdentifiers,
 } from './matchSummaryDisplayNames.js';
+import {
+  DEFAULT_EQUIPO1_NOMBRE,
+  DEFAULT_EQUIPO2_NOMBRE,
+  resolveEquipoNarrativeLabels,
+} from './matchSummaryNarrativeNames.js';
 
 const MESES_ES = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
 ];
 
-export const DEFAULT_EQUIPO1_NOMBRE = 'Equipo 1';
-export const DEFAULT_EQUIPO2_NOMBRE = 'Equipo 2';
+export { DEFAULT_EQUIPO1_NOMBRE, DEFAULT_EQUIPO2_NOMBRE };
 
 function isDefaultEquipoNombre(nombre, defaultName) {
   if (!nombre || typeof nombre !== 'string') return true;
@@ -34,9 +38,22 @@ export function resolveEquipoDisplayName(equipo, defaultName) {
 }
 
 function resolveEquipoLabels(payload) {
+  const narrative = resolveEquipoNarrativeLabels(payload);
   return {
-    equipo1: resolveEquipoDisplayName(payload?.equipos?.equipo1, DEFAULT_EQUIPO1_NOMBRE),
-    equipo2: resolveEquipoDisplayName(payload?.equipos?.equipo2, DEFAULT_EQUIPO2_NOMBRE),
+    equipo1: narrative.equipo1.nombre,
+    equipo2: narrative.equipo2.nombre,
+  };
+}
+
+function buildEquipoActorMeta(narrativeLabels, key, role) {
+  const meta = narrativeLabels[key];
+  return {
+    key,
+    nombre: meta.nombre,
+    tipo: meta.tipo,
+    es_generico: meta.es_generico,
+    referencias: role === 'ganador' ? meta.referencias_ganador : meta.referencias_perdedor,
+    ...(meta.nombre_preposicion_a ? { nombre_preposicion_a: meta.nombre_preposicion_a } : {}),
   };
 }
 
@@ -145,7 +162,7 @@ function resolvePlantillaFallback({
   return 'sets_generico';
 }
 
-function analyzeSetsMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
+function analyzeSetsMatch(payload, ganadorKey, perdedorKey, narrativeLabels) {
   const setsDetalle = (payload?.resultado?.sets?.sets_detalle ?? [])
     .map(normalizeSetDetail)
     .filter(Boolean);
@@ -221,14 +238,8 @@ function analyzeSetsMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
 
   return {
     formato: 'sets',
-    ganador: {
-      key: ganadorKey,
-      nombre: equipoLabels[ganadorKey],
-    },
-    perdedor: {
-      key: perdedorKey,
-      nombre: equipoLabels[perdedorKey],
-    },
+    ganador: buildEquipoActorMeta(narrativeLabels, ganadorKey, 'ganador'),
+    perdedor: buildEquipoActorMeta(narrativeLabels, perdedorKey, 'perdedor'),
     resultado_final_sets: {
       ganador: ganadorSets,
       perdedor: perdedorSets,
@@ -266,20 +277,14 @@ function analyzeSetsMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
   };
 }
 
-function analyzePuntosMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
+function analyzePuntosMatch(payload, ganadorKey, perdedorKey, narrativeLabels) {
   const marcador = payload?.resultado?.marcador_texto
     ?? `${payload?.resultado?.puntos_agregados?.equipo1}-${payload?.resultado?.puntos_agregados?.equipo2}`;
 
   return {
     formato: 'puntos_agregados',
-    ganador: {
-      key: ganadorKey,
-      nombre: equipoLabels[ganadorKey],
-    },
-    perdedor: {
-      key: perdedorKey,
-      nombre: equipoLabels[perdedorKey],
-    },
+    ganador: buildEquipoActorMeta(narrativeLabels, ganadorKey, 'ganador'),
+    perdedor: buildEquipoActorMeta(narrativeLabels, perdedorKey, 'perdedor'),
     resultado_final_sets: null,
     marcador_texto: marcador,
     parciales: [],
@@ -316,27 +321,27 @@ function analyzePuntosMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
  * @param {object} payload
  */
 export function buildMatchSummaryDeterministicAnalysis(payload = {}) {
-  const equipoLabels = resolveEquipoLabels(payload);
+  const narrativeLabels = resolveEquipoNarrativeLabels(payload);
   const ganadorKey = payload?.resultado?.ganador ?? null;
   const perdedorKey = ganadorKey ? getPerdedorKey(ganadorKey) : null;
 
   const base = {
     ganador: ganadorKey
-      ? { key: ganadorKey, nombre: equipoLabels[ganadorKey] }
+      ? buildEquipoActorMeta(narrativeLabels, ganadorKey, 'ganador')
       : null,
     perdedor: perdedorKey
-      ? { key: perdedorKey, nombre: equipoLabels[perdedorKey] }
+      ? buildEquipoActorMeta(narrativeLabels, perdedorKey, 'perdedor')
       : null,
     sede: payload?.contexto?.sede_nombre ?? null,
     fecha_espanol: formatFechaEspanol(payload?.contexto?.fecha),
     duracion_minutos: resolveDuracionMinutos(payload),
     equipos: {
       equipo1: {
-        nombre: equipoLabels.equipo1,
+        nombre: narrativeLabels.equipo1.nombre,
         jugadores: mapJugadores(payload?.equipos?.equipo1),
       },
       equipo2: {
-        nombre: equipoLabels.equipo2,
+        nombre: narrativeLabels.equipo2.nombre,
         jugadores: mapJugadores(payload?.equipos?.equipo2),
       },
     },
@@ -366,13 +371,13 @@ export function buildMatchSummaryDeterministicAnalysis(payload = {}) {
   if (payload.resultado.formato === 'sets') {
     return {
       ...base,
-      ...analyzeSetsMatch(payload, ganadorKey, perdedorKey, equipoLabels),
+      ...analyzeSetsMatch(payload, ganadorKey, perdedorKey, narrativeLabels),
     };
   }
 
   return {
     ...base,
-    ...analyzePuntosMatch(payload, ganadorKey, perdedorKey, equipoLabels),
+    ...analyzePuntosMatch(payload, ganadorKey, perdedorKey, narrativeLabels),
   };
 }
 

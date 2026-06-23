@@ -10,6 +10,7 @@ const TECHNICAL_EXACT = new Set([
   'player',
   'null',
   'undefined',
+  'padbolinternacional',
 ]);
 
 const TECHNICAL_PREFIX_RE = /^(test|prueba|demo|admin|usuario|user|guest|padbolmatch|padbol)/i;
@@ -72,7 +73,7 @@ export function summaryContainsUntrustworthyIdentifiers(text, payload = null) {
 
   if (/equipo formado por/i.test(lower)) return true;
 
-  const blockedFragments = ['padbolmatchsaas', 'padbolmatch', '@'];
+  const blockedFragments = ['padbolmatchsaas', 'padbolmatch', 'padbolinternacional', '@'];
   for (const fragment of blockedFragments) {
     if (lower.includes(fragment)) return true;
   }
