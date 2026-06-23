@@ -3,6 +3,7 @@ import {
   resolveEquipoNombres,
   sortJugadoresRowsForEquipos,
 } from './equiposService.js';
+import { isTrustworthyPlayerDisplayName } from './matchSummaryDisplayNames.js';
 import { buildMatchSummaryDeterministicAnalysis } from './matchSummaryDeterministicAnalysis.js';
 
 export const MATCH_SUMMARY_PAYLOAD_VERSION = '1.0.0';
@@ -11,6 +12,7 @@ const SCOREBOARD_TERMINADO_ESTADOS = new Set(['terminado', 'finalizado']);
 
 const SCOREBOARD_SELECT = `
   id,
+  cancha,
   estado,
   sets_a,
   sets_b,
@@ -59,14 +61,16 @@ function resolveDisplayNameFromPerfil(perfil, email) {
       ?? perfil.nombre
       ?? null;
 
-    if (fromProfile && String(fromProfile).trim()) {
+    if (fromProfile && isTrustworthyPlayerDisplayName(fromProfile)) {
       return sanitizeDisplayName(String(fromProfile).trim());
     }
   }
 
   if (email && String(email).includes('@')) {
     const local = String(email).split('@')[0]?.trim();
-    if (local) return sanitizeDisplayName(local);
+    if (local && isTrustworthyPlayerDisplayName(local)) {
+      return sanitizeDisplayName(local);
+    }
   }
 
   return 'Jugador';
@@ -245,6 +249,79 @@ export function normalizeMatchResult(resultSource = {}) {
   };
 }
 
+function normalizeScoreboardHistorialSetRow(row) {
+  if (!row || typeof row !== 'object') return null;
+
+  const equipo1 = Number(row.equipo1 ?? row.eq1 ?? row.games_a ?? row.a);
+  const equipo2 = Number(row.equipo2 ?? row.eq2 ?? row.games_b ?? row.b);
+
+  if (!Number.isFinite(equipo1) || !Number.isFinite(equipo2)) return null;
+
+  return { equipo1, equipo2 };
+}
+
+/**
+ * Parsea historial_sets del scoreboard (JSON string o array).
+ * @param {unknown} value
+ * @returns {{ equipo1: number, equipo2: number }[]}
+ */
+export function parseScoreboardHistorialSets(value) {
+  return parseJsonArray(value)
+    .map(normalizeScoreboardHistorialSetRow)
+    .filter(Boolean);
+}
+
+/**
+ * Normaliza resultado desde scoreboard_partidos terminado/finalizado.
+ * @param {object|null} scoreboardRow
+ * @param {'equipo1'|'equipo2'|null} [ganadorExplicito]
+ * @returns {ReturnType<typeof normalizeMatchResult>|null}
+ */
+export function normalizeMatchResultFromScoreboard(scoreboardRow, ganadorExplicito = null) {
+  if (!scoreboardRow) return null;
+
+  const setsDetalle = parseScoreboardHistorialSets(scoreboardRow.historial_sets);
+  const equipo1Sets = Number(scoreboardRow.sets_a) || 0;
+  const equipo2Sets = Number(scoreboardRow.sets_b) || 0;
+
+  if (setsDetalle.length >= 1) {
+    const ganador = ganadorExplicito
+      ?? inferGanadorFromScores(equipo1Sets, equipo2Sets);
+
+    return {
+      formato: 'sets',
+      ganador,
+      marcador_texto: buildMarcadorTextoSets(equipo1Sets, equipo2Sets, setsDetalle),
+      puntos_agregados: null,
+      sets: {
+        equipo1_sets: equipo1Sets,
+        equipo2_sets: equipo2Sets,
+        sets_detalle: setsDetalle,
+      },
+      fuente: 'scoreboard',
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Prioriza sets del scoreboard vinculado cuando historial_sets tiene al menos un set.
+ * Si historial_sets está vacío, mantiene el resultado del partido (p. ej. puntos agregados).
+ *
+ * @param {ReturnType<typeof normalizeMatchResult>} resultadoPartido
+ * @param {object|null} scoreboardRow
+ * @param {'equipo1'|'equipo2'|null} [ganadorExplicito]
+ */
+export function mergeResultadoWithScoreboard(resultadoPartido, scoreboardRow, ganadorExplicito = null) {
+  const fromScoreboard = normalizeMatchResultFromScoreboard(scoreboardRow, ganadorExplicito);
+  if (fromScoreboard?.sets?.sets_detalle?.length >= 1) {
+    return fromScoreboard;
+  }
+
+  return resultadoPartido;
+}
+
 /**
  * @param {object} payload
  * @returns {object}
@@ -342,11 +419,15 @@ async function fetchScoreboardRowsByLink(pgPool, column, value) {
       SELECT ${SCOREBOARD_SELECT}
       FROM scoreboard_partidos
       WHERE partido_abierto_id = $1
+        AND estado IN ('terminado', 'finalizado')
+      ORDER BY updated_at DESC
     `,
     reserva_id: `
       SELECT ${SCOREBOARD_SELECT}
       FROM scoreboard_partidos
       WHERE reserva_id = $1
+        AND estado IN ('terminado', 'finalizado')
+      ORDER BY updated_at DESC
     `,
   };
 
@@ -379,7 +460,9 @@ export function buildScoreboardOpcional(scoreboardRow, historialPuntosCount = 0)
   );
 
   return {
+    id: scoreboardRow.id,
     scoreboard_id: scoreboardRow.id,
+    cancha: scoreboardRow.cancha ?? null,
     estado: scoreboardRow.estado ?? null,
     sets_a: Number(scoreboardRow.sets_a) || 0,
     sets_b: Number(scoreboardRow.sets_b) || 0,
@@ -387,7 +470,8 @@ export function buildScoreboardOpcional(scoreboardRow, historialPuntosCount = 0)
     games_b: Number(scoreboardRow.games_b) || 0,
     score_a: Number(scoreboardRow.score_a) || 0,
     score_b: Number(scoreboardRow.score_b) || 0,
-    historial_sets: parseJsonArray(scoreboardRow.historial_sets),
+    historial_sets: parseScoreboardHistorialSets(scoreboardRow.historial_sets),
+    historial_puntos: historialPuntosJson,
     historial_puntos_resumen: {
       registros_tabla: historialPuntosCount,
       snapshots_json: historialPuntosJson.length,
@@ -649,13 +733,13 @@ export async function buildMatchSummaryPayload({ partidoId, userId = null, pgPoo
     capitanes.capitan2,
   );
 
-  const resultado = normalizeMatchResult({
+  const resultadoPartido = normalizeMatchResult({
     resultado: partido.resultado,
     resultado_json: partido.resultado_json,
     ganador: partido.ganador,
   });
 
-  if (resultado.formato === 'desconocido') {
+  if (resultadoPartido.formato === 'desconocido') {
     throw new MatchSummaryPayloadError('Datos insuficientes para normalizar resultado', {
       status: 422,
       code: 'RESULTADO_DESCONOCIDO',
@@ -674,6 +758,12 @@ export async function buildMatchSummaryPayload({ partidoId, userId = null, pgPoo
     : 0;
 
   const scoreboardOpcional = buildScoreboardOpcional(linkedScoreboard, historialPuntosCount);
+
+  const resultado = mergeResultadoWithScoreboard(
+    resultadoPartido,
+    linkedScoreboard,
+    partido.ganador ?? null,
+  );
 
   const equipoNombres = resolveEquipoNombres(partido.equipos_asignacion);
 

@@ -235,6 +235,7 @@ function analyzeSetsMatch(payload, ganadorKey, perdedorKey, equipoLabels) {
       texto: `${ganadorSets}-${perdedorSets}`,
       texto_sets: `${ganadorSets} sets a ${perdedorSets}`,
     },
+    marcador_texto: `${ganadorSets}-${perdedorSets}`,
     parciales: setsDetalle.map(formatSetScore),
     parciales_texto: formatParcialesList(setsDetalle),
     sets_detalle: setsDetalle,
