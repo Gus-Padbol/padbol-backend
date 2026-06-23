@@ -9,6 +9,7 @@ import {
 import { procesarResultadoPartidoCasual } from '../src/partidos/resultadoService.js';
 import {
   EquiposPartidoError,
+  procesarActualizarNombresEquiposPartido,
   procesarDefinirEquiposPartido,
   resolveEquiposPartido,
 } from '../src/partidos/equiposService.js';
@@ -2896,6 +2897,7 @@ export function createPartidosRouter({
         partidoId,
         user,
         body: req.body,
+        pgPool,
       });
 
       console.log(`✓ PUT /api/partidos/${partidoId}/equipos — ${req.body?.modo ?? 'ok'}`);
@@ -2908,6 +2910,40 @@ export function createPartidosRouter({
         });
       }
       console.error('❌ Error PUT /api/partidos/:id/equipos:', err.message);
+      return sendHttpError(res, err);
+    }
+  });
+
+  router.put('/:id/equipos/nombres', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const result = await procesarActualizarNombresEquiposPartido({
+        supabaseAdmin,
+        partidoId,
+        user,
+        body: req.body,
+        pgPool,
+      });
+
+      console.log(`✓ PUT /api/partidos/${partidoId}/equipos/nombres`);
+      res.status(result.status).json(result.body);
+    } catch (err) {
+      if (err instanceof EquiposPartidoError) {
+        return res.status(err.status ?? 400).json({
+          error: err.message,
+          code: err.code ?? null,
+        });
+      }
+      console.error('❌ Error PUT /api/partidos/:id/equipos/nombres:', err.message);
       return sendHttpError(res, err);
     }
   });

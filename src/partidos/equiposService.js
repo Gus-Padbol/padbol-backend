@@ -1,3 +1,5 @@
+import { deleteMatchSummariesForPartido } from './matchSummaryRepository.js';
+
 export const EQUIPOS_DERIVACION = {
   CAPITAN_MANUAL: 'capitan_manual',
   SORTEO: 'sorteo',
@@ -10,7 +12,20 @@ export const DEFAULT_EQUIPO2_NOMBRE = 'Equipo 2';
 export const EQUIPOS_PARTIDO_ESTADOS_PERMITIDOS = new Set(['abierto', 'completo']);
 export const EQUIPOS_PARTIDO_ESTADOS_BLOQUEADOS = new Set(['finalizado', 'en_disputa', 'cancelado']);
 
+export const EQUIPO_NOMBRE_MIN_LENGTH = 2;
+export const EQUIPO_NOMBRE_MAX_LENGTH = 30;
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EQUIPO_NOMBRE_EMAIL_RE = /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/i;
+const EQUIPO_NOMBRE_INSULTOS = [
+  'pelotudo',
+  'boludo',
+  'forro',
+  'hdp',
+  'puto',
+  'puta',
+  'mierda',
+];
 
 export class EquiposPartidoError extends Error {
   constructor(message, { status = 400, code = 'EQUIPOS_PARTIDO_ERROR' } = {}) {
@@ -48,7 +63,51 @@ function splitBalancedUserIds(userIds) {
 export function sanitizeEquipoNombre(value, fallback = DEFAULT_EQUIPO1_NOMBRE) {
   if (value == null || typeof value !== 'string') return fallback;
   const cleaned = value.replace(/[\n\r\t<>]/g, '').trim();
-  return cleaned.slice(0, 80) || fallback;
+  return cleaned.slice(0, EQUIPO_NOMBRE_MAX_LENGTH) || fallback;
+}
+
+/**
+ * Valida nombre editable de equipo (input de API).
+ * @param {unknown} value
+ * @param {{ fieldLabel?: string }} [options]
+ */
+export function validateEquipoNombreInput(value, { fieldLabel = 'Nombre de equipo' } = {}) {
+  if (value == null || typeof value !== 'string') {
+    throw new EquiposPartidoError(`${fieldLabel} debe ser un texto`, {
+      code: 'EQUIPO_NOMBRE_INVALIDO',
+    });
+  }
+
+  const cleaned = value.replace(/[\n\r\t<>]/g, '').trim();
+
+  if (cleaned.length < EQUIPO_NOMBRE_MIN_LENGTH) {
+    throw new EquiposPartidoError(
+      `${fieldLabel} debe tener al menos ${EQUIPO_NOMBRE_MIN_LENGTH} caracteres`,
+      { code: 'EQUIPO_NOMBRE_DEMASIADO_CORTO' },
+    );
+  }
+
+  if (cleaned.length > EQUIPO_NOMBRE_MAX_LENGTH) {
+    throw new EquiposPartidoError(
+      `${fieldLabel} no puede superar ${EQUIPO_NOMBRE_MAX_LENGTH} caracteres`,
+      { code: 'EQUIPO_NOMBRE_DEMASIADO_LARGO' },
+    );
+  }
+
+  if (EQUIPO_NOMBRE_EMAIL_RE.test(cleaned)) {
+    throw new EquiposPartidoError(`${fieldLabel} no puede contener emails`, {
+      code: 'EQUIPO_NOMBRE_EMAIL',
+    });
+  }
+
+  const lower = cleaned.toLowerCase();
+  if (EQUIPO_NOMBRE_INSULTOS.some((term) => lower.includes(term))) {
+    throw new EquiposPartidoError(`${fieldLabel} contiene lenguaje no permitido`, {
+      code: 'EQUIPO_NOMBRE_NO_PERMITIDO',
+    });
+  }
+
+  return cleaned;
 }
 
 export function resolveEquipoNombres(equiposAsignacion) {
@@ -68,17 +127,104 @@ function applyEquipoNombresToAsignacion(
   asignacion,
   { equipo1Nombre = undefined, equipo2Nombre = undefined } = {},
 ) {
-  const nombres = resolveEquipoNombres({
-    ...asignacion,
-    ...(equipo1Nombre !== undefined ? { equipo1_nombre: equipo1Nombre } : {}),
-    ...(equipo2Nombre !== undefined ? { equipo2_nombre: equipo2Nombre } : {}),
-  });
+  const merged = { ...asignacion };
+
+  if (equipo1Nombre !== undefined) {
+    merged.equipo1_nombre = equipo1Nombre;
+  }
+  if (equipo2Nombre !== undefined) {
+    merged.equipo2_nombre = equipo2Nombre;
+  }
+
+  const nombres = resolveEquipoNombres(merged);
 
   return {
-    ...asignacion,
+    ...merged,
     equipo1_nombre: nombres.equipo1_nombre,
     equipo2_nombre: nombres.equipo2_nombre,
   };
+}
+
+export function resolveUserEquipoKey(resolved, userId) {
+  if (!userId) return null;
+
+  const normalizedUserId = String(userId).toLowerCase();
+  const inEquipo1 = (resolved?.equipo1Rows ?? []).some(
+    (row) => row.user_id && String(row.user_id).toLowerCase() === normalizedUserId,
+  );
+  const inEquipo2 = (resolved?.equipo2Rows ?? []).some(
+    (row) => row.user_id && String(row.user_id).toLowerCase() === normalizedUserId,
+  );
+
+  if (inEquipo1) return 'equipo1';
+  if (inEquipo2) return 'equipo2';
+  return null;
+}
+
+function buildEquiposAsignacionWithUpdatedNombres(partido, resolved, nameUpdates) {
+  const existing = partido.equipos_asignacion;
+  let base;
+
+  if (isEquiposAsignacionValida(existing)) {
+    base = { ...existing };
+  } else {
+    base = {
+      ...(existing && typeof existing === 'object' ? existing : {}),
+      modo: existing?.modo ?? 'derived',
+      equipo1: normalizeEquipoUserIds(
+        (resolved?.equipo1Rows ?? []).map((row) => row.user_id),
+      ),
+      equipo2: normalizeEquipoUserIds(
+        (resolved?.equipo2Rows ?? []).map((row) => row.user_id),
+      ),
+      definido_por: existing?.definido_por ?? partido.capitan_user_id ?? null,
+      definido_at: existing?.definido_at ?? new Date().toISOString(),
+      bloqueado: existing?.bloqueado === true,
+    };
+  }
+
+  return applyEquipoNombresToAsignacion(base, nameUpdates);
+}
+
+function assertUsuarioPuedeEditarNombresEquipos({
+  partido,
+  user,
+  body,
+  resolved,
+}) {
+  const userId = user?.id ?? null;
+  const isCapitan = Boolean(
+    partido?.capitan_user_id
+    && userId
+    && String(partido.capitan_user_id) === String(userId),
+  );
+  const equipoKey = resolveUserEquipoKey(resolved, userId);
+
+  if (!isCapitan && !equipoKey) {
+    throw new EquiposPartidoError('No tenés permiso para editar nombres de equipos', {
+      status: 403,
+      code: 'EQUIPOS_NOMBRES_NO_AUTORIZADO',
+    });
+  }
+
+  const wantsEquipo1 = body?.equipo1_nombre != null;
+  const wantsEquipo2 = body?.equipo2_nombre != null;
+
+  if (isCapitan) return;
+
+  if (wantsEquipo1 && equipoKey !== 'equipo1') {
+    throw new EquiposPartidoError('Solo podés editar el nombre de tu equipo', {
+      status: 403,
+      code: 'EQUIPOS_NOMBRES_EQUIPO_INCORRECTO',
+    });
+  }
+
+  if (wantsEquipo2 && equipoKey !== 'equipo2') {
+    throw new EquiposPartidoError('Solo podés editar el nombre de tu equipo', {
+      status: 403,
+      code: 'EQUIPOS_NOMBRES_EQUIPO_INCORRECTO',
+    });
+  }
 }
 
 export function shuffleArray(items, randomFn = Math.random) {
@@ -334,13 +480,6 @@ export function assertPuedeEditarNombresEquipos(partido) {
       { status: 409, code: 'PARTIDO_ESTADO_NO_PERMITIDO' },
     );
   }
-
-  if (!isEquiposAsignacionValida(partido.equipos_asignacion)) {
-    throw new EquiposPartidoError(
-      'Primero debés definir los equipos',
-      { status: 409, code: 'EQUIPOS_NO_DEFINIDOS' },
-    );
-  }
 }
 
 export function assertPuedeDefinirEquipos(partido) {
@@ -472,13 +611,15 @@ function assertCapitanEquipos(partido, user) {
 }
 
 /**
- * PUT /api/partidos/:id/equipos
+ * PUT /api/partidos/:id/equipos/nombres
+ * PUT /api/partidos/:id/equipos (solo nombres, sin modo)
  */
 export async function procesarActualizarNombresEquiposPartido({
   supabaseAdmin,
   partidoId,
   user,
   body,
+  pgPool = null,
 }) {
   const { data: partido, error: fetchErr } = await supabaseAdmin
     .from('partidos_abiertos')
@@ -488,7 +629,6 @@ export async function procesarActualizarNombresEquiposPartido({
 
   if (fetchErr) throw fetchErr;
   assertPuedeEditarNombresEquipos(partido);
-  assertCapitanEquipos(partido, user);
 
   const equipo1NombreProvided = body?.equipo1_nombre != null;
   const equipo2NombreProvided = body?.equipo2_nombre != null;
@@ -500,10 +640,46 @@ export async function procesarActualizarNombresEquiposPartido({
     );
   }
 
-  const equiposAsignacion = applyEquipoNombresToAsignacion(partido.equipos_asignacion, {
-    ...(equipo1NombreProvided ? { equipo1Nombre: body.equipo1_nombre } : {}),
-    ...(equipo2NombreProvided ? { equipo2Nombre: body.equipo2_nombre } : {}),
+  const { data: jugadoresRows, error: jugadoresErr } = await supabaseAdmin
+    .from('partidos_abiertos_jugadores')
+    .select('user_id, email, joined_at')
+    .eq('partido_id', partidoId)
+    .order('joined_at', { ascending: true });
+
+  if (jugadoresErr) throw jugadoresErr;
+
+  const resolved = resolveEquiposPartido({
+    jugadoresRows: jugadoresRows ?? [],
+    capitanUserId: partido.capitan_user_id ?? null,
+    capitanEmail: partido.capitan_email ?? null,
+    equiposAsignacion: partido.equipos_asignacion ?? null,
+    jugadoresRequeridos: partido.jugadores_requeridos ?? 4,
   });
+
+  assertUsuarioPuedeEditarNombresEquipos({
+    partido,
+    user,
+    body,
+    resolved,
+  });
+
+  const nameUpdates = {};
+  if (equipo1NombreProvided) {
+    nameUpdates.equipo1Nombre = validateEquipoNombreInput(body.equipo1_nombre, {
+      fieldLabel: 'equipo1_nombre',
+    });
+  }
+  if (equipo2NombreProvided) {
+    nameUpdates.equipo2Nombre = validateEquipoNombreInput(body.equipo2_nombre, {
+      fieldLabel: 'equipo2_nombre',
+    });
+  }
+
+  const equiposAsignacion = buildEquiposAsignacionWithUpdatedNombres(
+    partido,
+    resolved,
+    nameUpdates,
+  );
 
   const { data: updated, error: updateErr } = await supabaseAdmin
     .from('partidos_abiertos')
@@ -522,6 +698,10 @@ export async function procesarActualizarNombresEquiposPartido({
     equipo2Nombre: equiposAsignacion.equipo2_nombre,
   });
 
+  if (pgPool) {
+    await deleteMatchSummariesForPartido({ partidoId, pgPool });
+  }
+
   return buildEquiposPartidoResponse({
     supabaseAdmin,
     partidoId,
@@ -536,6 +716,7 @@ export async function procesarDefinirEquiposPartido({
   user,
   body,
   randomFn = Math.random,
+  pgPool = null,
 }) {
   const modoRaw = body?.modo;
   const hasModo = modoRaw != null && String(modoRaw).trim() !== '';
@@ -547,6 +728,7 @@ export async function procesarDefinirEquiposPartido({
       partidoId,
       user,
       body,
+      pgPool,
     });
   }
 
