@@ -186,7 +186,10 @@ export async function generateMatchSummaryForPartido({
       error: parsed.error,
       reply_preview: String(aiReply ?? '').slice(0, 400),
     });
-    aiResponse = buildFallbackMatchSummaryResponse(parsed.error);
+    aiResponse = buildFallbackMatchSummaryResponse({
+      payload,
+      parseError: parsed.error,
+    });
   }
 
   const generatedRow = await markGeneratedFn({
