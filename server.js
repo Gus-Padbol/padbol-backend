@@ -108,6 +108,7 @@ import {
   reservasWriteRateLimit,
 } from './lib/rateLimit.js';
 import { toStripeMinorUnits, normalizeStripeCurrency } from './lib/stripe/stripeAmount.js';
+import { isSolicitudPendienteActiva } from './lib/solicitudesPartidoHorario.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountPushRoutes } from './routes/push.js';
@@ -1249,6 +1250,7 @@ app.post('/api/reservas', reservasWriteRateLimit, async (req, res) => {
       fecha,
       hora,
       cancha: canchaStorage,
+      duracionMinutos: durationMinutes,
     });
 
     if (blocked) {
@@ -4033,7 +4035,7 @@ usuariosRouter.get('/buscar', async (req, res) => {
     if (!Number.isNaN(partidoId)) {
       const { data: partido, error: partidoErr } = await supabaseAdmin
         .from('partidos_abiertos')
-        .select('id, capitan_user_id')
+        .select('id, capitan_user_id, fecha, hora, duracion_minutos, reserva_id')
         .eq('id', partidoId)
         .maybeSingle();
 
@@ -4055,13 +4057,15 @@ usuariosRouter.get('/buscar', async (req, res) => {
 
       const { data: solicitudes, error: solErr } = await supabaseAdmin
         .from('solicitudes_partido')
-        .select('solicitante_id, estado')
+        .select('solicitante_id, estado, created_at, expires_at')
         .eq('partido_id', partidoId)
         .in('estado', ['pendiente', 'invitado']);
 
       if (solErr) throw solErr;
       (solicitudes ?? []).forEach((row) => {
-        if (row.solicitante_id) excludeUserIds.add(row.solicitante_id);
+        if (!row.solicitante_id) return;
+        if (!isSolicitudPendienteActiva(row, partido)) return;
+        excludeUserIds.add(row.solicitante_id);
       });
     }
 

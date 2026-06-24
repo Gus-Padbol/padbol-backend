@@ -4,6 +4,10 @@ import {
   markAllNotificacionesLeidas,
   markNotificacionLeida,
 } from '../utils/notificaciones.js';
+import {
+  isSolicitudPendienteActiva,
+  SOLICITUD_ESTADOS_PENDIENTES,
+} from '../lib/solicitudesPartidoHorario.js';
 
 function formatHora(hora) {
   if (!hora) return null;
@@ -52,7 +56,7 @@ function mapNotificationRow(row) {
 async function fetchPendingSolicitudPartidoItems(supabaseAdmin, userId) {
   const { data: partidosCapitan, error: capitanErr } = await supabaseAdmin
     .from('partidos_abiertos')
-    .select('id, sede_nombre, fecha, hora, deporte')
+    .select('id, sede_nombre, fecha, hora, deporte, duracion_minutos, reserva_id')
     .eq('capitan_user_id', userId)
     .eq('estado', 'abierto');
 
@@ -63,17 +67,20 @@ async function fetchPendingSolicitudPartidoItems(supabaseAdmin, userId) {
 
   const { data: solicitudes, error: solErr } = await supabaseAdmin
     .from('solicitudes_partido')
-    .select('id, partido_id, solicitante_id, created_at')
+    .select('id, partido_id, solicitante_id, created_at, expires_at, estado')
     .in('partido_id', partidoIds)
-    .eq('estado', 'pendiente')
+    .in('estado', [...SOLICITUD_ESTADOS_PENDIENTES])
     .order('created_at', { ascending: false });
 
   if (solErr) throw solErr;
 
   const partidoMap = Object.fromEntries((partidosCapitan ?? []).map((row) => [row.id, row]));
+  const activas = (solicitudes ?? []).filter(
+    (solicitud) => isSolicitudPendienteActiva(solicitud, partidoMap[solicitud.partido_id]),
+  );
 
   return Promise.all(
-    (solicitudes ?? []).map(async (solicitud) => {
+    activas.map(async (solicitud) => {
       const perfil = await fetchJugadorPerfilPublic(supabaseAdmin, solicitud.solicitante_id);
       const partido = partidoMap[solicitud.partido_id] ?? null;
       const nombre = displayNameFromPerfil(perfil);
