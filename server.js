@@ -2326,7 +2326,7 @@ app.get('/api/torneos/:torneo_id/jugadores', async (req, res) => {
   try {
     const { torneo_id } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('jugadores_torneo')
       .select(JUGADOR_TORNEO_PUBLIC_SELECT)
       .eq('torneo_id', parseInt(torneo_id));
@@ -2346,23 +2346,48 @@ app.post('/api/torneos/:torneo_id/equipos', (req, res) => legacyWriteDisabled(re
 app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
+    const tid = parseInt(torneo_id, 10);
 
-    const [{ data: equipos, error: errE }, { data: grupoPartidos }] = await Promise.all([
-      supabase.from('equipos').select(EQUIPO_TORNEO_PUBLIC_SELECT).eq('torneo_id', parseInt(torneo_id)).order('puntos_totales', { ascending: false }),
-      supabase.from('partidos').select('equipo_a_id, equipo_b_id, grupo').eq('torneo_id', parseInt(torneo_id)).not('grupo', 'is', null),
+    const [
+      { data: equipos, error: errE },
+      { data: grupoPartidos },
+      puntosResult,
+    ] = await Promise.all([
+      supabaseAdmin
+        .from('equipos')
+        .select(EQUIPO_TORNEO_PUBLIC_SELECT)
+        .eq('torneo_id', tid)
+        .order('puntos_totales', { ascending: false }),
+      supabaseAdmin
+        .from('partidos')
+        .select('equipo_a_id, equipo_b_id, grupo')
+        .eq('torneo_id', tid)
+        .not('grupo', 'is', null),
+      supabaseAdmin
+        .from('tabla_puntos')
+        .select('equipo_id, posicion')
+        .eq('torneo_id', tid),
     ]);
     if (errE) throw errE;
 
-    // Derive equipo → grupo from partidos (grupo is stored on partidos, not equipos)
+    const puntosRows = puntosResult.error ? [] : (puntosResult.data || []);
+
     const grupoMap = {};
-    (grupoPartidos || []).forEach(p => {
+    (grupoPartidos || []).forEach((p) => {
       if (p.grupo) {
         if (p.equipo_a_id) grupoMap[p.equipo_a_id] = p.grupo;
         if (p.equipo_b_id) grupoMap[p.equipo_b_id] = p.grupo;
       }
     });
 
-    const result = (equipos || []).map(eq => mapEquipoTorneoPublicRow(eq, grupoMap[eq.id] || null));
+    const posicionMap = {};
+    (puntosRows || []).forEach((row) => {
+      if (row.equipo_id != null) posicionMap[row.equipo_id] = row.posicion;
+    });
+
+    const result = (equipos || []).map((eq) =>
+      mapEquipoTorneoPublicRow(eq, grupoMap[eq.id] || null, posicionMap[eq.id] ?? null),
+    );
     res.json(result);
   } catch (err) {
     sendHttpError(res, err);
@@ -2441,10 +2466,10 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('partidos')
       .select(PARTIDO_TORNEO_PUBLIC_SELECT)
-      .eq('torneo_id', parseInt(torneo_id))
+      .eq('torneo_id', parseInt(torneo_id, 10))
       .order('fecha_hora', { ascending: true });
 
     if (error) throw error;
