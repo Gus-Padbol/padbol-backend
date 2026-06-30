@@ -2104,6 +2104,16 @@ const BASE_PUNTOS = {
 // Index 0 = 1st place, 1 = 2nd, ... 9 = 10th
 const POSICION_MULT = [1.0, 0.6, 0.4, 0.25, 0.15, 0.10, 0.05, 0.05, 0.05, 0.05];
 
+function calcPadcoinsPorPosicion(posicion) {
+  const p = Number(posicion);
+  if (!Number.isFinite(p) || p < 1) return 10;
+  if (p === 1) return 100;
+  if (p === 2) return 70;
+  if (p === 3) return 50;
+  if (p >= 4 && p <= 10) return 20;
+  return 10;
+}
+
 function calcularClasificacion(equipos, partidos) {
   const stats = {};
   equipos.forEach(eq => {
@@ -2226,6 +2236,35 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
   } catch (err) {
     console.error('❌ Error finalizar torneo:', err.message);
     sendHttpError(res, err);
+  }
+});
+
+app.get('/api/torneos/:id/tabla-puntos', async (req, res) => {
+  try {
+    const torneoId = Number(req.params.id);
+
+    if (!Number.isFinite(torneoId)) {
+      return res.status(400).json({ error: 'ID de torneo inválido' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('tabla_puntos')
+      .select('torneo_id, equipo_id, posicion, puntos')
+      .eq('torneo_id', torneoId)
+      .order('posicion', { ascending: true });
+
+    if (error) throw error;
+
+    const enriched = (data || []).map((row) => ({
+      ...row,
+      padcoins: calcPadcoinsPorPosicion(row.posicion),
+      rankingPoints: Number(row.puntos) || 0,
+    }));
+
+    res.json(enriched);
+  } catch (err) {
+    console.error('❌ Error obteniendo tabla de puntos:', err.message);
+    res.status(500).json({ error: 'Error obteniendo tabla de puntos' });
   }
 });
 
