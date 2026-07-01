@@ -28,6 +28,7 @@ import {
   SCOREBOARD_CANCHA_RESOLVER_SELECT,
 } from '../src/scoreboard/scoreboardCanchaResolver.js';
 import { syncScoreboardToTorneoPartido } from '../src/scoreboard/scoreboardTorneoSyncService.js';
+import { advanceWinnerIfNeeded } from '../lib/torneos/bracketAdvanceService.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -156,13 +157,42 @@ function isScoreboardEstadoTerminado(estado) {
   return normalized === 'terminado' || normalized === 'finalizado';
 }
 
-async function maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes) {
+export function logBracketAdvanceResult(scoreboardId, partidoTorneoId, result) {
+  const summary = `scoreboard ${scoreboardId} partido ${partidoTorneoId} → ${result?.status}/${result?.reason}`;
+  switch (result?.status) {
+    case 'advanced':
+      console.log(`✅ Bracket advance: ${summary}`);
+      break;
+    case 'conflict':
+      console.warn(`⚠️ Bracket advance conflict: ${summary}`);
+      break;
+    case 'failed':
+      console.warn(`⚠️ Bracket advance failed: ${summary}`);
+      break;
+    case 'skipped':
+      console.debug(`Bracket advance skipped: ${summary}`);
+      break;
+    default:
+      console.warn(`⚠️ Bracket advance: ${summary}`);
+      break;
+  }
+}
+
+export async function maybeSyncTorneoAfterScoreboardTerminated(
+  supabaseAdmin,
+  saved,
+  estadoAntes,
+  deps = {},
+) {
   if (!saved?.partido_torneo_id) return;
   if (isScoreboardEstadoTerminado(estadoAntes)) return;
   if (!isScoreboardEstadoTerminado(saved.estado)) return;
 
+  const syncFn = deps.syncScoreboardToTorneoPartido ?? syncScoreboardToTorneoPartido;
+  const advanceFn = deps.advanceWinnerIfNeeded ?? advanceWinnerIfNeeded;
+
   try {
-    const syncResult = await syncScoreboardToTorneoPartido(supabaseAdmin, saved.id);
+    const syncResult = await syncFn(supabaseAdmin, saved.id);
     if (syncResult.status === 'failed') {
       console.warn(
         `⚠️ Sync scoreboard→torneo ${saved.id}: ${syncResult.reason ?? 'failed'}`,
@@ -171,6 +201,20 @@ async function maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, es
       console.log(
         `✅ Sync scoreboard→torneo ${saved.id} partido ${saved.partido_torneo_id}`,
       );
+
+      if (saved.partido_torneo_id) {
+        try {
+          const advanceResult = await advanceFn(supabaseAdmin, {
+            partidoId: saved.partido_torneo_id,
+          });
+          logBracketAdvanceResult(saved.id, saved.partido_torneo_id, advanceResult);
+        } catch (advanceErr) {
+          console.warn(
+            `⚠️ Bracket advance scoreboard→torneo ${saved.id}:`,
+            advanceErr.message,
+          );
+        }
+      }
     }
   } catch (err) {
     console.error(`❌ Sync scoreboard→torneo ${saved.id}:`, err.message);
