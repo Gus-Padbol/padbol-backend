@@ -97,6 +97,12 @@ import {
   CRITERIOS_DESEMPATE,
 } from './lib/torneos/clasificacionService.js';
 import {
+  assertKnockoutBracketTeamCount,
+  buildKnockoutBracketMatches,
+  linkBracketMatches,
+  mergeBracketLinks,
+} from './lib/torneos/knockoutBracketService.js';
+import {
   mapMisReservaRow,
   mapReservaDetailDto,
   mapReservaListDto,
@@ -1631,24 +1637,6 @@ function generarRoundRobin(equipos, torneoId, sedeId) {
   return partidos;
 }
 
-function generarKnockout(equipos, torneoId, sedeId) {
-  // Random bracket seeding
-  const shuffled = [...equipos].sort(() => Math.random() - 0.5);
-  const partidos = [];
-  for (let i = 0; i + 1 < shuffled.length; i += 2) {
-    partidos.push({
-      torneo_id: parseInt(torneoId),
-      equipo_a_id: shuffled[i].id,
-      equipo_b_id: shuffled[i + 1].id,
-      sede_id: sedeId || null,
-      estado: 'pendiente',
-      ronda: 1,
-    });
-  }
-  // If odd number of teams, the last one gets a bye (no match generated for it)
-  return partidos;
-}
-
 function generarGruposKnockout(equipos, torneoId, sedeId) {
   // Aim for ~4 teams per group, minimum 2 groups
   const numGrupos = Math.max(2, Math.round(equipos.length / 4));
@@ -1927,13 +1915,34 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
       return res.status(400).json({ error: 'Se necesitan al menos 2 equipos para generar partidos' });
     }
 
+    const { count: existingPartidosCount, error: errExistingPartidos } = await supabase
+      .from('partidos')
+      .select('id', { count: 'exact', head: true })
+      .eq('torneo_id', parseInt(id, 10));
+    if (errExistingPartidos) throw errExistingPartidos;
+    if (existingPartidosCount > 0) {
+      return res.status(400).json({ error: 'El torneo ya tiene partidos generados' });
+    }
+
     let partidosData;
     switch (torneo.tipo_torneo) {
       case 'round_robin':
         partidosData = generarRoundRobin(equipos, id, torneo.sede_id);
         break;
       case 'knockout':
-        partidosData = generarKnockout(equipos, id, torneo.sede_id);
+        try {
+          assertKnockoutBracketTeamCount(equipos.length);
+        } catch (err) {
+          if (err.status === 400) {
+            return res.status(400).json({ error: err.message });
+          }
+          throw err;
+        }
+        partidosData = buildKnockoutBracketMatches({
+          equipos,
+          torneoId: id,
+          sedeId: torneo.sede_id,
+        });
         break;
       case 'grupos_knockout':
         partidosData = generarGruposKnockout(equipos, id, torneo.sede_id);
@@ -1942,11 +1951,25 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
         partidosData = generarRoundRobin(equipos, id, torneo.sede_id);
     }
 
-    const { data: partidos, error: errPartidos } = await supabase
+    const { data: partidosInsertados, error: errPartidos } = await supabase
       .from('partidos')
       .insert(partidosData)
       .select();
     if (errPartidos) throw errPartidos;
+
+    let partidos = partidosInsertados;
+    if (torneo.tipo_torneo === 'knockout') {
+      const linkUpdates = linkBracketMatches(partidosInsertados);
+      for (const patch of linkUpdates) {
+        const { id: partidoId, ...fields } = patch;
+        const { error: errLink } = await supabase
+          .from('partidos')
+          .update(fields)
+          .eq('id', partidoId);
+        if (errLink) throw errLink;
+      }
+      partidos = mergeBracketLinks(partidosInsertados, linkUpdates);
+    }
 
     await supabase.from('torneos').update({ estado: 'en_curso' }).eq('id', id);
 
