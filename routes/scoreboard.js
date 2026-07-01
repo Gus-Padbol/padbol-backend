@@ -20,10 +20,9 @@ import {
 } from '../src/scoreboard/scoreboardControlAuth.js';
 import {
   buildControlPath,
-  generateControlToken,
-  hashControlToken,
   maskControlTokenForLog,
 } from '../src/scoreboard/scoreboardControlToken.js';
+import { persistControlTokenForScoreboard } from '../src/scoreboard/scoreboardControlTokenService.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -328,23 +327,10 @@ export function mountScoreboardRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      const controlToken = generateControlToken();
-      const controlTokenCreatedAt = new Date().toISOString();
-
-      const { data, error } = await supabaseAdmin
-        .from('scoreboard_partidos')
-        .update({
-          control_token_hash: hashControlToken(controlToken),
-          control_token_created_at: controlTokenCreatedAt,
-          control_token_revoked_at: null,
-          updated_at: controlTokenCreatedAt,
-        })
-        .eq('id', partido.id)
-        .select('id')
-        .limit(1);
-
-      if (error) throw error;
-      if (!data?.[0]) return res.status(404).json({ error: 'Partido no encontrado' });
+      const { controlToken, controlTokenCreatedAt } = await persistControlTokenForScoreboard(
+        supabaseAdmin,
+        partido.id,
+      );
 
       return res.json({
         ok: true,

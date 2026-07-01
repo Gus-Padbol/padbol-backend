@@ -126,6 +126,7 @@ import { createRangosRouter } from './src/routes/rangos.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
 import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
+import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
 import {
   actualizarRango,
   collectUserIdsFromEquipos,
@@ -1951,6 +1952,24 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
     res.json({ partidos, total: partidos.length, formato: torneo.tipo_torneo });
   } catch (err) {
     console.error('❌ Error generar-partidos:', err.message);
+    sendHttpError(res, err);
+  }
+});
+
+// POST /api/torneos/:id/generar-scoreboards
+app.post('/api/torneos/:id/generar-scoreboards', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const auth = await requireTorneoAdminByTorneoId(req, res, id);
+    if (!auth) return;
+
+    const result = await generarScoreboardsForTorneo(supabaseAdmin, id, req.body ?? {});
+    console.log(
+      `✅ Scoreboards torneo ${id}: created=${result.created}, skipped=${result.skipped}, total=${result.items.length}`,
+    );
+    res.json(result);
+  } catch (err) {
+    console.error('❌ Error generar-scoreboards:', err.message);
     sendHttpError(res, err);
   }
 });
@@ -4523,5 +4542,6 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Lista espera general: POST/DELETE/GET check /api/lista-espera-general, GET /api/admin/lista-espera-general/:sede_id');
     console.log(`✅ Fotos sede: POST /api/sedes/:id/fotos (máx. ${20} por sede)`);
     console.log('✅ Scoreboard: POST/GET /api/scoreboard/partidos, WebSocket scoreboard:update');
+    console.log('✅ Torneos: POST /api/torneos/:id/generar-scoreboards');
   });
 })();
