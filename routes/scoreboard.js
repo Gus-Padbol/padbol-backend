@@ -12,7 +12,18 @@ import {
   applyHistorialPuntoSnapshot,
 } from '../utils/scoreboardLogic.js';
 import { sendHttpError } from '../lib/httpErrors.js';
+import { scoreboardControlWriteRateLimit } from '../lib/rateLimit.js';
 import { mapScoreboardJugadoresTempPublic } from '../lib/scoreboardPublic.js';
+import {
+  assertScoreboardMutable,
+  resolveScoreboardByControlToken,
+} from '../src/scoreboard/scoreboardControlAuth.js';
+import {
+  buildControlPath,
+  generateControlToken,
+  hashControlToken,
+  maskControlTokenForLog,
+} from '../src/scoreboard/scoreboardControlToken.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -76,7 +87,8 @@ export function pickScoreboardPartidoLinks(body = {}) {
 
 const SCOREBOARD_PARTIDO_SELECT = [
   'id', 'sede_id', 'torneo_id', 'torneo_nombre', 'cancha',
-  'partido_abierto_id', 'reserva_id',
+  'partido_abierto_id', 'reserva_id', 'partido_torneo_id',
+  'synced_to_torneo_at', 'sync_torneo_status',
   'equipo_a_nombre', 'equipo_b_nombre', 'equipo_a_jugadores', 'equipo_b_jugadores',
   'jersey_a1', 'jersey_a2', 'jersey_a3', 'jersey_a4',
   'jersey_b1', 'jersey_b2', 'jersey_b3', 'jersey_b4',
@@ -251,6 +263,270 @@ export function mountScoreboardRoutes(app, {
   legacySuperAdminEmails = [],
   io = null,
 }) {
+  async function saveAndEmit(partido) {
+    const saved = await savePartido(supabaseAdmin, partido);
+    emitScoreboardUpdate(io, saved.id, saved);
+    return enrichPartidoResponse(saved);
+  }
+
+  async function handleRegistrarPunto(partido, equipo) {
+    assertScoreboardMutable(partido);
+    await insertHistorialPuntoBefore(supabaseAdmin, partido.id, partido, equipo);
+    registrarPunto(partido, equipo);
+    return saveAndEmit(partido);
+  }
+
+  async function handleUndo(partido) {
+    assertScoreboardMutable(partido);
+    const entry = await fetchUltimoHistorialPunto(supabaseAdmin, partido.id);
+    if (!entry) {
+      const err = new Error('No hay puntos para deshacer');
+      err.status = 400;
+      throw err;
+    }
+    applyHistorialPuntoSnapshot(partido, entry);
+    await deleteHistorialPuntoById(supabaseAdmin, entry.id);
+    return saveAndEmit(partido);
+  }
+
+  async function handleDeshacer(partido) {
+    assertScoreboardMutable(partido);
+    deshacerPunto(partido);
+    return saveAndEmit(partido);
+  }
+
+  async function handleSaque(partido) {
+    assertScoreboardMutable(partido);
+    cambiarSaque(partido);
+    return saveAndEmit(partido);
+  }
+
+  async function handleTiebreak(partido) {
+    assertScoreboardMutable(partido);
+    iniciarTiebreak(partido);
+    return saveAndEmit(partido);
+  }
+
+  async function handleCronometro(partido, accion) {
+    assertScoreboardMutable(partido);
+    if (accion === 'start') {
+      startCronometro(partido);
+    } else if (accion === 'pause') {
+      pauseCronometro(partido);
+    } else if (accion === 'reset') {
+      resetPartidoCompleto(partido);
+    }
+    return saveAndEmit(partido);
+  }
+
+  app.post('/api/scoreboard/partidos/:id/control-token', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status).json({ error: authError });
+
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      assertCanControlScoreboard(role, partido.sede_id);
+
+      const controlToken = generateControlToken();
+      const controlTokenCreatedAt = new Date().toISOString();
+
+      const { data, error } = await supabaseAdmin
+        .from('scoreboard_partidos')
+        .update({
+          control_token_hash: hashControlToken(controlToken),
+          control_token_created_at: controlTokenCreatedAt,
+          control_token_revoked_at: null,
+          updated_at: controlTokenCreatedAt,
+        })
+        .eq('id', partido.id)
+        .select('id')
+        .limit(1);
+
+      if (error) throw error;
+      if (!data?.[0]) return res.status(404).json({ error: 'Partido no encontrado' });
+
+      return res.json({
+        ok: true,
+        scoreboard_id: partido.id,
+        control_path: buildControlPath(controlToken),
+        control_token: controlToken,
+        control_token_created_at: controlTokenCreatedAt,
+      });
+    } catch (err) {
+      console.error('❌ POST /api/scoreboard/partidos/:id/control-token:', err.message);
+      return sendHttpError(res, err, { fallbackMessage: 'Error al emitir token de control' });
+    }
+  });
+
+  app.post('/api/scoreboard/partidos/:id/revoke-control-token', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status).json({ error: authError });
+
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      assertCanControlScoreboard(role, partido.sede_id);
+
+      const revokedAt = new Date().toISOString();
+      const { data, error } = await supabaseAdmin
+        .from('scoreboard_partidos')
+        .update({
+          control_token_revoked_at: revokedAt,
+          updated_at: revokedAt,
+        })
+        .eq('id', partido.id)
+        .select('id')
+        .limit(1);
+
+      if (error) throw error;
+      if (!data?.[0]) return res.status(404).json({ error: 'Partido no encontrado' });
+
+      return res.json({ ok: true, scoreboard_id: partido.id, control_token_revoked_at: revokedAt });
+    } catch (err) {
+      console.error('❌ POST /api/scoreboard/partidos/:id/revoke-control-token:', err.message);
+      return sendHttpError(res, err, { fallbackMessage: 'Error al revocar token de control' });
+    }
+  });
+
+  app.get('/api/scoreboard/control/:token', async (req, res) => {
+    try {
+      const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
+      return res.json(enrichPartidoResponse(partido));
+    } catch (err) {
+      console.error(
+        '❌ GET /api/scoreboard/control/:token:',
+        err.message,
+        maskControlTokenForLog(req.params.token),
+      );
+      return sendHttpError(res, err, { fallbackMessage: 'Error al obtener marcador por token' });
+    }
+  });
+
+  app.post(
+    '/api/scoreboard/control/:token/punto/:equipo',
+    scoreboardControlWriteRateLimit,
+    async (req, res) => {
+      try {
+        const equipo = String(req.params.equipo || '').toUpperCase();
+        if (!['A', 'B'].includes(equipo)) {
+          return res.status(400).json({ error: 'Equipo debe ser A o B' });
+        }
+
+        const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
+        const enriched = await handleRegistrarPunto(partido, equipo);
+        return res.json(enriched);
+      } catch (err) {
+        console.error(
+          '❌ POST /api/scoreboard/control/:token/punto/:equipo:',
+          err.message,
+          maskControlTokenForLog(req.params.token),
+        );
+        return sendHttpError(res, err, { fallbackMessage: 'Error al registrar punto' });
+      }
+    },
+  );
+
+  app.post(
+    '/api/scoreboard/control/:token/undo',
+    scoreboardControlWriteRateLimit,
+    async (req, res) => {
+      try {
+        const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
+        const enriched = await handleUndo(partido);
+        return res.json(enriched);
+      } catch (err) {
+        console.error(
+          '❌ POST /api/scoreboard/control/:token/undo:',
+          err.message,
+          maskControlTokenForLog(req.params.token),
+        );
+        return sendHttpError(res, err, { fallbackMessage: 'Error al deshacer punto' });
+      }
+    },
+  );
+
+  app.post(
+    '/api/scoreboard/control/:token/deshacer',
+    scoreboardControlWriteRateLimit,
+    async (req, res) => {
+      try {
+        const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
+        const enriched = await handleDeshacer(partido);
+        return res.json(enriched);
+      } catch (err) {
+        console.error(
+          '❌ POST /api/scoreboard/control/:token/deshacer:',
+          err.message,
+          maskControlTokenForLog(req.params.token),
+        );
+        return sendHttpError(res, err, { fallbackMessage: 'Error al deshacer punto' });
+      }
+    },
+  );
+
+  app.post(
+    '/api/scoreboard/control/:token/saque',
+    scoreboardControlWriteRateLimit,
+    async (req, res) => {
+      try {
+        const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
+        const enriched = await handleSaque(partido);
+        return res.json(enriched);
+      } catch (err) {
+        console.error(
+          '❌ POST /api/scoreboard/control/:token/saque:',
+          err.message,
+          maskControlTokenForLog(req.params.token),
+        );
+        return sendHttpError(res, err, { fallbackMessage: 'Error al cambiar saque' });
+      }
+    },
+  );
+
+  app.post(
+    '/api/scoreboard/control/:token/tiebreak',
+    scoreboardControlWriteRateLimit,
+    async (req, res) => {
+      try {
+        const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
+        const enriched = await handleTiebreak(partido);
+        return res.json(enriched);
+      } catch (err) {
+        console.error(
+          '❌ POST /api/scoreboard/control/:token/tiebreak:',
+          err.message,
+          maskControlTokenForLog(req.params.token),
+        );
+        return sendHttpError(res, err, { fallbackMessage: 'Error al iniciar tie-break' });
+      }
+    },
+  );
+
+  app.post(
+    '/api/scoreboard/control/:token/cronometro/:accion',
+    scoreboardControlWriteRateLimit,
+    async (req, res) => {
+      try {
+        const accion = String(req.params.accion || '').toLowerCase();
+        if (!['start', 'pause', 'reset'].includes(accion)) {
+          return res.status(400).json({ error: 'Acción inválida. Usar start, pause o reset' });
+        }
+
+        const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
+        const enriched = await handleCronometro(partido, accion);
+        return res.json(enriched);
+      } catch (err) {
+        console.error(
+          '❌ POST /api/scoreboard/control/:token/cronometro/:accion:',
+          err.message,
+          maskControlTokenForLog(req.params.token),
+        );
+        return sendHttpError(res, err, { fallbackMessage: 'Error en cronómetro' });
+      }
+    },
+  );
+
   app.post('/api/scoreboard/partidos', async (req, res) => {
     try {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
@@ -590,16 +866,11 @@ export function mountScoreboardRoutes(app, {
         return res.status(400).json({ error: 'Equipo debe ser A o B' });
       }
 
-      let partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      await insertHistorialPuntoBefore(supabaseAdmin, partido.id, partido, equipo);
-      registrarPunto(partido, equipo);
-      partido = await savePartido(supabaseAdmin, partido);
-
-      const enriched = enrichPartidoResponse(partido);
-      emitScoreboardUpdate(io, partido.id, partido);
+      const enriched = await handleRegistrarPunto(partido, equipo);
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -628,21 +899,11 @@ export function mountScoreboardRoutes(app, {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) return res.status(status).json({ error: authError });
 
-      let partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      const entry = await fetchUltimoHistorialPunto(supabaseAdmin, partido.id);
-      if (!entry) {
-        return res.status(400).json({ error: 'No hay puntos para deshacer' });
-      }
-
-      applyHistorialPuntoSnapshot(partido, entry);
-      await deleteHistorialPuntoById(supabaseAdmin, entry.id);
-      partido = await savePartido(supabaseAdmin, partido);
-
-      const enriched = enrichPartidoResponse(partido);
-      emitScoreboardUpdate(io, partido.id, partido);
+      const enriched = await handleUndo(partido);
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -656,15 +917,11 @@ export function mountScoreboardRoutes(app, {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) return res.status(status).json({ error: authError });
 
-      let partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      deshacerPunto(partido);
-      partido = await savePartido(supabaseAdmin, partido);
-
-      const enriched = enrichPartidoResponse(partido);
-      emitScoreboardUpdate(io, partido.id, partido);
+      const enriched = await handleDeshacer(partido);
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -678,15 +935,11 @@ export function mountScoreboardRoutes(app, {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) return res.status(status).json({ error: authError });
 
-      let partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      cambiarSaque(partido);
-      partido = await savePartido(supabaseAdmin, partido);
-
-      const enriched = enrichPartidoResponse(partido);
-      emitScoreboardUpdate(io, partido.id, partido);
+      const enriched = await handleSaque(partido);
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -700,15 +953,11 @@ export function mountScoreboardRoutes(app, {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) return res.status(status).json({ error: authError });
 
-      let partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      iniciarTiebreak(partido);
-      partido = await savePartido(supabaseAdmin, partido);
-
-      const enriched = enrichPartidoResponse(partido);
-      emitScoreboardUpdate(io, partido.id, partido);
+      const enriched = await handleTiebreak(partido);
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -727,21 +976,11 @@ export function mountScoreboardRoutes(app, {
         return res.status(400).json({ error: 'Acción inválida. Usar start, pause o reset' });
       }
 
-      let partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      if (accion === 'start') {
-        startCronometro(partido);
-      } else if (accion === 'pause') {
-        pauseCronometro(partido);
-      } else if (accion === 'reset') {
-        resetPartidoCompleto(partido);
-      }
-
-      partido = await savePartido(supabaseAdmin, partido);
-      const enriched = enrichPartidoResponse(partido);
-      emitScoreboardUpdate(io, partido.id, partido);
+      const enriched = await handleCronometro(partido, accion);
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
