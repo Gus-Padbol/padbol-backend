@@ -92,6 +92,8 @@ import {
 } from './lib/dto/legacyPublic.js';
 import {
   buildClasificacion,
+  buildFinalRankingForTorneo,
+  buildTablaPuntosFromRankingRows,
   CRITERIOS_DESEMPATE,
 } from './lib/torneos/clasificacionService.js';
 import {
@@ -2137,48 +2139,6 @@ function calcPadcoinsPorPosicion(posicion) {
   return 10;
 }
 
-function calcularClasificacion(equipos, partidos) {
-  const stats = {};
-  equipos.forEach(eq => {
-    stats[eq.id] = { jj: 0, g: 0, p: 0, pts: 0, sg: 0, sp: 0, gg: 0, gp: 0 };
-  });
-
-  partidos.forEach(partido => {
-    if (partido.estado !== 'finalizado' || !partido.resultado) return;
-    const res = typeof partido.resultado === 'string'
-      ? JSON.parse(partido.resultado)
-      : partido.resultado;
-    const sets = [res.set1, res.set2, res.set3].filter(Boolean);
-
-    let sgA = 0, sgB = 0, ggA = 0, ggB = 0;
-    sets.forEach(set => {
-      const [a, b] = set.split('-').map(Number);
-      ggA += a; ggB += b;
-      if (a > b) sgA++; else sgB++;
-    });
-
-    const eqA = stats[partido.equipo_a_id];
-    const eqB = stats[partido.equipo_b_id];
-    if (!eqA || !eqB) return;
-
-    eqA.jj++; eqB.jj++;
-    eqA.sg += sgA; eqA.sp += sgB; eqA.gg += ggA; eqA.gp += ggB;
-    eqB.sg += sgB; eqB.sp += sgA; eqB.gg += ggB; eqB.gp += ggA;
-
-    if (sgA > sgB) { eqA.g++; eqB.p++; eqA.pts += 3; }
-    else           { eqB.g++; eqA.p++; eqB.pts += 3; }
-  });
-
-  return equipos
-    .map(eq => ({ ...eq, ...stats[eq.id] }))
-    .sort((a, b) => {
-      if (b.pts !== a.pts) return b.pts - a.pts;
-      const dA = a.sg - a.sp, dB = b.sg - b.sp;
-      if (dB !== dA) return dB - dA;
-      return (b.gg - b.gp) - (a.gg - a.gp);
-    });
-}
-
 app.post('/api/torneos/:id/finalizar', async (req, res) => {
   try {
     const { id } = req.params;
@@ -2206,17 +2166,26 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       });
     }
 
-    // Calculate final standings
-    const clasificacion = calcularClasificacion(equipos || [], partidos || []);
+    const { rankingRows, source } = buildFinalRankingForTorneo({
+      equipos: equipos || [],
+      partidos: partidos || [],
+      tipoTorneo: torneo.tipo_torneo,
+    });
 
-    // Assign ranking points
+    if (!rankingRows.length) {
+      return res.status(400).json({
+        error: 'No se pudo calcular el ranking final del torneo.',
+        code: 'TORNEO_RANKING_EMPTY',
+        tipo_torneo: torneo.tipo_torneo ?? null,
+      });
+    }
+
     const base = BASE_PUNTOS[torneo.nivel_torneo] ?? 10;
-    const puntosData = clasificacion.map((eq, idx) => ({
-      torneo_id: parseInt(id),
-      equipo_id: eq.id,
-      posicion: idx + 1,
-      puntos: Math.round(base * (POSICION_MULT[idx] ?? 0.05)),
-    }));
+    const puntosData = buildTablaPuntosFromRankingRows(rankingRows, {
+      torneoId: parseInt(id, 10),
+      basePoints: base,
+      posicionMult: POSICION_MULT,
+    });
 
     // Delete previous entries for this torneo (idempotent), then insert
     await supabase.from('tabla_puntos').delete().eq('torneo_id', parseInt(id));
@@ -2251,7 +2220,7 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
     // TODO: Auto-set jugadores_perfil.companero_habitual_id to the tournament doubles partner
     // when a match is completed (use the partner from that match for each player).
 
-    console.log(`🏆 Torneo ${id} finalizado. ${puntosData.length} equipos clasificados.`);
+    console.log(`🏆 Torneo ${id} finalizado (${source}). ${puntosData.length} equipos clasificados.`);
     res.json({
       torneo: torneoFinal,
       clasificacion: puntosData,
