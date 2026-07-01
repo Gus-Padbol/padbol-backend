@@ -27,6 +27,7 @@ import {
   resolveScoreboardForCancha,
   SCOREBOARD_CANCHA_RESOLVER_SELECT,
 } from '../src/scoreboard/scoreboardCanchaResolver.js';
+import { syncScoreboardToTorneoPartido } from '../src/scoreboard/scoreboardTorneoSyncService.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -148,6 +149,32 @@ function parseSlotQr(raw) {
 
 function isPartidoActivo(estado) {
   return String(estado ?? '').toLowerCase() !== 'terminado';
+}
+
+function isScoreboardEstadoTerminado(estado) {
+  const normalized = String(estado ?? '').trim().toLowerCase();
+  return normalized === 'terminado' || normalized === 'finalizado';
+}
+
+async function maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes) {
+  if (!saved?.partido_torneo_id) return;
+  if (isScoreboardEstadoTerminado(estadoAntes)) return;
+  if (!isScoreboardEstadoTerminado(saved.estado)) return;
+
+  try {
+    const syncResult = await syncScoreboardToTorneoPartido(supabaseAdmin, saved.id);
+    if (syncResult.status === 'failed') {
+      console.warn(
+        `⚠️ Sync scoreboard→torneo ${saved.id}: ${syncResult.reason ?? 'failed'}`,
+      );
+    } else if (syncResult.status === 'synced') {
+      console.log(
+        `✅ Sync scoreboard→torneo ${saved.id} partido ${saved.partido_torneo_id}`,
+      );
+    }
+  } catch (err) {
+    console.error(`❌ Sync scoreboard→torneo ${saved.id}:`, err.message);
+  }
 }
 
 async function fetchJugadoresTempByPartido(supabaseAdmin, partidoId) {
@@ -274,9 +301,13 @@ export function mountScoreboardRoutes(app, {
 
   async function handleRegistrarPunto(partido, equipo) {
     assertScoreboardMutable(partido);
+    const estadoAntes = partido.estado;
     await insertHistorialPuntoBefore(supabaseAdmin, partido.id, partido, equipo);
     registrarPunto(partido, equipo);
-    return saveAndEmit(partido);
+    const saved = await savePartido(supabaseAdmin, partido);
+    await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
+    emitScoreboardUpdate(io, saved.id, saved);
+    return enrichPartidoResponse(saved);
   }
 
   async function handleUndo(partido) {
