@@ -91,6 +91,10 @@ import {
   TORNEO_PUBLIC_SELECT,
 } from './lib/dto/legacyPublic.js';
 import {
+  buildClasificacion,
+  CRITERIOS_DESEMPATE,
+} from './lib/torneos/clasificacionService.js';
+import {
   mapMisReservaRow,
   mapReservaDetailDto,
   mapReservaListDto,
@@ -2254,6 +2258,67 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Error finalizar torneo:', err.message);
+    sendHttpError(res, err);
+  }
+});
+
+app.get('/api/torneos/:id/tabla', async (req, res) => {
+  try {
+    const torneoId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(torneoId)) {
+      return res.status(400).json({ ok: false, error: 'ID de torneo inválido' });
+    }
+
+    const scopeRaw = String(req.query.scope ?? 'all').trim().toLowerCase();
+    if (!['all', 'general', 'grupos'].includes(scopeRaw)) {
+      return res.status(400).json({ ok: false, error: 'scope inválido' });
+    }
+
+    const grupoFilter = req.query.grupo != null && String(req.query.grupo).trim() !== ''
+      ? String(req.query.grupo).trim().toUpperCase()
+      : null;
+
+    const { data: torneo, error: errTorneo } = await supabaseAdmin
+      .from('torneos')
+      .select('id, tipo_torneo')
+      .eq('id', torneoId)
+      .single();
+
+    if (errTorneo) {
+      if (errTorneo.code === 'PGRST116') {
+        return res.status(404).json({ ok: false, error: 'Torneo no encontrado' });
+      }
+      throw errTorneo;
+    }
+
+    const [{ data: equipos, error: errEq }, { data: partidos, error: errPart }] = await Promise.all([
+      supabaseAdmin.from('equipos').select('id, nombre').eq('torneo_id', torneoId),
+      supabaseAdmin.from('partidos').select('*').eq('torneo_id', torneoId),
+    ]);
+    if (errEq) throw errEq;
+    if (errPart) throw errPart;
+
+    const clasificacion = buildClasificacion({
+      equipos: equipos || [],
+      partidos: partidos || [],
+      tipoTorneo: torneo.tipo_torneo,
+      scope: scopeRaw,
+      grupo: grupoFilter,
+    });
+
+    return res.json({
+      ok: true,
+      torneo_id: torneoId,
+      tipo_torneo: torneo.tipo_torneo ?? null,
+      calculated_at: new Date().toISOString(),
+      scope: scopeRaw,
+      metadata: clasificacion.metadata,
+      general: clasificacion.general,
+      grupos: clasificacion.grupos,
+      criterios_desempate: CRITERIOS_DESEMPATE,
+    });
+  } catch (err) {
+    console.error('❌ GET /api/torneos/:id/tabla:', err.message);
     sendHttpError(res, err);
   }
 });
