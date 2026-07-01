@@ -23,6 +23,10 @@ import {
   maskControlTokenForLog,
 } from '../src/scoreboard/scoreboardControlToken.js';
 import { persistControlTokenForScoreboard } from '../src/scoreboard/scoreboardControlTokenService.js';
+import {
+  resolveScoreboardForCancha,
+  SCOREBOARD_CANCHA_RESOLVER_SELECT,
+} from '../src/scoreboard/scoreboardCanchaResolver.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -704,18 +708,9 @@ export function mountScoreboardRoutes(app, {
       const cancha = decodeURIComponent(String(req.params.cancha || '').trim());
       if (!cancha) return res.status(400).json({ error: 'cancha inválida' });
 
-      const { data, error } = await supabaseAdmin
-        .from('scoreboard_partidos')
-        .select('id, equipo_a_nombre, equipo_b_nombre, estado')
-        .eq('sede_id', sid)
-        .eq('cancha', cancha)
-        .neq('estado', 'terminado')
-        .order('updated_at', { ascending: false })
-        .limit(1);
-
-      if (error) throw error;
-
-      const partido = data?.[0] ?? null;
+      const partido = await resolveScoreboardForCancha(supabaseAdmin, sid, cancha, {
+        select: SCOREBOARD_CANCHA_RESOLVER_SELECT,
+      });
       if (!partido || !isPartidoActivo(partido.estado)) {
         return res.json({ activo: false });
       }
@@ -818,18 +813,9 @@ export function mountScoreboardRoutes(app, {
       const cancha = decodeURIComponent(String(req.params.cancha || '').trim());
       if (!cancha) return res.status(400).json({ error: 'cancha inválida' });
 
-      const { data, error } = await supabaseAdmin
-        .from('scoreboard_partidos')
-        .select(SCOREBOARD_PARTIDO_SELECT)
-        .eq('sede_id', sid)
-        .eq('cancha', cancha)
-        .not('estado', 'in', '(terminado,finalizado)')
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      if (error) throw error;
-
-      const partido = data?.[0] ?? null;
+      const partido = await resolveScoreboardForCancha(supabaseAdmin, sid, cancha, {
+        select: SCOREBOARD_PARTIDO_SELECT,
+      });
       if (!partido) {
         return res.json({ partido: null });
       }
