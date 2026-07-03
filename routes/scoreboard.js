@@ -29,6 +29,7 @@ import {
 } from '../src/scoreboard/scoreboardCanchaResolver.js';
 import { syncScoreboardToTorneoPartido } from '../src/scoreboard/scoreboardTorneoSyncService.js';
 import { advanceWinnerIfNeeded } from '../lib/torneos/bracketAdvanceService.js';
+import { ensureScoreboardForCompletedBracketPartido } from '../lib/torneos/bracketScoreboardService.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -178,6 +179,21 @@ export function logBracketAdvanceResult(scoreboardId, partidoTorneoId, result) {
   }
 }
 
+export function logBracketScoreboardResult(destinoPartidoId, result) {
+  const summary = `partido destino ${destinoPartidoId} → ${result?.status}/${result?.reason}`;
+  switch (result?.status) {
+    case 'created':
+      console.log(`✅ Bracket scoreboard: ${summary} (scoreboard ${result?.scoreboard_id})`);
+      break;
+    case 'failed':
+      console.warn(`⚠️ Bracket scoreboard failed: ${summary}`);
+      break;
+    default:
+      console.debug(`Bracket scoreboard: ${summary}`);
+      break;
+  }
+}
+
 export async function maybeSyncTorneoAfterScoreboardTerminated(
   supabaseAdmin,
   saved,
@@ -190,6 +206,8 @@ export async function maybeSyncTorneoAfterScoreboardTerminated(
 
   const syncFn = deps.syncScoreboardToTorneoPartido ?? syncScoreboardToTorneoPartido;
   const advanceFn = deps.advanceWinnerIfNeeded ?? advanceWinnerIfNeeded;
+  const ensureScoreboardFn = deps.ensureScoreboardForCompletedBracketPartido
+    ?? ensureScoreboardForCompletedBracketPartido;
 
   try {
     const syncResult = await syncFn(supabaseAdmin, saved.id);
@@ -208,6 +226,20 @@ export async function maybeSyncTorneoAfterScoreboardTerminated(
             partidoId: saved.partido_torneo_id,
           });
           logBracketAdvanceResult(saved.id, saved.partido_torneo_id, advanceResult);
+
+          if (advanceResult?.status === 'advanced' && advanceResult.destino_partido_id != null) {
+            try {
+              const scoreboardResult = await ensureScoreboardFn(supabaseAdmin, {
+                partidoId: advanceResult.destino_partido_id,
+              });
+              logBracketScoreboardResult(advanceResult.destino_partido_id, scoreboardResult);
+            } catch (scoreboardErr) {
+              console.warn(
+                `⚠️ Bracket scoreboard destino ${advanceResult.destino_partido_id}:`,
+                scoreboardErr.message,
+              );
+            }
+          }
         } catch (advanceErr) {
           console.warn(
             `⚠️ Bracket advance scoreboard→torneo ${saved.id}:`,

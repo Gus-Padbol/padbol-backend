@@ -7,7 +7,7 @@ import {
 
 const SCOREBOARD_ACTIVE_ESTADOS_TERMINADOS = new Set(['terminado', 'finalizado']);
 
-const SCOREBOARD_INSERT_SELECT = [
+export const SCOREBOARD_INSERT_SELECT = [
   'id', 'sede_id', 'torneo_id', 'torneo_nombre', 'cancha', 'partido_torneo_id',
   'equipo_a_nombre', 'equipo_b_nombre', 'estado',
 ].join(', ');
@@ -66,7 +66,7 @@ export function mapJugadoresForScoreboard(jugadoresRaw) {
   }));
 }
 
-function buildScoreboardInsertRow({
+export function buildScoreboardInsertRow({
   partido,
   torneo,
   equipoA,
