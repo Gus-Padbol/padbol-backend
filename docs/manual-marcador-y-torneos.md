@@ -28,8 +28,14 @@ Al hueso, sin redundancias.
 ## 3. Marcador
 
 **Cómo se crea**
-- Para torneos: `POST /api/torneos/:id/generar-scoreboards` crea marcadores de los partidos con ambos equipos definidos.
+- Para torneos: `POST /api/torneos/:id/generar-scoreboards` crea marcadores de los partidos jugables con ambos equipos definidos.
 - Automático: cuando la llave completa un partido destino, se crea su marcador solo (ver sección 5).
+
+**Qué partidos reciben marcador** (`generar-scoreboards`)
+- Sí: partidos jugables (`pendiente`, `programado`) con ambos equipos.
+- No: partidos `finalizado`, `terminado` o `cancelado`.
+- No: partidos sin `equipo_a_id` / `equipo_b_id`.
+- No duplica: si ya hay un marcador activo para el partido, lo reutiliza.
 
 **Cómo se controla por token**
 - Cada marcador tiene un `control_token`. El árbitro opera con ese token.
@@ -129,9 +135,23 @@ Al hueso, sin redundancias.
 **Qué ya funciona**
 - Reparto en grupos y generación de partidos de grupo.
 - Tabla por grupo, en vivo.
+- **Grupos → knockout automático**: genera la llave con los clasificados (ver abajo).
 
-**Qué falta**
-- Avance automático de **grupos → knockout**: hoy la fase de grupos no genera la llave con los clasificados. Está diseñado (RFC aparte), pendiente de implementar.
+**Grupos → Knockout automático** (`POST /api/torneos/:id/generar-knockout-desde-grupos`)
+- Requiere admin auth. Aplica a `grupos_knockout`.
+- Condiciones:
+  - fase de grupos completa (todos los partidos de grupo `finalizado`);
+  - no debe existir llave previa;
+  - estructura soportada: 2 grupos de 4 equipos.
+- Cruces:
+  - semifinal 1: 1A vs 2B.
+  - semifinal 2: 1B vs 2A.
+  - final vacía (slots `null`).
+- Links:
+  - semi 1 → final slot A.
+  - semi 2 → final slot B.
+- Idempotencia: si ya existe llave, no duplica y responde `llave_existente`.
+- La llave usa el mismo avance automático y creación de marcador del knockout (sección 5).
 
 ## 7. Finalización de torneo
 
@@ -155,6 +175,24 @@ Demo **#28** (`knockout` 4 equipos), validado de punta a punta en producción:
 - Marcadores del demo: **3** (uno por partido).
 - Torneos protegidos intactos: **#21 = 6 partidos, #23 = 16, #27 = 1**.
 
+Demo **#29** (`grupos_knockout` 2×4), flujo completo validado en producción:
+
+- 12 partidos de grupo. Clasificados: **A1 = 75, A2 = 76, B1 = 79, B2 = 80**.
+- Tabla grupo A = `[75, 76, 77, 78]`; grupo B = `[79, 80, 81, 82]`.
+
+| Partido | Cruce | Ganador |
+|---------|-------|---------|
+| Semifinal #60 | 75 vs 80 | **75** |
+| Semifinal #61 | 79 vs 76 | **79** |
+| Final #62 | 75 vs 79 | **75** (campeón) |
+
+- Grupos → llave generada con los cruces correctos (1A vs 2B, 1B vs 2A).
+- Semifinales avanzaron solas a la final (75 vs 79).
+- Marcador de la final creado automáticamente al quedar completa.
+- Final cerró con `skipped/no_destino`, sin marcadores extra.
+- Marcadores de llave: **3**.
+- Protegidos intactos: **#21 / #23 / #27 / #28**.
+
 ## 9. Reglas operativas
 
 - No tocar torneos históricos (#21 / #23 / #27, u otros reales) sin autorización explícita.
@@ -166,7 +204,7 @@ Demo **#28** (`knockout` 4 equipos), validado de punta a punta en producción:
 
 ## 10. Pendientes
 
-- Grupos → knockout automático (generar la llave con los clasificados).
-- Campeón / podio más visible en respuestas y pantallas.
-- Pantallas de app y panel para la llave y el marcador.
-- Prueba E2E completa de un torneo `grupos_knockout` (grupos → semifinales → final).
+- Campeón / podio más visible en API y app.
+- Pantallas de app y panel para la llave completa.
+- Soporte futuro para más formatos: 4 grupos / 8 clasificados / cuartos.
+- Manual operativo de uso para administradores (si se decide).
