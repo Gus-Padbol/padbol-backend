@@ -7,6 +7,13 @@ import {
 
 const SCOREBOARD_ACTIVE_ESTADOS_TERMINADOS = new Set(['terminado', 'finalizado']);
 
+// Estados de partido para los que nunca se debe crear un scoreboard nuevo.
+const PARTIDO_ESTADOS_NO_JUGABLES = new Set([
+  'finalizado', 'finalizada',
+  'terminado', 'terminada',
+  'cancelado', 'cancelada',
+]);
+
 export const SCOREBOARD_INSERT_SELECT = [
   'id', 'sede_id', 'torneo_id', 'torneo_nombre', 'cancha', 'partido_torneo_id',
   'equipo_a_nombre', 'equipo_b_nombre', 'estado',
@@ -112,6 +119,12 @@ export function buildScoreboardInsertRow({
 
 function isScoreboardActivo(estado) {
   return !SCOREBOARD_ACTIVE_ESTADOS_TERMINADOS.has(String(estado ?? '').toLowerCase());
+}
+
+// Un partido es jugable si no está finalizado/terminado/cancelado.
+// Estado ausente (null/undefined) se considera jugable por compatibilidad.
+export function isPartidoEstadoJugable(estado) {
+  return !PARTIDO_ESTADOS_NO_JUGABLES.has(String(estado ?? '').trim().toLowerCase());
 }
 
 function buildItemBase({
@@ -260,6 +273,23 @@ export async function generarScoreboardsForTorneo(supabaseAdmin, torneoId, body 
       });
       await attachControlTokenIfNeeded(supabaseAdmin, item, existing.id, options, false);
       items.push(item);
+      continue;
+    }
+
+    // Nunca crear scoreboard para partidos finalizados/terminados/cancelados.
+    if (!isPartidoEstadoJugable(partido.estado)) {
+      skipped += 1;
+      items.push({
+        ...buildItemBase({
+          partido,
+          scoreboard: null,
+          cancha: resolveCanchaForPartidoIndex(partido, index, options),
+          equipoA,
+          equipoB,
+          status: 'skipped',
+          skip_reason: 'estado_no_jugable',
+        }),
+      });
       continue;
     }
 
