@@ -102,6 +102,7 @@ import {
   linkBracketMatches,
   mergeBracketLinks,
 } from './lib/torneos/knockoutBracketService.js';
+import { generarKnockoutDesdeGrupos } from './lib/torneos/generarKnockoutDesdeGruposService.js';
 import {
   mapMisReservaRow,
   mapReservaDetailDto,
@@ -1999,6 +2000,34 @@ app.post('/api/torneos/:id/generar-scoreboards', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('❌ Error generar-scoreboards:', err.message);
+    sendHttpError(res, err);
+  }
+});
+
+// POST /api/torneos/:id/generar-knockout-desde-grupos
+// Para torneos grupos_knockout: al terminar la fase de grupos, genera la llave
+// eliminatoria con los clasificados (siembra cruzada). No recalcula finalización.
+app.post('/api/torneos/:id/generar-knockout-desde-grupos', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const auth = await requireTorneoAdminByTorneoId(req, res, id);
+    if (!auth) return;
+
+    const result = await generarKnockoutDesdeGrupos(supabaseAdmin, id);
+
+    notifyTorneoSorteoPublicado(supabaseAdmin, parseInt(id, 10)).catch((err) =>
+      console.warn('⚠️ Push sorteo torneo (grupos→knockout):', err.message),
+    );
+
+    console.log(`✅ Llave grupos→knockout torneo ${id}: ${result.total} partidos`);
+    res.json(result);
+  } catch (err) {
+    const status = Number(err?.status ?? 500);
+    if (status >= 500) {
+      console.error('❌ Error generar-knockout-desde-grupos:', err.message);
+    } else {
+      console.warn(`⚠️ generar-knockout-desde-grupos ${req.params.id}: ${err.code ?? err.message}`);
+    }
     sendHttpError(res, err);
   }
 });
