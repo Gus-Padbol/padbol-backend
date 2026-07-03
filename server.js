@@ -93,8 +93,8 @@ import {
 import {
   buildClasificacion,
   buildFinalRankingForTorneo,
+  buildTablaLivePublicResponse,
   buildTablaPuntosFromRankingRows,
-  CRITERIOS_DESEMPATE,
 } from './lib/torneos/clasificacionService.js';
 import {
   assertKnockoutBracketTeamCount,
@@ -2327,16 +2327,18 @@ app.get('/api/torneos/:id/tabla', async (req, res) => {
       grupo: grupoFilter,
     });
 
+    const actualizadoAt = new Date().toISOString();
+    const publicResponse = buildTablaLivePublicResponse({
+      torneoId,
+      tipoTorneo: torneo.tipo_torneo ?? null,
+      clasificacion,
+      actualizadoAt,
+    });
+
     return res.json({
-      ok: true,
-      torneo_id: torneoId,
-      tipo_torneo: torneo.tipo_torneo ?? null,
-      calculated_at: new Date().toISOString(),
+      ...publicResponse,
       scope: scopeRaw,
-      metadata: clasificacion.metadata,
-      general: clasificacion.general,
-      grupos: clasificacion.grupos,
-      criterios_desempate: CRITERIOS_DESEMPATE,
+      calculated_at: actualizadoAt,
     });
   } catch (err) {
     console.error('❌ GET /api/torneos/:id/tabla:', err.message);
