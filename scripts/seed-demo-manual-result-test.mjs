@@ -179,6 +179,17 @@ function buildFechaHora() {
   return d.toISOString();
 }
 
+function buildTorneoFechas() {
+  const inicio = new Date();
+  inicio.setUTCHours(0, 0, 0, 0);
+  const fin = new Date(inicio);
+  fin.setUTCDate(fin.getUTCDate() + 14);
+  return {
+    fecha_inicio: inicio.toISOString().slice(0, 10),
+    fecha_fin: fin.toISOString().slice(0, 10),
+  };
+}
+
 async function insertEquipos(supabase, torneoId, sedeId) {
   const rows = DEMO_TEAMS.map((team) => ({
     torneo_id: torneoId,
@@ -200,6 +211,8 @@ async function insertEquipos(supabase, torneoId, sedeId) {
 export async function createDemoManualResultTest(supabase, sedeId) {
   log(`Creando torneo: ${DEMO_TORNEO_NAME}`);
 
+  const { fecha_inicio, fecha_fin } = buildTorneoFechas();
+
   const { data: torneo, error: errTorneo } = await supabase
     .from('torneos')
     .insert([{
@@ -209,8 +222,8 @@ export async function createDemoManualResultTest(supabase, sedeId) {
       nivel_torneo: 'club_no_oficial',
       categoria: 'Primera',
       deporte: 'padbol',
-      fecha_inicio: new Date().toISOString().slice(0, 10),
-      fecha_fin: null,
+      fecha_inicio,
+      fecha_fin,
       cantidad_equipos: 2,
       es_multisede: false,
       estado: 'en_curso',
@@ -239,7 +252,6 @@ export async function createDemoManualResultTest(supabase, sedeId) {
       estado: 'pendiente',
       fecha_hora: buildFechaHora(),
       ronda: 1,
-      fase: 'liga',
       grupo: null,
     }])
     .select('id, estado, equipo_a_id, equipo_b_id')
