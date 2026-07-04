@@ -105,6 +105,11 @@ import {
 import { generarKnockoutDesdeGrupos } from './lib/torneos/generarKnockoutDesdeGruposService.js';
 import { cargarResultadoManualPartidoTorneo } from './lib/torneos/cargarResultadoManualPartidoTorneoService.js';
 import {
+  handleGetTorneoPermisos,
+  resolveTorneoAdminAccess,
+  TORNEO_ADMIN_ACCESS_REASON,
+} from './lib/torneos/torneoAdminAccessService.js';
+import {
   mapMisReservaRow,
   mapReservaDetailDto,
   mapReservaListDto,
@@ -1702,17 +1707,12 @@ async function requireTorneoAdminForSede(req, res, torneoSedeId) {
   const auth = await requireAdminUser(req, res, LEGACY_TORNEO_ADMIN_DEPS);
   if (!auth) return null;
 
-  if (auth.role.rol === 'super_admin') {
-    return auth;
-  }
+  const { allowed, reason } = resolveTorneoAdminAccess(auth, torneoSedeId);
+  if (allowed) return auth;
 
-  if (auth.role.rol === 'admin_club') {
-    const requiredSedeId = torneoSedeId != null ? Number(torneoSedeId) : null;
-    if (requiredSedeId == null || auth.role.sede_id !== requiredSedeId) {
-      res.status(403).json({ error: 'No tenés permiso para operar torneos de otra sede' });
-      return null;
-    }
-    return auth;
+  if (auth.role.rol === 'admin_club' && reason === TORNEO_ADMIN_ACCESS_REASON.SEDE_NO_COINCIDE) {
+    res.status(403).json({ error: 'No tenés permiso para operar torneos de otra sede' });
+    return null;
   }
 
   res.status(403).json({ error: 'No tenés permiso para esta operación' });
@@ -1831,6 +1831,25 @@ app.get('/api/torneos/:id', async (req, res) => {
     if (error) throw error;
     res.json(mapTorneoPublicRow(data));
   } catch (err) {
+    sendHttpError(res, err);
+  }
+});
+
+app.get('/api/torneos/:torneoId/permisos', async (req, res) => {
+  try {
+    const result = await handleGetTorneoPermisos(req, {
+      supabaseAdmin,
+      getAuthenticatedUser,
+      resolveAuthRoleForUser,
+      resolveAuthRoleOptions: {
+        fetchUserRoleRowForAuthUser,
+        legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+      },
+    });
+
+    res.status(result.statusCode).json(result.body);
+  } catch (err) {
+    console.error('❌ Error GET /api/torneos/:torneoId/permisos:', err.message);
     sendHttpError(res, err);
   }
 });
@@ -4668,5 +4687,6 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Scoreboard: POST/GET /api/scoreboard/partidos, WebSocket scoreboard:update');
     console.log('✅ Torneos: POST /api/torneos/:id/generar-scoreboards');
     console.log('✅ Torneos: POST /api/torneos/:torneoId/partidos/:partidoId/resultado');
+    console.log('✅ Torneos: GET /api/torneos/:torneoId/permisos');
   });
 })();
