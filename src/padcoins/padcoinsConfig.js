@@ -35,6 +35,7 @@ export const PADCOINS_REWARDS_V1 = {
   diez_partidos_jugados: 1500,
   veinticinco_partidos_jugados: 3000,
   tres_semanas_seguidas: 1500,
+  logro_desbloqueado: 500,
   cancelacion_tardia: -200,
   no_show: -500,
 };

@@ -1,4 +1,5 @@
 import { sumarXP } from '../xp/xpService.js';
+import { sumarPadcoinsLogroDesbloqueado } from './logrosSyncService.js';
 
 /**
  * Verifica logros ARENA tras un evento (partido, torneo, etc.).
@@ -54,6 +55,14 @@ export async function verificarLogrosArena(supabaseAdmin, userId, context = {}) 
         `Logro desbloqueado: ${logro.nombre ?? logro.codigo}`,
         String(logro.id),
       ).catch((err) => console.warn('⚠️ XP logro:', err.message));
+
+      const slug = String(logro.codigo ?? logro.id).trim().toLowerCase();
+      await sumarPadcoinsLogroDesbloqueado(
+        supabaseAdmin,
+        userId,
+        slug,
+        logro.nombre ?? logro.codigo,
+      );
 
       desbloqueados.push({
         id: logro.id,

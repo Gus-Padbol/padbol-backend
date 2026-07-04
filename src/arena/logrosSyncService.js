@@ -1,5 +1,10 @@
 import { getXPJugador } from '../xp/xpService.js';
 import { LIGAS, XP_VALORES } from '../xp/xpConfig.js';
+import { addPadcoins } from '../padcoins/padcoinsService.js';
+import {
+  PADCOINS_MOVEMENT_TYPES,
+  PADCOINS_REWARDS_V1,
+} from '../padcoins/padcoinsConfig.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const XP_LOGRO_DESBLOQUEADO = XP_VALORES.LOGRO_DESBLOQUEADO ?? 150;
@@ -111,6 +116,82 @@ async function sumarXPDirectoFallback(supabaseAdmin, userId, {
 
   console.log('[logrosSync] sumarXP fallback OK', { userId, xpTotal, liga, xpSumado: xp });
   return { xp_sumado: xp, xp_total: xpTotal, liga, via: 'fallback' };
+}
+
+function resolveLogroNombre(slug, nombre = null) {
+  const explicit = nombre != null ? String(nombre).trim() : '';
+  if (explicit) return explicit;
+
+  const known = LOGROS_COMPORTAMIENTO.find((row) => row.slug === slug);
+  return known?.nombre ?? slug;
+}
+
+async function hasPadcoinsMovimientoLogro(supabaseAdmin, userId, slug) {
+  const { data, error } = await supabaseAdmin
+    .from('padcoins_movimientos')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('referencia_tipo', 'logro')
+    .eq('referencia_id', slug)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingTable(error)) return false;
+    throw error;
+  }
+
+  return Boolean(data?.id);
+}
+
+export async function sumarPadcoinsLogroDesbloqueado(supabaseAdmin, userId, slug, nombre = null) {
+  if (!isValidUserId(userId)) {
+    console.warn('[logrosSync] sumarPadcoins omitido — user_id inválido:', userId);
+    return null;
+  }
+
+  const normalizedSlug = String(slug ?? '').trim().toLowerCase();
+  if (!normalizedSlug) {
+    console.warn('[logrosSync] sumarPadcoins omitido — slug inválido');
+    return null;
+  }
+
+  const amount = PADCOINS_REWARDS_V1.logro_desbloqueado ?? 500;
+  const label = resolveLogroNombre(normalizedSlug, nombre);
+  const descripcion = `Logro desbloqueado: ${label}`;
+
+  try {
+    const alreadyCredited = await hasPadcoinsMovimientoLogro(supabaseAdmin, userId, normalizedSlug);
+    if (alreadyCredited) {
+      console.warn('[logrosSync] sumarPadcoins omitido — ya acreditado', {
+        userId,
+        slug: normalizedSlug,
+      });
+      return null;
+    }
+
+    const result = await addPadcoins(supabaseAdmin, userId, amount, {
+      tipo: PADCOINS_MOVEMENT_TYPES.EARN,
+      referencia_tipo: 'logro',
+      referencia_id: normalizedSlug,
+      descripcion,
+    });
+
+    console.log('[logrosSync] sumarPadcoins OK', {
+      userId,
+      slug: normalizedSlug,
+      padcoins_sumados: amount,
+    });
+
+    return result;
+  } catch (err) {
+    console.warn('[logrosSync] sumarPadcoins logro falló — continuando', {
+      userId,
+      slug: normalizedSlug,
+      message: err.message,
+    });
+    return null;
+  }
 }
 
 async function sumarXPLogroDesbloqueado(supabaseAdmin, userId, slug) {
@@ -389,6 +470,8 @@ export async function sincronizarLogrosDesbloqueados(supabaseAdmin, userId, slug
     if (!xpResult) {
       console.warn('[logrosSync] sumarXP sin resultado para logro', { userId, slug });
     }
+
+    await sumarPadcoinsLogroDesbloqueado(supabaseAdmin, userId, slug);
   }
 
   if (insertados.length) {
