@@ -1,4 +1,20 @@
+import {
+  buildPartidoTorneoResultadoPayload,
+  finalizarPartidoTorneo,
+  partidoHasFinalResult,
+  resolveGanadorEquipoId,
+  resolveTorneoWinnerSide,
+  resultadosTorneoCoinciden,
+} from '../../lib/torneos/finalizarPartidoTorneoService.js';
+
 const SCOREBOARD_TERMINADO_ESTADOS = new Set(['terminado', 'finalizado']);
+
+export {
+  partidoHasFinalResult,
+  resolveGanadorEquipoId,
+  resolveTorneoWinnerSide,
+  resultadosTorneoCoinciden,
+} from '../../lib/torneos/finalizarPartidoTorneoService.js';
 
 export const SCOREBOARD_TORNEO_SYNC_SELECT = [
   'id',
@@ -16,25 +32,11 @@ export const PARTIDO_TORNEO_SYNC_SELECT = [
   'resultado',
   'equipo_a_id',
   'equipo_b_id',
+  'ganador_equipo_id',
 ].join(', ');
 
 export function isScoreboardTerminatedForSync(estado) {
   return SCOREBOARD_TERMINADO_ESTADOS.has(String(estado ?? '').trim().toLowerCase());
-}
-
-function unwrapResultadoJson(val, depth = 0) {
-  if (val == null || depth > 4) return null;
-  if (typeof val === 'string') {
-    const t = val.trim();
-    if (!t) return null;
-    try {
-      return unwrapResultadoJson(JSON.parse(t), depth + 1);
-    } catch {
-      return null;
-    }
-  }
-  if (typeof val === 'object') return val;
-  return null;
 }
 
 export function buildPartidoTorneoResultadoFromScoreboard(scoreboard) {
@@ -42,38 +44,6 @@ export function buildPartidoTorneoResultadoFromScoreboard(scoreboard) {
     goles_a: Number(scoreboard?.sets_a) || 0,
     goles_b: Number(scoreboard?.sets_b) || 0,
   };
-}
-
-/** Ganador válido en best-of-3: 2 sets y marcador distinto. */
-export function resolveTorneoWinnerSide(setsA, setsB) {
-  const a = Number(setsA) || 0;
-  const b = Number(setsB) || 0;
-  if (a === b) return null;
-  if (a >= 2 && a > b) return 'A';
-  if (b >= 2 && b > a) return 'B';
-  return null;
-}
-
-export function resolveGanadorEquipoId(winnerSide, partido) {
-  if (winnerSide === 'A') return partido?.equipo_a_id ?? null;
-  if (winnerSide === 'B') return partido?.equipo_b_id ?? null;
-  return null;
-}
-
-export function partidoHasFinalResult(partido) {
-  const estado = String(partido?.estado ?? '').trim().toLowerCase();
-  if (estado !== 'finalizado') return false;
-  const res = unwrapResultadoJson(partido?.resultado);
-  if (!res) return false;
-  return res.goles_a != null && res.goles_b != null;
-}
-
-export function resultadosTorneoCoinciden(existingResultado, nuevoResultado) {
-  const existing = unwrapResultadoJson(existingResultado);
-  const nuevo = unwrapResultadoJson(nuevoResultado) ?? nuevoResultado;
-  if (!existing || !nuevo) return false;
-  return Number(existing.goles_a) === Number(nuevo.goles_a)
-    && Number(existing.goles_b) === Number(nuevo.goles_b);
 }
 
 export function isAlreadySyncedMatch(scoreboard, partido, resultadoNuevo, ganadorEquipoId) {
@@ -104,6 +74,13 @@ async function markScoreboardSyncStatus(supabaseAdmin, scoreboardId, status) {
     .eq('id', scoreboardId);
 
   if (error) throw error;
+}
+
+function mapFinalizeFailureReason(reason) {
+  if (reason === 'ganador_equipo_id_invalido') return 'ganador_equipo_id_invalido';
+  if (reason === 'partido_no_encontrado') return 'partido_no_encontrado';
+  if (reason === 'resultado_invalido') return 'resultado_invalido';
+  return reason;
 }
 
 /**
@@ -221,18 +198,21 @@ export async function syncScoreboardToTorneoPartido(supabaseAdmin, scoreboardId)
     };
   }
 
-  const { error: updateErr } = await supabaseAdmin
-    .from('partidos')
-    .update({
-      estado: 'finalizado',
-      resultado,
-      ganador_equipo_id: ganadorEquipoId,
-    })
-    .eq('id', pid);
+  const finalizeResult = await finalizarPartidoTorneo(supabaseAdmin, {
+    partidoId: pid,
+    resultado: buildPartidoTorneoResultadoPayload(resultado),
+    context: { fuente: 'scoreboard' },
+  });
 
-  if (updateErr) {
+  if (!finalizeResult.ok) {
     await markScoreboardSyncStatus(supabaseAdmin, sid, 'failed');
-    throw updateErr;
+    return {
+      ok: false,
+      status: 'failed',
+      reason: mapFinalizeFailureReason(finalizeResult.reason),
+      scoreboard_id: sid,
+      partido_torneo_id: pid,
+    };
   }
 
   await markScoreboardSyncStatus(supabaseAdmin, sid, 'synced');
@@ -243,7 +223,7 @@ export async function syncScoreboardToTorneoPartido(supabaseAdmin, scoreboardId)
     reason: 'synced',
     scoreboard_id: sid,
     partido_torneo_id: pid,
-    resultado,
-    ganador_equipo_id: ganadorEquipoId,
+    resultado: finalizeResult.resultado ?? resultado,
+    ganador_equipo_id: finalizeResult.ganador_equipo_id ?? ganadorEquipoId,
   };
 }
