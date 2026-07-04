@@ -3,6 +3,7 @@ import {
   getPadcoinsSaldo,
   listPadcoinsMovimientos,
 } from '../padcoins/padcoinsService.js';
+import { listMisCanjesPadcoins } from '../padcoins/padcoinsCanjesService.js';
 
 function parseOptionalLimit(rawLimit) {
   if (rawLimit == null || rawLimit === '') return undefined;
@@ -52,6 +53,27 @@ export function createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }) {
       });
     } catch (err) {
       console.error('❌ Error GET /api/padcoins/historial:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/mis-canjes', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+      }
+
+      const limit = parseOptionalLimit(req.query.limit);
+      const estado = req.query.estado ? String(req.query.estado).trim() : undefined;
+      const { canjes } = await listMisCanjesPadcoins(supabaseAdmin, user.id, { limit, estado });
+
+      res.json({
+        ok: true,
+        canjes,
+      });
+    } catch (err) {
+      console.error('❌ Error GET /api/padcoins/mis-canjes:', err.message);
       res.status(500).json({ error: err.message });
     }
   });

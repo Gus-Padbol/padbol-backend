@@ -10,6 +10,13 @@ import {
   listPremiosCanjeablesPublicos,
   updatePremioCanjeable,
 } from '../padcoins/premiosCanjeablesService.js';
+import {
+  canjearPremioPadcoins,
+  cancelarCanjePadcoins,
+  entregarCanjePadcoins,
+  getCanjePadcoinsById,
+  listCanjesAdminSede,
+} from '../padcoins/padcoinsCanjesService.js';
 
 function parseSedeId(raw) {
   const sid = Number.parseInt(String(raw ?? '').trim(), 10);
@@ -49,6 +56,13 @@ function resolveAdminListSedeId(role, query = {}) {
   throw err;
 }
 
+function parseOptionalLimit(rawLimit) {
+  if (rawLimit == null || rawLimit === '') return undefined;
+  const parsed = Number.parseInt(String(rawLimit), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
 function sendRouteError(res, err, fallbackMessage) {
   const status = err.status || 500;
   return res.status(status).json({ error: err.message || fallbackMessage });
@@ -78,6 +92,32 @@ export function mountPremiosCanjeablesRoutes(app, {
     } catch (err) {
       console.error('❌ GET /api/premios-canjeables:', err.message);
       return sendRouteError(res, err, 'Error al listar premios canjeables');
+    }
+  });
+
+  app.post('/api/premios-canjeables/:id/canjear', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+      }
+
+      const premioId = String(req.params.id ?? '').trim();
+      if (!premioId) {
+        return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const result = await canjearPremioPadcoins(supabaseAdmin, user.id, premioId);
+      console.log(`✓ POST /api/premios-canjeables/${premioId}/canjear — canje ${result.canje.id}`);
+      return res.status(201).json({
+        ok: true,
+        canje: result.canje,
+        codigo: result.codigo,
+        saldo: result.saldo,
+      });
+    } catch (err) {
+      console.error('❌ POST /api/premios-canjeables/:id/canjear:', err.message);
+      return sendRouteError(res, err, 'Error al canjear premio');
     }
   });
 
@@ -194,6 +234,78 @@ export function mountPremiosCanjeablesRoutes(app, {
     } catch (err) {
       console.error('❌ DELETE /api/admin/premios-canjeables/:id:', err.message);
       return sendRouteError(res, err, 'Error al desactivar premio canjeable');
+    }
+  });
+
+  app.get('/api/admin/padcoins-canjes', async (req, res) => {
+    try {
+      const auth = await requireAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const sedeId = resolveAdminListSedeId(auth.role, req.query ?? {});
+      const limit = parseOptionalLimit(req.query.limit);
+      const estado = req.query.estado ? String(req.query.estado).trim() : undefined;
+      const { canjes } = await listCanjesAdminSede(supabaseAdmin, sedeId, { limit, estado });
+
+      return res.json({ ok: true, canjes });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins-canjes:', err.message);
+      return sendRouteError(res, err, 'Error al listar canjes admin');
+    }
+  });
+
+  app.post('/api/admin/padcoins-canjes/:id/entregar', async (req, res) => {
+    try {
+      const auth = await requireAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const canjeId = String(req.params.id ?? '').trim();
+      if (!canjeId) {
+        return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const existing = await getCanjePadcoinsById(supabaseAdmin, canjeId);
+      if (!existing) {
+        return res.status(404).json({ error: 'Canje no encontrado' });
+      }
+
+      const authSede = await requireSedeAdminForId(req, res, existing.sede_id, adminDeps);
+      if (!authSede) return;
+
+      const canje = await entregarCanjePadcoins(supabaseAdmin, canjeId, auth.user.id);
+      console.log(`✓ POST /api/admin/padcoins-canjes/${canjeId}/entregar`);
+      return res.json({ ok: true, canje });
+    } catch (err) {
+      console.error('❌ POST /api/admin/padcoins-canjes/:id/entregar:', err.message);
+      return sendRouteError(res, err, 'Error al entregar canje');
+    }
+  });
+
+  app.post('/api/admin/padcoins-canjes/:id/cancelar', async (req, res) => {
+    try {
+      const auth = await requireAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const canjeId = String(req.params.id ?? '').trim();
+      if (!canjeId) {
+        return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const existing = await getCanjePadcoinsById(supabaseAdmin, canjeId);
+      if (!existing) {
+        return res.status(404).json({ error: 'Canje no encontrado' });
+      }
+
+      const authSede = await requireSedeAdminForId(req, res, existing.sede_id, adminDeps);
+      if (!authSede) return;
+
+      const reason = req.body?.reason ?? req.body?.motivo ?? null;
+      const canje = await cancelarCanjePadcoins(supabaseAdmin, canjeId, auth.user.id, reason);
+      console.log(`✓ POST /api/admin/padcoins-canjes/${canjeId}/cancelar`);
+      return res.json({ ok: true, canje });
+    } catch (err) {
+      console.error('❌ POST /api/admin/padcoins-canjes/:id/cancelar:', err.message);
+      return sendRouteError(res, err, 'Error al cancelar canje');
     }
   });
 }

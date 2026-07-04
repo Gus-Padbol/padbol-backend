@@ -4687,8 +4687,9 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Logros premios: GET /api/logros-premios/:sede_id, POST/DELETE /api/admin/logros-premios');
     console.log('✅ Ligas premios: GET /api/ligas-premios/:sede_id, POST/DELETE /api/admin/ligas-premios');
     console.log('✅ Rangos ARENA: GET /api/rangos/mi-rango');
-    console.log('✅ PadCoins V1: GET /api/padcoins/mi-saldo, GET /api/padcoins/historial');
-    console.log('✅ Premios canjeables: GET /api/premios-canjeables, admin CRUD /api/admin/premios-canjeables');
+    console.log('✅ PadCoins V1: GET /api/padcoins/mi-saldo, GET /api/padcoins/historial, GET /api/padcoins/mis-canjes');
+    console.log('✅ Premios canjeables: GET /api/premios-canjeables, POST /api/premios-canjeables/:id/canjear, admin CRUD /api/admin/premios-canjeables');
+    console.log('✅ PadCoins canjes admin: GET /api/admin/padcoins-canjes, POST entregar/cancelar');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');
     console.log('✅ Admin/cron: POST /api/reservas/cleanup-expired-holds');
     console.log('✅ Extras sede: GET /api/sedes/:id/extras-admin + CRUD /api/sedes/:id/extras');
