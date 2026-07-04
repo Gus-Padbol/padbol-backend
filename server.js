@@ -142,7 +142,7 @@ import { createChiviRouter } from './src/routes/chivi.js';
 import { createAiRouter } from './src/routes/ai.js';
 import { createArenaRouter } from './src/routes/arena.js';
 import { createRangosRouter } from './src/routes/rangos.js';
-import { createPadcoinsRouter } from './src/routes/padcoins.js';
+import { createPadcoinsRouter, mountPadcoinsAdminRoutes } from './src/routes/padcoins.js';
 import { mountPremiosCanjeablesRoutes } from './src/routes/premiosCanjeables.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
 import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
@@ -2596,6 +2596,12 @@ app.use('/api/ai', aiRateLimit, createAiRouter({ getAuthenticatedUser, pgPool })
 app.use('/api/arena', createArenaRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/rangos', createRangosRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/padcoins', createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }));
+mountPadcoinsAdminRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser }));
@@ -4688,6 +4694,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Ligas premios: GET /api/ligas-premios/:sede_id, POST/DELETE /api/admin/ligas-premios');
     console.log('✅ Rangos ARENA: GET /api/rangos/mi-rango');
     console.log('✅ PadCoins V1: GET /api/padcoins/mi-saldo, GET /api/padcoins/historial, GET /api/padcoins/mis-canjes');
+    console.log('✅ PadCoins admin: POST /api/admin/padcoins/ajuste');
     console.log('✅ Premios canjeables: GET /api/premios-canjeables, POST /api/premios-canjeables/:id/canjear, admin CRUD /api/admin/premios-canjeables');
     console.log('✅ PadCoins canjes admin: GET /api/admin/padcoins-canjes, POST entregar/cancelar');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');

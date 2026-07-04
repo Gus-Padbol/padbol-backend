@@ -1,9 +1,34 @@
 import express from 'express';
 import {
+  requireAdminUser,
+  requireSedeAdminForId,
+} from '../../lib/authAccess.js';
+import {
+  adjustPadcoins,
   getPadcoinsSaldo,
   listPadcoinsMovimientos,
 } from '../padcoins/padcoinsService.js';
+import { PADCOINS_ORIGINS } from '../padcoins/padcoinsConfig.js';
 import { listMisCanjesPadcoins } from '../padcoins/padcoinsCanjesService.js';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parseOptionalSedeId(raw) {
+  if (raw == null || raw === '') return null;
+  const sid = Number.parseInt(String(raw), 10);
+  return Number.isFinite(sid) && sid > 0 ? sid : undefined;
+}
+
+function parseAdjustAmount(raw) {
+  const amount = Number.parseInt(String(raw), 10);
+  if (!Number.isInteger(amount) || amount === 0) return null;
+  return amount;
+}
+
+function sendRouteError(res, err, fallbackMessage) {
+  const status = err.status || (String(err.message ?? '').includes('insuficiente') ? 400 : 500);
+  return res.status(status).json({ error: err.message || fallbackMessage });
+}
 
 function parseOptionalLimit(rawLimit) {
   if (rawLimit == null || rawLimit === '') return undefined;
@@ -79,6 +104,73 @@ export function createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }) {
   });
 
   return router;
+}
+
+export function mountPadcoinsAdminRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails = [],
+}) {
+  const adminDeps = {
+    getAuthenticatedUser,
+    fetchUserRoleRowForAuthUser,
+    legacySuperAdminEmails,
+  };
+
+  app.post('/api/admin/padcoins/ajuste', async (req, res) => {
+    try {
+      const auth = await requireAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const body = req.body ?? {};
+      const userId = String(body.user_id ?? '').trim();
+      if (!UUID_REGEX.test(userId)) {
+        return res.status(400).json({ error: 'user_id inválido' });
+      }
+
+      const amount = parseAdjustAmount(body.amount);
+      if (amount == null) {
+        return res.status(400).json({ error: 'amount debe ser un entero distinto de 0' });
+      }
+
+      const sedeId = parseOptionalSedeId(body.sede_id ?? body.sedeId);
+      if (body.sede_id != null || body.sedeId != null) {
+        if (sedeId === undefined) {
+          return res.status(400).json({ error: 'sede_id inválido' });
+        }
+        if (sedeId != null) {
+          const authSede = await requireSedeAdminForId(req, res, sedeId, adminDeps);
+          if (!authSede) return;
+        }
+      }
+
+      const descripcionRaw = body.descripcion != null ? String(body.descripcion).trim() : '';
+      const descripcion = descripcionRaw
+        ? descripcionRaw.slice(0, 500)
+        : (amount > 0 ? 'Ajuste admin PadCoins' : 'Descuento admin PadCoins');
+
+      const result = await adjustPadcoins(supabaseAdmin, userId, amount, {
+        referencia_tipo: PADCOINS_ORIGINS.BONUS_ADMIN,
+        sede_id: sedeId,
+        descripcion,
+        created_by: auth.user.id,
+      });
+
+      console.log(`✓ POST /api/admin/padcoins/ajuste — user ${userId}, amount ${amount}`);
+      return res.json({
+        ok: true,
+        saldo: {
+          disponible: Number(result.saldo?.disponible ?? 0),
+          historico_total: Number(result.saldo?.historico_total ?? 0),
+        },
+        movimiento: result.movimiento,
+      });
+    } catch (err) {
+      console.error('❌ POST /api/admin/padcoins/ajuste:', err.message);
+      return sendRouteError(res, err, 'Error al ajustar PadCoins');
+    }
+  });
 }
 
 export default createPadcoinsRouter;
