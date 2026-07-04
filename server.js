@@ -103,6 +103,7 @@ import {
   mergeBracketLinks,
 } from './lib/torneos/knockoutBracketService.js';
 import { generarKnockoutDesdeGrupos } from './lib/torneos/generarKnockoutDesdeGruposService.js';
+import { cargarResultadoManualPartidoTorneo } from './lib/torneos/cargarResultadoManualPartidoTorneoService.js';
 import {
   mapMisReservaRow,
   mapReservaDetailDto,
@@ -2640,6 +2641,26 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
   }
 });
 
+app.post('/api/torneos/:torneoId/partidos/:partidoId/resultado', async (req, res) => {
+  try {
+    const { torneoId, partidoId } = req.params;
+    const auth = await requireTorneoAdminByTorneoId(req, res, torneoId);
+    if (!auth) return;
+
+    const result = await cargarResultadoManualPartidoTorneo(supabaseAdmin, {
+      torneoId,
+      partidoId,
+      body: req.body ?? {},
+      actorId: auth.user?.id ?? null,
+    });
+
+    res.status(result.statusCode).json(result.body);
+  } catch (err) {
+    console.error('❌ Error POST resultado manual torneo:', err.message);
+    sendHttpError(res, err);
+  }
+});
+
 app.get('/api/partidos/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -4646,5 +4667,6 @@ app.use((err, _req, res, _next) => {
     console.log(`✅ Fotos sede: POST /api/sedes/:id/fotos (máx. ${20} por sede)`);
     console.log('✅ Scoreboard: POST/GET /api/scoreboard/partidos, WebSocket scoreboard:update');
     console.log('✅ Torneos: POST /api/torneos/:id/generar-scoreboards');
+    console.log('✅ Torneos: POST /api/torneos/:torneoId/partidos/:partidoId/resultado');
   });
 })();
