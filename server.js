@@ -143,6 +143,7 @@ import { createAiRouter } from './src/routes/ai.js';
 import { createArenaRouter } from './src/routes/arena.js';
 import { createRangosRouter } from './src/routes/rangos.js';
 import { createPadcoinsRouter } from './src/routes/padcoins.js';
+import { mountPremiosCanjeablesRoutes } from './src/routes/premiosCanjeables.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
 import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
@@ -970,6 +971,12 @@ mountListaEsperaGeneralRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountLogrosPremiosRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountPremiosCanjeablesRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
@@ -4681,6 +4688,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Ligas premios: GET /api/ligas-premios/:sede_id, POST/DELETE /api/admin/ligas-premios');
     console.log('✅ Rangos ARENA: GET /api/rangos/mi-rango');
     console.log('✅ PadCoins V1: GET /api/padcoins/mi-saldo, GET /api/padcoins/historial');
+    console.log('✅ Premios canjeables: GET /api/premios-canjeables, admin CRUD /api/admin/premios-canjeables');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');
     console.log('✅ Admin/cron: POST /api/reservas/cleanup-expired-holds');
     console.log('✅ Extras sede: GET /api/sedes/:id/extras-admin + CRUD /api/sedes/:id/extras');
