@@ -28,6 +28,7 @@ import {
   SCOREBOARD_CANCHA_RESOLVER_SELECT,
 } from '../src/scoreboard/scoreboardCanchaResolver.js';
 import { syncScoreboardToTorneoPartido } from '../src/scoreboard/scoreboardTorneoSyncService.js';
+import { onPartidoTorneoFinalizado } from '../lib/torneos/partidoTorneoFinalizadoEffectsService.js';
 import { advanceWinnerIfNeeded } from '../lib/torneos/bracketAdvanceService.js';
 import { ensureScoreboardForCompletedBracketPartido } from '../lib/torneos/bracketScoreboardService.js';
 
@@ -208,6 +209,7 @@ export async function maybeSyncTorneoAfterScoreboardTerminated(
   const advanceFn = deps.advanceWinnerIfNeeded ?? advanceWinnerIfNeeded;
   const ensureScoreboardFn = deps.ensureScoreboardForCompletedBracketPartido
     ?? ensureScoreboardForCompletedBracketPartido;
+  const effectsFn = deps.onPartidoTorneoFinalizado ?? onPartidoTorneoFinalizado;
 
   try {
     const syncResult = await syncFn(supabaseAdmin, saved.id);
@@ -222,28 +224,33 @@ export async function maybeSyncTorneoAfterScoreboardTerminated(
 
       if (saved.partido_torneo_id) {
         try {
-          const advanceResult = await advanceFn(supabaseAdmin, {
-            partidoId: saved.partido_torneo_id,
-          });
-          logBracketAdvanceResult(saved.id, saved.partido_torneo_id, advanceResult);
+          const effectsResult = await effectsFn(
+            supabaseAdmin,
+            {
+              partidoId: saved.partido_torneo_id,
+              fuente: 'scoreboard',
+              resultado: syncResult.resultado ?? null,
+            },
+            {
+              advanceWinnerIfNeeded: advanceFn,
+              ensureScoreboardForCompletedBracketPartido: ensureScoreboardFn,
+            },
+          );
 
-          if (advanceResult?.status === 'advanced' && advanceResult.destino_partido_id != null) {
-            try {
-              const scoreboardResult = await ensureScoreboardFn(supabaseAdmin, {
-                partidoId: advanceResult.destino_partido_id,
-              });
-              logBracketScoreboardResult(advanceResult.destino_partido_id, scoreboardResult);
-            } catch (scoreboardErr) {
-              console.warn(
-                `⚠️ Bracket scoreboard destino ${advanceResult.destino_partido_id}:`,
-                scoreboardErr.message,
-              );
-            }
+          if (effectsResult?.advance) {
+            logBracketAdvanceResult(saved.id, saved.partido_torneo_id, effectsResult.advance);
           }
-        } catch (advanceErr) {
+
+          if (effectsResult?.scoreboard && effectsResult.advance?.destino_partido_id != null) {
+            logBracketScoreboardResult(
+              effectsResult.advance.destino_partido_id,
+              effectsResult.scoreboard,
+            );
+          }
+        } catch (effectsErr) {
           console.warn(
-            `⚠️ Bracket advance scoreboard→torneo ${saved.id}:`,
-            advanceErr.message,
+            `⚠️ Partido torneo effects scoreboard→torneo ${saved.id}:`,
+            effectsErr.message,
           );
         }
       }
