@@ -140,6 +140,7 @@ import { initReservasCron } from './src/cron/reservasCron.js';
 import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
 import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
+import { resolveScoreboardsMapForTorneoPartidos } from './src/scoreboard/scoreboardTorneoPartidoResolver.js';
 import {
   actualizarRango,
   collectUserIdsFromEquipos,
@@ -2619,7 +2620,21 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
       .order('fecha_hora', { ascending: true });
 
     if (error) throw error;
-    res.json((data || []).map(mapPartidoTorneoPublicRow));
+
+    const partidos = data || [];
+    const scoreboardMap = await resolveScoreboardsMapForTorneoPartidos(
+      supabaseAdmin,
+      partidos.map((partido) => partido.id),
+    );
+
+    res.json(partidos.map((partido) => {
+      const scoreboard = scoreboardMap.get(Number(partido.id));
+      return mapPartidoTorneoPublicRow({
+        ...partido,
+        scoreboard_id: scoreboard?.scoreboard_id ?? null,
+        scoreboard_estado: scoreboard?.scoreboard_estado ?? null,
+      });
+    }));
   } catch (err) {
     sendHttpError(res, err);
   }
