@@ -36,11 +36,43 @@ async function requirePadcoinsSedeConfigReadAccess(req, res, sedeId, adminDeps) 
     return auth;
   }
 
-  if (auth.role.rol === 'admin_club' && Number(auth.role.sede_id) === Number(sedeId)) {
-    return auth;
+  if (auth.role.rol === 'admin_club') {
+    if (auth.role.sede_id == null) {
+      res.status(403).json({ error: 'Admin de club sin sede asignada' });
+      return null;
+    }
+    if (Number(auth.role.sede_id) === Number(sedeId)) {
+      return auth;
+    }
+    res.status(403).json({ error: 'No tenés permiso para ver la configuración de esta sede' });
+    return null;
   }
 
   res.status(403).json({ error: 'No tenés permiso para ver la configuración de esta sede' });
+  return null;
+}
+
+async function requirePadcoinsSedeConfigWriteAccess(req, res, sedeId, adminDeps) {
+  const auth = await requireAdminUser(req, res, adminDeps);
+  if (!auth) return null;
+
+  if (auth.role.rol === 'super_admin') {
+    return auth;
+  }
+
+  if (auth.role.rol === 'admin_club') {
+    if (auth.role.sede_id == null) {
+      res.status(403).json({ error: 'Admin de club sin sede asignada' });
+      return null;
+    }
+    if (Number(auth.role.sede_id) !== Number(sedeId)) {
+      res.status(403).json({ error: 'No tenés permiso para modificar la configuración de esta sede' });
+      return null;
+    }
+    return auth;
+  }
+
+  res.status(403).json({ error: 'No tenés permiso para modificar la participación PadCoins de sedes' });
   return null;
 }
 
@@ -284,13 +316,13 @@ export function mountPadcoinsAdminRoutes(app, {
 
   app.put('/api/admin/padcoins-sedes-config/:sedeId', async (req, res) => {
     try {
-      const auth = await requireSuperAdminUser(req, res, adminDeps);
-      if (!auth) return;
-
       const sedeId = parseRequiredSedeId(req.params.sedeId);
       if (!sedeId) {
         return res.status(400).json({ error: 'sedeId inválido' });
       }
+
+      const auth = await requirePadcoinsSedeConfigWriteAccess(req, res, sedeId, adminDeps);
+      if (!auth) return;
 
       const body = req.body ?? {};
       if (typeof body.activo !== 'boolean') {

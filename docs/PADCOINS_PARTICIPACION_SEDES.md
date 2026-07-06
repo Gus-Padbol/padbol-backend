@@ -4,9 +4,19 @@
 
 Beneficios Padbol / PadCoins es **opt-in por sede**. Ninguna sede está obligada a participar ni a dar descuentos.
 
-- **Super Admin** activa o desactiva la participación (`padcoins_sede_config`).
-- **Admin Club** puede ver el estado de su sede; por ahora **no puede editarlo**.
+- **Admin Club** activa o desactiva Beneficios Padbol para **su propia sede** (`PUT /api/admin/padcoins-sedes-config/:sedeId`).
+- **Super Admin** audita todas las sedes, puede intervenir en cualquiera y conserva control excepcional para bloquear o corregir abusos. No es el operador habitual de activación.
 - Cada sede define sus **propios premios** y costos en PadCoins (`premios_canjeables`).
+
+## Permisos API
+
+| Endpoint | Super Admin | Admin Club | Admin Nacional / otros |
+|----------|-------------|------------|------------------------|
+| `GET /api/admin/padcoins-sedes-config` | ✓ lista todas | ✗ | ✗ |
+| `GET /api/admin/padcoins-sedes-config/:sedeId` | ✓ cualquier sede | ✓ solo su sede | ✗ (sin scope claro) |
+| `PUT /api/admin/padcoins-sedes-config/:sedeId` | ✓ cualquier sede | ✓ solo su sede | ✗ |
+
+Admin Club sin `sede_id` asignada → **403**.
 
 ## Si la sede participa (`participa = true`)
 
@@ -33,7 +43,7 @@ Beneficios Padbol / PadCoins es **opt-in por sede**. Ninguna sede está obligada
 
 ## Canjes pendientes al desactivar
 
-Si una sede se desactiva, los canjes ya creados en estado pendiente/aprobado **siguen gestionables** (entregar/cancelar). No se permiten **nuevos** canjes.
+Si una sede se desactiva (por Admin Club o Super Admin), los canjes ya creados en estado pendiente/aprobado **siguen gestionables** (entregar/cancelar). No se permiten **nuevos** canjes.
 
 Futuro: política de cierre con plazo y comunicación al jugador.
 
@@ -44,7 +54,7 @@ Futuro: política de cierre con plazo y comunicación al jugador.
 
 ## La Meca (sede_id = 1)
 
-La migración SQL incluye insert opcional idempotente con `activo = true` para la sede piloto. Otras sedes se activan vía API Super Admin o INSERT manual.
+La migración SQL incluye insert idempotente con `activo = true` para la sede piloto. Otras sedes se activan por el Admin Club de la sede o por Super Admin.
 
 ## Reservas automáticas
 
