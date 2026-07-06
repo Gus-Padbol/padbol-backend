@@ -182,10 +182,22 @@ export async function sumarPadcoinsLogroDesbloqueado(supabaseAdmin, userId, slug
       descripcion,
     });
 
+    if (result?.skipped) {
+      console.warn('[logrosSync] sumarPadcoins omitido — límite PadCoins', {
+        userId,
+        slug: normalizedSlug,
+        padcoins_solicitados: amount,
+        reason: result.reason,
+      });
+      return null;
+    }
+
     console.log('[logrosSync] sumarPadcoins OK', {
       userId,
       slug: normalizedSlug,
-      padcoins_sumados: amount,
+      padcoins_sumados: result.monto_aplicado ?? amount,
+      padcoins_solicitados: amount,
+      capped: Boolean(result.cap?.capped),
     });
 
     return result;

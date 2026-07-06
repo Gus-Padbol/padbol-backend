@@ -308,12 +308,33 @@ export async function acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reser
     sede_id: sedeId,
     descripcion,
     created_by: options.created_by ?? null,
+    now: options.now,
+    timeZone: options.timeZone,
+    earnLimits: options.earnLimits,
   });
+
+  if (result.skipped) {
+    return {
+      ok: true,
+      acreditado: false,
+      reason: result.reason ?? 'limite_alcanzado',
+      padcoins_solicitados: padcoins,
+      padcoins: 0,
+      method: amountResult.method,
+      reserva_id: id,
+      sede_id: sedeId,
+      cap: result.cap,
+      saldo: result.saldo,
+    };
+  }
 
   return {
     ok: true,
     acreditado: true,
-    padcoins,
+    padcoins: result.monto_aplicado ?? padcoins,
+    padcoins_solicitados: padcoins,
+    capped: Boolean(result.cap?.capped),
+    cap: result.cap ?? null,
     method: amountResult.method,
     reserva_id: id,
     sede_id: sedeId,

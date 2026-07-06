@@ -61,9 +61,26 @@ Si existe → OK sin duplicar.
 - **referencia_id:** id de la reserva
 - **sede_id:** sede de la reserva
 - **descripcion:** "PadCoins por reserva completada en {sede} …"
-- Actualiza `padcoins_saldo` vía `addPadcoins`
+- Actualiza `padcoins_saldo` vía `addPadcoins` (con topes diario/mensual; ver [PADCOINS_LIMITES.md](./PADCOINS_LIMITES.md))
 
-## Punto de integración
+## Límites diario y mensual
+
+Los earn por reserva pasan por `addPadcoins`, que aplica:
+
+- `limite_diario_jugador` (default 1000)
+- `limite_mensual_jugador` (default 10000)
+
+Comportamiento:
+
+| Situación | Resultado |
+|-----------|-----------|
+| Bajo el tope | Acreditación completa |
+| Supera tope parcialmente | Acreditación parcial + nota en descripción |
+| Tope agotado | Sin movimiento; `reason: limite_diario_alcanzado` o `limite_mensual_alcanzado` |
+| Ya acreditada (idempotencia) | Skip (`ya_acreditada`) aunque el monto original hubiera sido limitado |
+
+Detalle completo: [PADCOINS_LIMITES.md](./PADCOINS_LIMITES.md).
+
 
 **Único hook actual:** `procesarReservasCompletadas` en `src/cron/reservasCron.js`, después de actualizar estado a `completada` y acreditar XP.
 
@@ -84,4 +101,5 @@ No hay otro flujo que marque reservas como completadas hoy. Si en el futuro se a
 
 - Penalización PadCoins por no-show (config global `no_show`) **no cableada** en este bloque; solo se evita acreditar si `estado = no_show`.
 - Reservas completadas sin check-in siguen acreditando (mismo criterio que XP hoy).
-- Límites diarios/mensuales globales (`limite_diario_jugador`) **no aplicados** aún en este hook.
+
+## Punto de integración

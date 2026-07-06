@@ -1,6 +1,10 @@
 import {
   PADCOINS_MOVEMENT_TYPES,
 } from './padcoinsConfig.js';
+import {
+  applyPadcoinsEarnCaps,
+  appendPadcoinsEarnCapToDescripcion,
+} from './padcoinsEarnLimitsService.js';
 
 const VALID_MOVEMENT_TYPES = new Set(Object.values(PADCOINS_MOVEMENT_TYPES));
 
@@ -184,22 +188,66 @@ export async function getPadcoinsSaldo(supabaseAdmin, userId) {
 
 export async function addPadcoins(supabaseAdmin, userId, amount, options = {}) {
   const parsedAmount = assertPositiveAmount(amount);
-  const normalizedOptions = normalizeOptions(options);
   const tipo = options.tipo ?? PADCOINS_MOVEMENT_TYPES.EARN;
+  let finalAmount = parsedAmount;
+  let capResult = null;
 
   if (tipo !== PADCOINS_MOVEMENT_TYPES.EARN && tipo !== PADCOINS_MOVEMENT_TYPES.ADJUST) {
     throw new Error('addPadcoins solo admite movimientos earn o adjust positivos');
   }
 
-  const deltaHistorico = tipo === PADCOINS_MOVEMENT_TYPES.EARN ? parsedAmount : 0;
+  if (tipo === PADCOINS_MOVEMENT_TYPES.EARN && options.skipEarnCaps !== true) {
+    capResult = await applyPadcoinsEarnCaps(
+      supabaseAdmin,
+      userId,
+      parsedAmount,
+      {
+        now: options.now,
+        timeZone: options.timeZone,
+        limits: options.earnLimits,
+      },
+    );
+    finalAmount = capResult.amountToCredit;
 
-  return applyBalanceChange(supabaseAdmin, userId, {
-    deltaDisponible: parsedAmount,
+    if (finalAmount <= 0) {
+      return {
+        skipped: true,
+        reason: capResult.reason ?? 'limite_alcanzado',
+        cap: capResult,
+        monto_solicitado: parsedAmount,
+        monto_aplicado: 0,
+        saldo: await getPadcoinsSaldo(supabaseAdmin, userId),
+      };
+    }
+  }
+
+  const normalizedOptions = normalizeOptions({
+    ...options,
+    descripcion: capResult?.capped
+      ? appendPadcoinsEarnCapToDescripcion(options.descripcion, capResult)
+      : options.descripcion,
+  });
+
+  const deltaHistorico = tipo === PADCOINS_MOVEMENT_TYPES.EARN ? finalAmount : 0;
+
+  const result = await applyBalanceChange(supabaseAdmin, userId, {
+    deltaDisponible: finalAmount,
     deltaHistorico,
     tipo,
-    monto: parsedAmount,
+    monto: finalAmount,
     options: normalizedOptions,
   });
+
+  if (capResult) {
+    return {
+      ...result,
+      cap: capResult,
+      monto_solicitado: parsedAmount,
+      monto_aplicado: finalAmount,
+    };
+  }
+
+  return result;
 }
 
 export async function spendPadcoins(supabaseAdmin, userId, amount, options = {}) {
