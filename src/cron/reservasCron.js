@@ -2,6 +2,7 @@ import { sumarXP } from '../xp/xpService.js';
 import { partidoTieneResultadoCargado } from '../partidos/resultadoService.js';
 import { reservaHoraFinFromRow } from '../../utils/reservasColumns.js';
 import { sendPushToUser } from '../../utils/push.js';
+import { acreditarPadcoinsPorReservaCompletada } from '../padcoins/padcoinsReservasService.js';
 
 const TZ_RESERVA = 'America/Argentina/Buenos_Aires';
 
@@ -30,7 +31,8 @@ async function fetchReservasPendientesCompletar(supabaseAdmin, nowAR) {
   const today = nowAR.toISOString().slice(0, 10);
   const selectCols = `
     id, user_id, sede, sede_id, fecha, hora, hora_fin, hora_inicio,
-    partido_id, notificacion_post_partido_enviada
+    partido_id, notificacion_post_partido_enviada,
+    precio, precio_esperado, monto_pagado, moneda, pago_estado
   `;
 
   let { data, error } = await supabaseAdmin
@@ -44,7 +46,8 @@ async function fetchReservasPendientesCompletar(supabaseAdmin, nowAR) {
     ({ data, error } = await supabaseAdmin
       .from('reservas')
       .select(`
-        id, user_id, sede, sede_id, fecha, hora, hora_fin, hora_inicio, partido_id
+        id, user_id, sede, sede_id, fecha, hora, hora_fin, hora_inicio, partido_id,
+        precio, precio_esperado, monto_pagado, moneda, pago_estado
       `)
       .eq('estado', 'confirmada')
       .lte('fecha', today));
@@ -153,6 +156,20 @@ export async function procesarReservasCompletadas(supabaseAdmin) {
           `Reserva completada en ${sede}`,
           String(reserva.id),
         ).catch((err) => console.warn(`⚠️ XP reserva ${reserva.id}:`, err.message));
+
+        const padcoinsResult = await acreditarPadcoinsPorReservaCompletada(
+          supabaseAdmin,
+          reserva.id,
+        ).catch((err) => {
+          console.warn(`⚠️ PadCoins reserva ${reserva.id}:`, err.message);
+          return null;
+        });
+
+        if (padcoinsResult?.acreditado) {
+          console.log(
+            `✓ PadCoins reserva ${reserva.id} — +${padcoinsResult.padcoins} (${padcoinsResult.method})`,
+          );
+        }
       }
 
       console.log(

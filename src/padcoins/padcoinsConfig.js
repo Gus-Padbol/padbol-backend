@@ -7,6 +7,7 @@ export const PADCOINS_MOVEMENT_TYPES = {
 
 export const PADCOINS_ORIGINS = {
   RESERVA_JUGADA: 'reserva_jugada',
+  RESERVA_COMPLETADA: 'reserva_completada',
   PARTIDO_JUGADO: 'partido_jugado',
   TORNEO_JUGADO: 'torneo_jugado',
   TORNEO_GANADO: 'torneo_ganado',
