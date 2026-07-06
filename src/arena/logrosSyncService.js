@@ -5,6 +5,7 @@ import {
   PADCOINS_MOVEMENT_TYPES,
   PADCOINS_REWARDS_V1,
 } from '../padcoins/padcoinsConfig.js';
+import { getPadcoinsValue } from '../padcoins/padcoinsGlobalConfigService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const XP_LOGRO_DESBLOQUEADO = XP_VALORES.LOGRO_DESBLOQUEADO ?? 150;
@@ -156,7 +157,11 @@ export async function sumarPadcoinsLogroDesbloqueado(supabaseAdmin, userId, slug
     return null;
   }
 
-  const amount = PADCOINS_REWARDS_V1.logro_desbloqueado ?? 500;
+  const amount = await getPadcoinsValue(
+    supabaseAdmin,
+    'logro_desbloqueado',
+    PADCOINS_REWARDS_V1.logro_desbloqueado ?? 500,
+  );
   const label = resolveLogroNombre(normalizedSlug, nombre);
   const descripcion = `Logro desbloqueado: ${label}`;
 

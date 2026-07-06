@@ -2,6 +2,7 @@ import express from 'express';
 import {
   requireAdminUser,
   requireSedeAdminForId,
+  requireSuperAdminUser,
 } from '../../lib/authAccess.js';
 import {
   adjustPadcoins,
@@ -10,6 +11,10 @@ import {
 } from '../padcoins/padcoinsService.js';
 import { PADCOINS_ORIGINS } from '../padcoins/padcoinsConfig.js';
 import { listMisCanjesPadcoins } from '../padcoins/padcoinsCanjesService.js';
+import {
+  listPadcoinsGlobalConfig,
+  updatePadcoinsGlobalConfig,
+} from '../padcoins/padcoinsGlobalConfigService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -169,6 +174,46 @@ export function mountPadcoinsAdminRoutes(app, {
     } catch (err) {
       console.error('❌ POST /api/admin/padcoins/ajuste:', err.message);
       return sendRouteError(res, err, 'Error al ajustar PadCoins');
+    }
+  });
+
+  app.get('/api/admin/padcoins-config', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const config = await listPadcoinsGlobalConfig(supabaseAdmin);
+
+      return res.json({
+        ok: true,
+        config,
+      });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins-config:', err.message);
+      return sendRouteError(res, err, 'Error al listar configuración PadCoins');
+    }
+  });
+
+  app.put('/api/admin/padcoins-config', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const updates = req.body?.updates;
+      const config = await updatePadcoinsGlobalConfig(
+        supabaseAdmin,
+        updates,
+        auth.user.id,
+      );
+
+      console.log(`✓ PUT /api/admin/padcoins-config — ${config.length} regla(s) actualizada(s)`);
+      return res.json({
+        ok: true,
+        config,
+      });
+    } catch (err) {
+      console.error('❌ PUT /api/admin/padcoins-config:', err.message);
+      return sendRouteError(res, err, 'Error al actualizar configuración PadCoins');
     }
   });
 }
