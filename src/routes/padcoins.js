@@ -20,6 +20,7 @@ import {
   listPadcoinsSedeConfig,
   upsertPadcoinsSedeConfig,
 } from '../padcoins/padcoinsSedeConfigService.js';
+import { listPadcoinsMovimientosAdmin } from '../padcoins/padcoinsMovimientosAdminService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -346,6 +347,28 @@ export function mountPadcoinsAdminRoutes(app, {
     } catch (err) {
       console.error('❌ PUT /api/admin/padcoins-sedes-config/:sedeId:', err.message);
       return sendRouteError(res, err, 'Error al actualizar participación PadCoins de la sede');
+    }
+  });
+
+  app.get('/api/admin/padcoins-movimientos', async (req, res) => {
+    try {
+      const auth = await requireAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const result = await listPadcoinsMovimientosAdmin(supabaseAdmin, {
+        role: auth.role,
+        query: req.query,
+      });
+
+      return res.json({
+        ok: true,
+        movimientos: result.movimientos,
+        paginacion: result.paginacion,
+        filtros_aplicados: result.filtros_aplicados,
+      });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins-movimientos:', err.message);
+      return sendRouteError(res, err, 'Error al listar movimientos PadCoins');
     }
   });
 }
