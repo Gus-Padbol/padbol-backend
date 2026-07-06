@@ -35,15 +35,18 @@ CREATE INDEX IF NOT EXISTS idx_padcoins_global_config_key
   ON padcoins_global_config (key);
 
 -- Valores iniciales (idempotente)
-INSERT INTO padcoins_global_config (key, value_integer, descripcion, activo)
+INSERT INTO padcoins_global_config (key, value_integer, value_text, descripcion, activo)
 VALUES
-  ('partido_jugado', 50, 'PadCoins por partido jugado', TRUE),
-  ('partido_ganado', 20, 'PadCoins extra por partido ganado', TRUE),
-  ('logro_desbloqueado', 500, 'PadCoins por logro desbloqueado', TRUE),
-  ('inscripcion_torneo', 100, 'PadCoins por inscripción a torneo', TRUE),
-  ('reserva_confirmada', 30, 'PadCoins por reserva confirmada/jugada', TRUE),
-  ('cancelacion_tarde', -100, 'Penalización por cancelación tardía', TRUE),
-  ('no_show', -300, 'Penalización por no presentarse', TRUE),
-  ('limite_diario_jugador', 1000, 'Tope diario de PadCoins ganados por jugador', TRUE),
-  ('limite_mensual_jugador', 10000, 'Tope mensual de PadCoins ganados por jugador', TRUE)
+  ('partido_jugado', 50, NULL, 'Bonus/fallback fijo por partido jugado (futuro; no reemplaza cálculo proporcional en reservas pagas)', TRUE),
+  ('partido_ganado', 20, NULL, 'PadCoins extra por partido ganado', TRUE),
+  ('logro_desbloqueado', 500, NULL, 'PadCoins por logro desbloqueado', TRUE),
+  ('inscripcion_torneo', 100, NULL, 'PadCoins por inscripción a torneo', TRUE),
+  ('reserva_confirmada', 30, NULL, 'Fallback fijo si no hay valor pagado o moneda sin conversión a USD equivalente', TRUE),
+  ('cancelacion_tarde', -100, NULL, 'Penalización por cancelación tardía', TRUE),
+  ('no_show', -300, NULL, 'Penalización por no presentarse', TRUE),
+  ('limite_diario_jugador', 1000, NULL, 'Tope diario de PadCoins ganados por jugador', TRUE),
+  ('limite_mensual_jugador', 10000, NULL, 'Tope mensual de PadCoins ganados por jugador', TRUE),
+  ('porcentaje_devolucion_reserva', 5, NULL, 'Porcentaje global de devolución PadCoins sobre valor pagado (ej. 5 = 5%)', TRUE),
+  ('padcoins_por_usd_equivalente', 100, NULL, 'Equivalencia promocional interna: PadCoins por 1 USD equivalente (no mostrar al jugador)', TRUE),
+  ('modo_calculo_reserva', NULL, 'porcentaje_valor_pagado', 'Modo de acreditación por reserva: porcentaje_valor_pagado | futuros modos', TRUE)
 ON CONFLICT (key) DO NOTHING;
