@@ -17,6 +17,10 @@ import {
   getCanjePadcoinsById,
   listCanjesAdminSede,
 } from '../padcoins/padcoinsCanjesService.js';
+import {
+  isPadcoinsActiveForSede,
+  PADCOINS_SEDE_INACTIVE_MESSAGE,
+} from '../padcoins/padcoinsSedeConfigService.js';
 
 function parseSedeId(raw) {
   const sid = Number.parseInt(String(raw ?? '').trim(), 10);
@@ -68,6 +72,19 @@ function sendRouteError(res, err, fallbackMessage) {
   return res.status(status).json({ error: err.message || fallbackMessage });
 }
 
+function buildSedeInactiveError() {
+  const err = new Error(PADCOINS_SEDE_INACTIVE_MESSAGE);
+  err.status = 403;
+  return err;
+}
+
+/** Admin club bloqueado si sede no participa; Super Admin puede preparar premios antes de activar. */
+function assertCanMutatePremiosForSede(role, padcoinsActive) {
+  if (padcoinsActive) return;
+  if (role.rol === 'super_admin') return;
+  throw buildSedeInactiveError();
+}
+
 export function mountPremiosCanjeablesRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
@@ -87,8 +104,17 @@ export function mountPremiosCanjeablesRoutes(app, {
         return res.status(400).json({ error: 'sede_id es requerido' });
       }
 
+      const padcoinsActivo = await isPadcoinsActiveForSede(supabaseAdmin, sedeId);
+      if (!padcoinsActivo) {
+        return res.json({
+          ok: true,
+          premios: [],
+          padcoins_activo: false,
+        });
+      }
+
       const premios = await listPremiosCanjeablesPublicos(supabaseAdmin, { sede_id: sedeId });
-      return res.json({ ok: true, premios });
+      return res.json({ ok: true, premios, padcoins_activo: true });
     } catch (err) {
       console.error('❌ GET /api/premios-canjeables:', err.message);
       return sendRouteError(res, err, 'Error al listar premios canjeables');
@@ -105,6 +131,16 @@ export function mountPremiosCanjeablesRoutes(app, {
       const premioId = String(req.params.id ?? '').trim();
       if (!premioId) {
         return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const premio = await getPremioCanjeableById(supabaseAdmin, premioId);
+      if (!premio) {
+        return res.status(404).json({ error: 'Premio no encontrado' });
+      }
+
+      const padcoinsActivo = await isPadcoinsActiveForSede(supabaseAdmin, premio.sede_id);
+      if (!padcoinsActivo) {
+        return res.status(403).json({ error: PADCOINS_SEDE_INACTIVE_MESSAGE });
       }
 
       const result = await canjearPremioPadcoins(supabaseAdmin, user.id, premioId);
@@ -127,9 +163,10 @@ export function mountPremiosCanjeablesRoutes(app, {
       if (!auth) return;
 
       const sedeId = resolveAdminListSedeId(auth.role, req.query ?? {});
+      const padcoinsActivo = await isPadcoinsActiveForSede(supabaseAdmin, sedeId);
       const premios = await listPremiosCanjeables(supabaseAdmin, { sede_id: sedeId });
 
-      return res.json({ ok: true, premios });
+      return res.json({ ok: true, premios, padcoins_activo: padcoinsActivo });
     } catch (err) {
       console.error('❌ GET /api/admin/premios-canjeables:', err.message);
       return sendRouteError(res, err, 'Error al listar premios canjeables admin');
@@ -156,6 +193,9 @@ export function mountPremiosCanjeablesRoutes(app, {
 
       const authSede = await requireSedeAdminForId(req, res, sedeId, adminDeps);
       if (!authSede) return;
+
+      const padcoinsActivo = await isPadcoinsActiveForSede(supabaseAdmin, sedeId);
+      assertCanMutatePremiosForSede(role, padcoinsActivo);
 
       const premio = await createPremioCanjeable(supabaseAdmin, {
         ...body,
@@ -187,6 +227,9 @@ export function mountPremiosCanjeablesRoutes(app, {
 
       const authSede = await requireSedeAdminForId(req, res, existing.sede_id, adminDeps);
       if (!authSede) return;
+
+      const padcoinsActivo = await isPadcoinsActiveForSede(supabaseAdmin, existing.sede_id);
+      assertCanMutatePremiosForSede(auth.role, padcoinsActivo);
 
       const body = { ...(req.body ?? {}) };
       if (auth.role.rol === 'admin_club') {
@@ -228,6 +271,9 @@ export function mountPremiosCanjeablesRoutes(app, {
       const authSede = await requireSedeAdminForId(req, res, existing.sede_id, adminDeps);
       if (!authSede) return;
 
+      const padcoinsActivo = await isPadcoinsActiveForSede(supabaseAdmin, existing.sede_id);
+      assertCanMutatePremiosForSede(auth.role, padcoinsActivo);
+
       const premio = await deactivatePremioCanjeable(supabaseAdmin, premioId);
       console.log(`✓ DELETE /api/admin/premios-canjeables/${premioId} — desactivado`);
       return res.json({ ok: true, premio });
@@ -245,9 +291,10 @@ export function mountPremiosCanjeablesRoutes(app, {
       const sedeId = resolveAdminListSedeId(auth.role, req.query ?? {});
       const limit = parseOptionalLimit(req.query.limit);
       const estado = req.query.estado ? String(req.query.estado).trim() : undefined;
+      const padcoinsActivo = await isPadcoinsActiveForSede(supabaseAdmin, sedeId);
       const { canjes } = await listCanjesAdminSede(supabaseAdmin, sedeId, { limit, estado });
 
-      return res.json({ ok: true, canjes });
+      return res.json({ ok: true, canjes, padcoins_activo: padcoinsActivo });
     } catch (err) {
       console.error('❌ GET /api/admin/padcoins-canjes:', err.message);
       return sendRouteError(res, err, 'Error al listar canjes admin');

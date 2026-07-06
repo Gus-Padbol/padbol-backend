@@ -4696,6 +4696,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ PadCoins V1: GET /api/padcoins/mi-saldo, GET /api/padcoins/historial, GET /api/padcoins/mis-canjes');
     console.log('✅ PadCoins admin: POST /api/admin/padcoins/ajuste');
     console.log('✅ PadCoins super admin: GET/PUT /api/admin/padcoins-config');
+    console.log('✅ PadCoins sedes: GET/PUT /api/admin/padcoins-sedes-config');
     console.log('✅ Premios canjeables: GET /api/premios-canjeables, POST /api/premios-canjeables/:id/canjear, admin CRUD /api/admin/premios-canjeables');
     console.log('✅ PadCoins canjes admin: GET /api/admin/padcoins-canjes, POST entregar/cancelar');
     console.log('✅ Admin: GET /api/admin/reservas-diagnostico');

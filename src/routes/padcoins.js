@@ -15,8 +15,34 @@ import {
   listPadcoinsGlobalConfig,
   updatePadcoinsGlobalConfig,
 } from '../padcoins/padcoinsGlobalConfigService.js';
+import {
+  getPadcoinsSedeConfig,
+  listPadcoinsSedeConfig,
+  upsertPadcoinsSedeConfig,
+} from '../padcoins/padcoinsSedeConfigService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parseRequiredSedeId(raw) {
+  const sid = Number.parseInt(String(raw ?? '').trim(), 10);
+  return Number.isFinite(sid) && sid > 0 ? sid : null;
+}
+
+async function requirePadcoinsSedeConfigReadAccess(req, res, sedeId, adminDeps) {
+  const auth = await requireAdminUser(req, res, adminDeps);
+  if (!auth) return null;
+
+  if (auth.role.rol === 'super_admin') {
+    return auth;
+  }
+
+  if (auth.role.rol === 'admin_club' && Number(auth.role.sede_id) === Number(sedeId)) {
+    return auth;
+  }
+
+  res.status(403).json({ error: 'No tenés permiso para ver la configuración de esta sede' });
+  return null;
+}
 
 function parseOptionalSedeId(raw) {
   if (raw == null || raw === '') return null;
@@ -214,6 +240,80 @@ export function mountPadcoinsAdminRoutes(app, {
     } catch (err) {
       console.error('❌ PUT /api/admin/padcoins-config:', err.message);
       return sendRouteError(res, err, 'Error al actualizar configuración PadCoins');
+    }
+  });
+
+  app.get('/api/admin/padcoins-sedes-config', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const sedes = await listPadcoinsSedeConfig(supabaseAdmin);
+
+      return res.json({
+        ok: true,
+        sedes,
+      });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins-sedes-config:', err.message);
+      return sendRouteError(res, err, 'Error al listar participación PadCoins por sede');
+    }
+  });
+
+  app.get('/api/admin/padcoins-sedes-config/:sedeId', async (req, res) => {
+    try {
+      const sedeId = parseRequiredSedeId(req.params.sedeId);
+      if (!sedeId) {
+        return res.status(400).json({ error: 'sedeId inválido' });
+      }
+
+      const auth = await requirePadcoinsSedeConfigReadAccess(req, res, sedeId, adminDeps);
+      if (!auth) return;
+
+      const config = await getPadcoinsSedeConfig(supabaseAdmin, sedeId);
+
+      return res.json({
+        ok: true,
+        config,
+      });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins-sedes-config/:sedeId:', err.message);
+      return sendRouteError(res, err, 'Error al obtener participación PadCoins de la sede');
+    }
+  });
+
+  app.put('/api/admin/padcoins-sedes-config/:sedeId', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const sedeId = parseRequiredSedeId(req.params.sedeId);
+      if (!sedeId) {
+        return res.status(400).json({ error: 'sedeId inválido' });
+      }
+
+      const body = req.body ?? {};
+      if (typeof body.activo !== 'boolean') {
+        return res.status(400).json({ error: 'activo debe ser boolean' });
+      }
+
+      const config = await upsertPadcoinsSedeConfig(supabaseAdmin, {
+        sede_id: sedeId,
+        activo: body.activo,
+        descripcion: body.descripcion,
+        fecha_inicio: body.fecha_inicio,
+        fecha_fin: body.fecha_fin,
+        updated_by: auth.user.id,
+      });
+
+      console.log(`✓ PUT /api/admin/padcoins-sedes-config/${sedeId} — activo=${config.activo}`);
+      return res.json({
+        ok: true,
+        config,
+      });
+    } catch (err) {
+      console.error('❌ PUT /api/admin/padcoins-sedes-config/:sedeId:', err.message);
+      return sendRouteError(res, err, 'Error al actualizar participación PadCoins de la sede');
     }
   });
 }
