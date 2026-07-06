@@ -99,7 +99,8 @@ No hay otro flujo que marque reservas como completadas hoy. Si en el futuro se a
 
 ## Pendientes / decisiones
 
-- Penalización PadCoins por no-show (config global `no_show`) **no cableada** en este bloque; solo se evita acreditar si `estado = no_show`.
 - Reservas completadas sin check-in siguen acreditando (mismo criterio que XP hoy).
+
+Penalizaciones automáticas: ver [PADCOINS_PENALIZACIONES.md](./PADCOINS_PENALIZACIONES.md).
 
 ## Punto de integración

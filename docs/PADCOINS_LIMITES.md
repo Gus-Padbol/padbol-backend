@@ -57,6 +57,7 @@ Flujos conectados:
 - `adjustPadcoins` (admin)
 - `reversePadcoins` (canje cancelado)
 - `spendPadcoins` (canjes)
+- Penalizaciones automáticas (`spend` por cancelación tardía / no show — ver [PADCOINS_PENALIZACIONES.md](./PADCOINS_PENALIZACIONES.md))
 
 ## Acreditación parcial
 

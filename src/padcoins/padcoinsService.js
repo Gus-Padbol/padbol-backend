@@ -263,6 +263,50 @@ export async function spendPadcoins(supabaseAdmin, userId, amount, options = {})
   });
 }
 
+/**
+ * Descuenta PadCoins hasta el saldo disponible (sin dejar negativo).
+ * Usa tipo spend; no aplica límites de earn.
+ */
+export async function deductPadcoins(supabaseAdmin, userId, amount, options = {}) {
+  const parsedAmount = assertPositiveAmount(amount);
+  const saldo = await getPadcoinsSaldo(supabaseAdmin, userId);
+  const disponible = Number(saldo.disponible ?? 0);
+  const toDeduct = Math.min(parsedAmount, disponible);
+
+  if (toDeduct <= 0) {
+    return {
+      skipped: true,
+      reason: 'saldo_insuficiente',
+      monto_solicitado: parsedAmount,
+      monto_aplicado: 0,
+      saldo,
+    };
+  }
+
+  const partial = toDeduct < parsedAmount;
+  const descripcion = partial
+    ? appendPartialDeductionToDescripcion(options.descripcion, parsedAmount, toDeduct)
+    : options.descripcion;
+
+  const result = await spendPadcoins(supabaseAdmin, userId, toDeduct, {
+    ...options,
+    descripcion,
+  });
+
+  return {
+    ...result,
+    monto_solicitado: parsedAmount,
+    monto_aplicado: toDeduct,
+    partial,
+  };
+}
+
+function appendPartialDeductionToDescripcion(descripcion, requested, applied) {
+  const base = descripcion ?? '';
+  const suffix = ` (descuento parcial: solicitado ${requested}, descontado ${applied})`;
+  return `${base}${suffix}`.slice(0, 500);
+}
+
 export async function adjustPadcoins(supabaseAdmin, userId, amount, options = {}) {
   const parsedAmount = assertNonZeroAmount(amount);
   const normalizedOptions = normalizeOptions(options);

@@ -41,6 +41,7 @@ import {
   procesarReputacionTrasCancelacion,
   assertJugadorNoSuspendidoPg,
   resolveUserIdByEmailPg,
+  PENALIZACION_UMBRAL_HORAS,
 } from './routes/reputacion.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
@@ -146,6 +147,11 @@ import { createPadcoinsRouter, mountPadcoinsAdminRoutes } from './src/routes/pad
 import { mountPremiosCanjeablesRoutes } from './src/routes/premiosCanjeables.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
 import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
+import {
+  penalizarPadcoinsPorCancelacionTarde,
+  penalizarPadcoinsPorNoShow,
+} from './src/padcoins/padcoinsPenaltiesService.js';
+import { isReservaNoShow } from './src/padcoins/padcoinsReservasService.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
 import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
 import { resolveScoreboardsMapForTorneoPartidos } from './src/scoreboard/scoreboardTorneoPartidoResolver.js';
@@ -1562,6 +1568,28 @@ app.put('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
       .select(access === 'admin' ? RESERVA_ADMIN_SELECT : RESERVA_OWNER_SELECT);
 
     if (error) throw error;
+
+    if (
+      access === 'admin'
+      && updates.estado != null
+      && isReservaNoShow({ estado: updates.estado })
+      && !isReservaNoShow(reserva)
+    ) {
+      const updatedReserva = data?.[0] ?? { ...reserva, ...updates };
+      try {
+        const padcoinsNoShow = await penalizarPadcoinsPorNoShow(supabaseAdmin, id, {
+          reserva: updatedReserva,
+        });
+        if (padcoinsNoShow?.penalizado) {
+          console.log(
+            `✓ PadCoins no_show reserva ${id} — -${padcoinsNoShow.padcoins} PC`,
+          );
+        }
+      } catch (penErr) {
+        console.warn(`⚠️ PadCoins no_show reserva ${id}:`, penErr.message);
+      }
+    }
+
     const mapped = (data || []).map((row) => mapReservaDetailDto(row, { isAdmin: access === 'admin' }));
     res.json(mapped);
   } catch (err) {
@@ -2849,12 +2877,13 @@ app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {
     if (updateErr) throw updateErr;
 
     let reputacionCancel = null;
+    let userIdReputacion = reserva.user_id ? String(reserva.user_id) : null;
+    if (!userIdReputacion && pgPool && reservaEmail) {
+      userIdReputacion = await resolveUserIdByEmailPg(pgPool, reservaEmail);
+    }
+
     if (pgPool) {
       try {
-        let userIdReputacion = reserva.user_id ? String(reserva.user_id) : null;
-        if (!userIdReputacion && reservaEmail) {
-          userIdReputacion = await resolveUserIdByEmailPg(pgPool, reservaEmail);
-        }
         if (userIdReputacion) {
           reputacionCancel = await procesarReputacionTrasCancelacion(pgPool, {
             userId: userIdReputacion,
@@ -2871,6 +2900,28 @@ app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {
         }
       } catch (repErr) {
         console.error('❌ reputación tras cancelación:', repErr.message);
+      }
+    }
+
+    let padcoinsCancelacionTarde = null;
+    if (
+      userIdReputacion
+      && Number.isFinite(horasHasta)
+      && horasHasta < PENALIZACION_UMBRAL_HORAS
+    ) {
+      try {
+        padcoinsCancelacionTarde = await penalizarPadcoinsPorCancelacionTarde(supabaseAdmin, reservaId, {
+          reserva,
+          userId: userIdReputacion,
+          horasAnticipacion: horasHasta,
+        });
+        if (padcoinsCancelacionTarde?.penalizado) {
+          console.log(
+            `✓ PadCoins cancelación tardía reserva ${reservaId} — -${padcoinsCancelacionTarde.padcoins} PC`,
+          );
+        }
+      } catch (penErr) {
+        console.warn(`⚠️ PadCoins cancelación tardía reserva ${reservaId}:`, penErr.message);
       }
     }
 
@@ -2932,6 +2983,7 @@ Si necesitás ayuda, escribinos por WhatsApp.
       eligibleForCredit: credito !== null,
       credito,
       reputacion: reputacionCancel,
+      padcoins_penalizacion: padcoinsCancelacionTarde,
     });
   } catch (err) {
     const st = err.status || 500;
