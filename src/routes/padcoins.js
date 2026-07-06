@@ -21,6 +21,7 @@ import {
   upsertPadcoinsSedeConfig,
 } from '../padcoins/padcoinsSedeConfigService.js';
 import { listPadcoinsMovimientosAdmin } from '../padcoins/padcoinsMovimientosAdminService.js';
+import { listPadcoinsAlertasAdmin } from '../padcoins/padcoinsAlertsService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -369,6 +370,29 @@ export function mountPadcoinsAdminRoutes(app, {
     } catch (err) {
       console.error('❌ GET /api/admin/padcoins-movimientos:', err.message);
       return sendRouteError(res, err, 'Error al listar movimientos PadCoins');
+    }
+  });
+
+  app.get('/api/admin/padcoins-alertas', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const result = await listPadcoinsAlertasAdmin(supabaseAdmin, {
+        role: auth.role,
+        query: req.query,
+      });
+
+      return res.json({
+        ok: true,
+        alertas: result.alertas,
+        paginacion: result.paginacion,
+        filtros_aplicados: result.filtros_aplicados,
+        nota: result.nota,
+      });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins-alertas:', err.message);
+      return sendRouteError(res, err, 'Error al consultar alertas PadCoins');
     }
   });
 }
