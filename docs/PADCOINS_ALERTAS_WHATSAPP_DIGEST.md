@@ -1,5 +1,9 @@
 # PadCoins — digest WhatsApp para Super Admin
 
+> **Estado:** canal **opcional / no recomendado** en esta etapa.  
+> **Canal recomendado:** push Expo — ver `docs/PADCOINS_ALERTAS_PUSH_DIGEST.md`.  
+> **Email:** fase futura (no hay proveedor transaccional implementado en backend).
+
 PadCoins es moneda de fidelización; **no es dinero** para el jugador.
 
 ## Objetivo
@@ -23,7 +27,7 @@ El digest complementa `GET /api/admin/padcoins-alertas` (commit `5424e02`) y el 
 
 | Variable | Requerida | Default | Descripción |
 |----------|-----------|---------|-------------|
-| `PADCOINS_ALERTAS_WHATSAPP_ENABLED` | Sí (para enviar) | `false` | `true` / `1` / `yes` activa envío |
+| `PADCOINS_ALERTAS_WHATSAPP_ENABLED` | Sí (para enviar) | **`false`** | `true` / `1` / `yes` activa envío |
 | `PADCOINS_ALERTAS_WHATSAPP_TO` | Sí (para enviar) | — | Destinatario(s), separados por coma. Ej: `whatsapp:+54911…` o `+54911…` |
 | `PADCOINS_ALERTAS_DIGEST_CRON` | No | `0 */12 * * *` | Expresión cron (cada 12 h) |
 | `PADCOINS_ALERTAS_PANEL_URL` | No | URL admin genérica | Link al panel de alertas |
@@ -33,6 +37,8 @@ El digest complementa `GET /api/admin/padcoins-alertas` (commit `5424e02`) y el 
 | `TWILIO_WHATSAPP_FROM` | No | sandbox Twilio | Remitente WhatsApp |
 
 Si faltan `ENABLED=true` o destinatarios, el cron **se registra igual** pero **no envía** y no falla el backend.
+
+**Por defecto dejar desactivado.** Usar push (`PADCOINS_ALERTAS_PUSH_ENABLED=true`) como canal principal.
 
 ## Frecuencia
 
@@ -80,7 +86,7 @@ Ver panel: https://…
 | Archivo | Rol |
 |---------|-----|
 | `src/padcoins/padcoinsAlertasDigestService.js` | Evaluación, filtro, mensaje, dedupe, envío |
-| `src/cron/padcoinsAlertasCron.js` | Registro cron + Twilio |
+| `src/cron/padcoinsAlertasCron.js` | Orquestación cron (push + WhatsApp) |
 | `server.js` | `initPadcoinsAlertasCron(...)` |
 
 ### Funciones principales
@@ -98,5 +104,6 @@ Ver panel: https://…
 
 ## Relacionado
 
+- `docs/PADCOINS_ALERTAS_PUSH_DIGEST.md` — **canal recomendado**
 - `docs/PADCOINS_ALERTAS_SUPERADMIN.md` — tipos de alerta y umbrales
 - `src/padcoins/padcoinsAlertsService.js` — evaluación on-the-fly

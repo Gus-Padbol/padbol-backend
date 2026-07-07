@@ -1,8 +1,13 @@
+import { evaluarAlertasPadcoinsGlobal } from '../padcoins/padcoinsAlertsService.js';
 import {
   getPadcoinsAlertasDigestCronExpression,
   sendPadcoinsAlertasWhatsAppDigest,
   shouldSendPadcoinsAlertDigest,
 } from '../padcoins/padcoinsAlertasDigestService.js';
+import {
+  sendPadcoinsAlertasPushDigest,
+  shouldSendPadcoinsAlertasPushDigest,
+} from '../padcoins/padcoinsAlertasPushDigestService.js';
 
 const TZ_DEFAULT = 'America/Argentina/Buenos_Aires';
 
@@ -22,18 +27,56 @@ function buildTwilioSendFn(twilioClient, twilioFrom) {
   };
 }
 
+function describeActiveChannels() {
+  const channels = [];
+  if (shouldSendPadcoinsAlertasPushDigest()) channels.push('push');
+  if (shouldSendPadcoinsAlertDigest()) channels.push('WhatsApp');
+  return channels;
+}
+
 export async function runPadcoinsAlertasDigestJob({
   supabaseAdmin,
   twilioClient,
   twilioFrom,
+  legacySuperAdminEmails = [],
 } = {}) {
-  const sendWhatsAppMessage = buildTwilioSendFn(twilioClient, twilioFrom);
+  const pushEnabled = shouldSendPadcoinsAlertasPushDigest();
+  const whatsappEnabled = shouldSendPadcoinsAlertDigest();
 
-  return sendPadcoinsAlertasWhatsAppDigest({
-    supabaseAdmin,
-    sendWhatsAppMessage,
-    twilioFrom,
-  });
+  if (!pushEnabled && !whatsappEnabled) {
+    return { ok: true, skipped: true, reason: 'all_channels_disabled' };
+  }
+
+  let alertasRaw = [];
+  try {
+    alertasRaw = await evaluarAlertasPadcoinsGlobal(supabaseAdmin, {});
+  } catch (err) {
+    console.warn('⚠️ PadCoins alertas digest — evaluación falló:', err.message);
+    return { ok: false, error: err.message };
+  }
+
+  const fetchAlertasFn = async () => alertasRaw;
+  const results = { ok: true, alertas_evaluadas: alertasRaw.length };
+
+  if (whatsappEnabled) {
+    const sendWhatsAppMessage = buildTwilioSendFn(twilioClient, twilioFrom);
+    results.whatsapp = await sendPadcoinsAlertasWhatsAppDigest({
+      supabaseAdmin,
+      sendWhatsAppMessage,
+      twilioFrom,
+      fetchAlertasFn,
+    });
+  }
+
+  if (pushEnabled) {
+    results.push = await sendPadcoinsAlertasPushDigest({
+      supabaseAdmin,
+      legacySuperAdminEmails,
+      fetchAlertasFn,
+    });
+  }
+
+  return results;
 }
 
 export function initPadcoinsAlertasCron({
@@ -41,6 +84,7 @@ export function initPadcoinsAlertasCron({
   cron,
   twilioClient,
   twilioFrom,
+  legacySuperAdminEmails = [],
   timezone = TZ_DEFAULT,
 } = {}) {
   if (!cron || typeof cron.schedule !== 'function') {
@@ -49,11 +93,16 @@ export function initPadcoinsAlertasCron({
   }
 
   const expression = getPadcoinsAlertasDigestCronExpression();
-  const enabled = shouldSendPadcoinsAlertDigest();
+  const channels = describeActiveChannels();
 
   const run = async () => {
     try {
-      await runPadcoinsAlertasDigestJob({ supabaseAdmin, twilioClient, twilioFrom });
+      await runPadcoinsAlertasDigestJob({
+        supabaseAdmin,
+        twilioClient,
+        twilioFrom,
+        legacySuperAdminEmails,
+      });
     } catch (err) {
       console.error('❌ Cron PadCoins alertas digest — error inesperado:', err.message);
     }
@@ -61,11 +110,13 @@ export function initPadcoinsAlertasCron({
 
   cron.schedule(expression, run, { timezone });
 
-  if (enabled) {
-    console.log(`⏰ Cron PadCoins alertas WhatsApp registrado (${expression})`);
+  if (channels.length) {
+    console.log(
+      `⏰ Cron PadCoins alertas digest registrado (${expression}) — canales: ${channels.join(', ')}`,
+    );
   } else {
     console.log(
-      `⏰ Cron PadCoins alertas WhatsApp registrado (${expression}) — desactivado (faltan env o enabled=false)`,
+      `⏰ Cron PadCoins alertas digest registrado (${expression}) — desactivado (push/WhatsApp off)`,
     );
   }
 }

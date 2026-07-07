@@ -3497,6 +3497,7 @@ initPadcoinsAlertasCron({
   cron,
   twilioClient,
   twilioFrom: TWILIO_WHATSAPP_FROM,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
   timezone: 'America/Argentina/Buenos_Aires',
 });
 
