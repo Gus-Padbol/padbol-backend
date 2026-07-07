@@ -147,6 +147,7 @@ import { createPadcoinsRouter, mountPadcoinsAdminRoutes } from './src/routes/pad
 import { mountPremiosCanjeablesRoutes } from './src/routes/premiosCanjeables.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
 import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
+import { initPadcoinsAlertasCron } from './src/cron/padcoinsAlertasCron.js';
 import {
   penalizarPadcoinsPorCancelacionTarde,
   penalizarPadcoinsPorNoShow,
@@ -3488,6 +3489,14 @@ initReservasHoldCleanupCron({
   supabaseAdmin,
   pgPool,
   cron,
+  timezone: 'America/Argentina/Buenos_Aires',
+});
+
+initPadcoinsAlertasCron({
+  supabaseAdmin,
+  cron,
+  twilioClient,
+  twilioFrom: TWILIO_WHATSAPP_FROM,
   timezone: 'America/Argentina/Buenos_Aires',
 });
 
