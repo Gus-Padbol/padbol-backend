@@ -29,6 +29,9 @@ import {
 } from '../padcoins/padcoinsSedeConfigService.js';
 import { PADCOINS_GLOBAL_CONFIG_DEFAULTS } from '../padcoins/padcoinsGlobalConfigService.js';
 import {
+  buildBenefitsSetupRecommendationsForSede,
+} from './padbolMatchSetupBenefitsService.js';
+import {
   createPremioCanjeable,
   listPremiosCanjeables,
 } from '../padcoins/premiosCanjeablesService.js';
@@ -292,6 +295,7 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
     adminAssigned,
     premiosCount,
     phase2,
+    benefitsEvaluation,
   ] = await Promise.all([
     assertSedeExists(supabaseAdmin, sedeId).catch(() => null),
     getPadcoinsSedeConfig(supabaseAdmin, sedeId, { now }),
@@ -299,6 +303,7 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
     hasAdminClubForSede(supabaseAdmin, sedeId),
     countPremiosForSede(supabaseAdmin, sedeId),
     computePhase2OperationalFlags(supabaseAdmin, sedeId),
+    buildBenefitsSetupRecommendationsForSede(supabaseAdmin, sedeId),
   ]);
 
   const effectivePercent = resolvedConfig?.effective?.porcentaje_devolucion_reserva
@@ -349,6 +354,7 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
       global_padcoins_por_unidad_interna: globalConversion,
       sede_override_conversion: hasCustomConversionOverride,
       padcoins_config_id: padcoinsConfig.id,
+      benefits_evaluation: benefitsEvaluation,
     },
   };
 }

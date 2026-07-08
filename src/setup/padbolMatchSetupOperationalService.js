@@ -9,6 +9,7 @@ import {
   SEDE_OPERATIONAL_SELECT,
 } from './padbolMatchSetupPhase2Config.js';
 import { PADBOL_MATCH_SETUP_STEPS } from './padbolMatchSetupConfig.js';
+import { buildBeneficiosSectionPayload } from './padbolMatchSetupBenefitsService.js';
 import { PADCOINS_GLOBAL_CONFIG_DEFAULTS } from '../padcoins/padcoinsGlobalConfigService.js';
 
 const CANCHA_SELECT = 'id, sede_id, nombre, numero, nro, estado, deporte';
@@ -331,16 +332,27 @@ export function buildSetupSections(flags, phase1Checklist) {
     .map((item) => buildSectionItem(item.key, item.label, item.status === 'ok', item.detail))
     ?? [];
 
+  const beneficiosExtras = buildBeneficiosSectionPayload(flags);
   const beneficiosItems = [
     buildSectionItem(
       PADBOL_MATCH_SETUP_STEPS.BENEFICIOS_INICIALES_CONFIGURADOS,
       'Beneficios iniciales cargados',
       flags.beneficios_iniciales_configurados === true,
-      flags.beneficios_iniciales_configurados
-        ? `${flags.meta?.premios_count ?? 0} beneficio(s)`
-        : 'Sin beneficios canjeables',
+      beneficiosExtras.detail,
     ),
   ];
+
+  const beneficiosSection = {
+    key: PADBOL_MATCH_SETUP_SECTIONS.BENEFICIOS,
+    title: PADBOL_MATCH_SETUP_SECTION_TITLES[PADBOL_MATCH_SETUP_SECTIONS.BENEFICIOS],
+    status: beneficiosExtras.status,
+    detail: beneficiosExtras.detail,
+    items: beneficiosItems,
+    recommendations: beneficiosExtras.recommendations,
+    warnings: beneficiosExtras.warnings,
+    loyalty_quality: beneficiosExtras.loyalty_quality,
+    evaluation_summary: beneficiosExtras.evaluation_summary,
+  };
 
   const campanasItems = [
     buildSectionItem(
@@ -397,12 +409,7 @@ export function buildSetupSections(flags, phase1Checklist) {
       status: deriveSectionStatus(padcoinsItems),
       items: padcoinsItems,
     },
-    {
-      key: PADBOL_MATCH_SETUP_SECTIONS.BENEFICIOS,
-      title: PADBOL_MATCH_SETUP_SECTION_TITLES[PADBOL_MATCH_SETUP_SECTIONS.BENEFICIOS],
-      status: deriveSectionStatus(beneficiosItems),
-      items: beneficiosItems,
-    },
+    beneficiosSection,
     {
       key: PADBOL_MATCH_SETUP_SECTIONS.CAMPANAS,
       title: PADBOL_MATCH_SETUP_SECTION_TITLES[PADBOL_MATCH_SETUP_SECTIONS.CAMPANAS],
