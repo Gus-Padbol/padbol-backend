@@ -126,6 +126,8 @@ export function mountPadbolMatchSetupRoutes(app, {
         missing: validation.missing,
         next_actions: validation.next_actions,
         checklist_completo: validation.checklist_completo,
+        sections: validation.sections,
+        readiness_level: validation.readiness_level,
         persisted: validation.persisted,
       });
     } catch (err) {

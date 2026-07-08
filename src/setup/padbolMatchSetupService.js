@@ -3,10 +3,21 @@ import {
   PADBOL_MATCH_RECOMMENDED_LOYALTY_PERCENT,
   PADBOL_MATCH_SETUP_CHECKLIST_LABELS,
   PADBOL_MATCH_SETUP_NEXT_ACTIONS,
+  PADBOL_MATCH_SETUP_PHASE1_CHECKLIST_KEYS,
   PADBOL_MATCH_SETUP_STEP_KEYS,
   PADBOL_MATCH_SETUP_STEPS,
   PADBOL_MATCH_SUGGESTED_PREMIOS,
 } from './padbolMatchSetupConfig.js';
+import {
+  PADBOL_MATCH_READINESS_LEVELS,
+  PADBOL_MATCH_SETUP_PHASE2_STEP_KEYS,
+} from './padbolMatchSetupPhase2Config.js';
+import {
+  buildPhase2MissingAndActions,
+  buildSetupSections,
+  computePhase2OperationalFlags,
+  computeReadinessLevel,
+} from './padbolMatchSetupOperationalService.js';
 import {
   normalizePadcoinsSedeRuleOverrides,
   resolvePadcoinsConfigForSede,
@@ -31,6 +42,14 @@ const SETUP_STATUS_SELECT = [
   'beneficios_iniciales_configurados',
   'campanas_habilitadas',
   'reserva_visible_para_jugador',
+  'sede_datos_basicos_configurados',
+  'canchas_configuradas',
+  'horarios_configurados',
+  'precios_configurados',
+  'reservas_habilitadas',
+  'pagos_configurados',
+  'reglas_operativas_configuradas',
+  'readiness_level',
   'checklist_completo',
   'last_checked_at',
   'notes',
@@ -38,8 +57,13 @@ const SETUP_STATUS_SELECT = [
   'updated_at',
 ].join(', ');
 
+const ALL_SETUP_STEP_KEYS = [
+  ...PADBOL_MATCH_SETUP_STEP_KEYS,
+  ...PADBOL_MATCH_SETUP_PHASE2_STEP_KEYS,
+];
+
 const BOOLEAN_STEP_COLUMNS = new Set(
-  PADBOL_MATCH_SETUP_STEP_KEYS.filter((key) => key !== PADBOL_MATCH_SETUP_STEPS.CHECKLIST_COMPLETO),
+  ALL_SETUP_STEP_KEYS.filter((key) => key !== PADBOL_MATCH_SETUP_STEPS.CHECKLIST_COMPLETO),
 );
 
 function isMissingTable(error) {
@@ -73,6 +97,14 @@ function defaultSetupStatusRow(sedeId) {
     beneficios_iniciales_configurados: false,
     campanas_habilitadas: false,
     reserva_visible_para_jugador: false,
+    sede_datos_basicos_configurados: false,
+    canchas_configuradas: false,
+    horarios_configurados: false,
+    precios_configurados: false,
+    reservas_habilitadas: false,
+    pagos_configurados: false,
+    reglas_operativas_configuradas: false,
+    readiness_level: PADBOL_MATCH_READINESS_LEVELS.INCOMPLETE,
     checklist_completo: false,
     last_checked_at: null,
     notes: null,
@@ -93,6 +125,14 @@ function normalizeSetupStatusRow(row, sedeId) {
     beneficios_iniciales_configurados: row.beneficios_iniciales_configurados === true,
     campanas_habilitadas: row.campanas_habilitadas === true,
     reserva_visible_para_jugador: row.reserva_visible_para_jugador === true,
+    sede_datos_basicos_configurados: row.sede_datos_basicos_configurados === true,
+    canchas_configuradas: row.canchas_configuradas === true,
+    horarios_configurados: row.horarios_configurados === true,
+    precios_configurados: row.precios_configurados === true,
+    reservas_habilitadas: row.reservas_habilitadas === true,
+    pagos_configurados: row.pagos_configurados === true,
+    reglas_operativas_configuradas: row.reglas_operativas_configuradas === true,
+    readiness_level: row.readiness_level ?? PADBOL_MATCH_READINESS_LEVELS.INCOMPLETE,
     checklist_completo: row.checklist_completo === true,
     last_checked_at: row.last_checked_at ?? null,
     notes: row.notes ?? null,
@@ -163,6 +203,14 @@ async function upsertSetupStatusRow(supabaseAdmin, payload) {
     beneficios_iniciales_configurados: payload.beneficios_iniciales_configurados === true,
     campanas_habilitadas: payload.campanas_habilitadas === true,
     reserva_visible_para_jugador: payload.reserva_visible_para_jugador === true,
+    sede_datos_basicos_configurados: payload.sede_datos_basicos_configurados === true,
+    canchas_configuradas: payload.canchas_configuradas === true,
+    horarios_configurados: payload.horarios_configurados === true,
+    precios_configurados: payload.precios_configurados === true,
+    reservas_habilitadas: payload.reservas_habilitadas === true,
+    pagos_configurados: payload.pagos_configurados === true,
+    reglas_operativas_configuradas: payload.reglas_operativas_configuradas === true,
+    readiness_level: payload.readiness_level ?? PADBOL_MATCH_READINESS_LEVELS.INCOMPLETE,
     checklist_completo: payload.checklist_completo === true,
     last_checked_at: payload.last_checked_at ?? new Date().toISOString(),
     notes: payload.notes != null ? String(payload.notes).trim() || null : undefined,
@@ -217,19 +265,6 @@ async function hasAdminClubForSede(supabaseAdmin, sedeId) {
   }
 }
 
-async function countCanchasForSede(supabaseAdmin, sedeId) {
-  try {
-    const { count, error } = await supabaseAdmin
-      .from('canchas')
-      .select('id', { count: 'exact', head: true })
-      .eq('sede_id', sedeId);
-
-    if (error) return 0;
-    return count ?? 0;
-  } catch {
-    return 0;
-  }
-}
 
 async function countPremiosForSede(supabaseAdmin, sedeId) {
   const premios = await listPremiosCanjeables(supabaseAdmin, { sede_id: sedeId });
@@ -255,15 +290,15 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
     padcoinsConfig,
     resolvedConfig,
     adminAssigned,
-    canchasCount,
     premiosCount,
+    phase2,
   ] = await Promise.all([
     assertSedeExists(supabaseAdmin, sedeId).catch(() => null),
     getPadcoinsSedeConfig(supabaseAdmin, sedeId, { now }),
     resolvePadcoinsConfigForSede(supabaseAdmin, sedeId, { now }).catch(() => null),
     hasAdminClubForSede(supabaseAdmin, sedeId),
-    countCanchasForSede(supabaseAdmin, sedeId),
     countPremiosForSede(supabaseAdmin, sedeId),
+    computePhase2OperationalFlags(supabaseAdmin, sedeId),
   ]);
 
   const effectivePercent = resolvedConfig?.effective?.porcentaje_devolucion_reserva
@@ -281,6 +316,7 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
   const padcoinsActivado = padcoinsConfig.participa === true;
   const padcoinsDefault5 = isRecommendedLoyaltyPercent(effectivePercent);
   const beneficiosOk = premiosCount > 0;
+  const canchasCount = phase2.meta?.canchas_activas_count ?? 0;
   const reservaVisible = Boolean(sedeRow?.nombre) && canchasCount > 0;
   const campanasHabilitadas = padcoinsActivado;
 
@@ -291,10 +327,24 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
     beneficios_iniciales_configurados: beneficiosOk,
     campanas_habilitadas: campanasHabilitadas,
     reserva_visible_para_jugador: reservaVisible,
+    sede_datos_basicos_configurados: phase2.sede_datos_basicos_configurados,
+    canchas_configuradas: phase2.canchas_configuradas,
+    horarios_configurados: phase2.horarios_configurados,
+    precios_configurados: phase2.precios_configurados,
+    reservas_habilitadas: phase2.reservas_habilitadas,
+    pagos_configurados: phase2.pagos_configurados,
+    reglas_operativas_configuradas: phase2.reglas_operativas_configuradas,
     meta: {
-      sede_nombre: sedeRow?.nombre ?? null,
+      sede_nombre: sedeRow?.nombre ?? phase2.meta?.sede_nombre ?? null,
       premios_count: premiosCount,
       canchas_count: canchasCount,
+      canchas_total: phase2.meta?.canchas_total ?? 0,
+      canchas_activas_count: phase2.meta?.canchas_activas_count ?? 0,
+      franjas_precio_count: phase2.meta?.franjas_precio_count ?? 0,
+      horarios_source: phase2.meta?.horarios_source ?? null,
+      precio_source: phase2.meta?.precio_source ?? null,
+      pagos: phase2.meta?.pagos ?? null,
+      reglas_operativas: phase2.meta?.reglas_operativas ?? null,
       effective_porcentaje_devolucion_reserva: effectivePercent,
       global_padcoins_por_unidad_interna: globalConversion,
       sede_override_conversion: hasCustomConversionOverride,
@@ -304,16 +354,7 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
 }
 
 function buildValidationFromFlags(sedeId, flags) {
-  const checklistKeys = [
-    PADBOL_MATCH_SETUP_STEPS.ADMIN_SEDE_CONFIGURADO,
-    PADBOL_MATCH_SETUP_STEPS.PADCOINS_ACTIVADO,
-    PADBOL_MATCH_SETUP_STEPS.PADCOINS_DEFAULT_5_CONFIGURADO,
-    PADBOL_MATCH_SETUP_STEPS.BENEFICIOS_INICIALES_CONFIGURADOS,
-    PADBOL_MATCH_SETUP_STEPS.CAMPANAS_HABILITADAS,
-    PADBOL_MATCH_SETUP_STEPS.RESERVA_VISIBLE_PARA_JUGADOR,
-  ];
-
-  const checklist = checklistKeys.map((key) => {
+  const checklist = PADBOL_MATCH_SETUP_PHASE1_CHECKLIST_KEYS.map((key) => {
     const ok = flags[key] === true;
     let detail = ok ? 'Completo' : 'Pendiente';
 
@@ -344,13 +385,22 @@ function buildValidationFromFlags(sedeId, flags) {
     return buildChecklistItem(key, ok, detail);
   });
 
-  const missing = checklist
+  const phase1Missing = checklist
     .filter((item) => item.status !== 'ok')
     .map((item) => item.key);
 
-  const next_actions = missing.map((key) => PADBOL_MATCH_SETUP_NEXT_ACTIONS[key]).filter(Boolean);
+  const phase1NextActions = phase1Missing
+    .map((key) => PADBOL_MATCH_SETUP_NEXT_ACTIONS[key])
+    .filter(Boolean);
 
-  const checklistCompleto = missing.length === 0;
+  const phase2Extras = buildPhase2MissingAndActions(flags);
+
+  const missing = [...new Set([...phase1Missing, ...phase2Extras.missing])];
+  const next_actions = [...new Set([...phase1NextActions, ...phase2Extras.next_actions])];
+
+  const checklistCompleto = phase1Missing.length === 0;
+  const readiness_level = computeReadinessLevel(flags, checklistCompleto);
+  const sections = buildSetupSections(flags, checklist);
 
   return {
     ok: checklistCompleto,
@@ -359,6 +409,8 @@ function buildValidationFromFlags(sedeId, flags) {
     missing,
     next_actions,
     checklist_completo: checklistCompleto,
+    sections,
+    readiness_level,
     flags,
   };
 }
@@ -381,6 +433,13 @@ export async function getSetupStatus(supabaseAdmin, sedeId, options = {}) {
     beneficios_iniciales_configurados: derived.beneficios_iniciales_configurados,
     campanas_habilitadas: derived.campanas_habilitadas,
     reserva_visible_para_jugador: derived.reserva_visible_para_jugador,
+    sede_datos_basicos_configurados: derived.sede_datos_basicos_configurados,
+    canchas_configuradas: derived.canchas_configuradas,
+    horarios_configurados: derived.horarios_configurados,
+    precios_configurados: derived.precios_configurados,
+    reservas_habilitadas: derived.reservas_habilitadas,
+    pagos_configurados: derived.pagos_configurados,
+    reglas_operativas_configuradas: derived.reglas_operativas_configuradas,
     checklist_completo: derived.admin_sede_configurado
       && derived.padcoins_activado
       && derived.padcoins_default_5_configurado
@@ -389,12 +448,16 @@ export async function getSetupStatus(supabaseAdmin, sedeId, options = {}) {
       && derived.reserva_visible_para_jugador,
   };
 
+  const validationPreview = buildValidationFromFlags(sid, derived);
+
   return {
     sede_id: sid,
     status: normalizeSetupStatusRow(stored, sid),
     live: mergedFlags,
     meta: derived.meta,
     checklist_completo: mergedFlags.checklist_completo,
+    sections: validationPreview.sections,
+    readiness_level: validationPreview.readiness_level,
   };
 }
 
@@ -411,6 +474,7 @@ export async function validateSetupForSede(supabaseAdmin, sedeId, options = {}) 
     sede_id: sid,
     ...validation.flags,
     checklist_completo: validation.checklist_completo,
+    readiness_level: validation.readiness_level,
     last_checked_at: new Date().toISOString(),
   });
 
@@ -572,7 +636,7 @@ export async function markSetupStep(supabaseAdmin, sedeId, step, value, {
   if (!sid) throw buildHttpError('sede_id inválido');
 
   const normalizedStep = String(step ?? '').trim();
-  if (!PADBOL_MATCH_SETUP_STEP_KEYS.includes(normalizedStep)) {
+  if (!ALL_SETUP_STEP_KEYS.includes(normalizedStep)) {
     throw buildHttpError(`step inválido: ${normalizedStep}`);
   }
 
@@ -595,6 +659,14 @@ export async function markSetupStep(supabaseAdmin, sedeId, step, value, {
     beneficios_iniciales_configurados: existing.beneficios_iniciales_configurados,
     campanas_habilitadas: existing.campanas_habilitadas,
     reserva_visible_para_jugador: existing.reserva_visible_para_jugador,
+    sede_datos_basicos_configurados: existing.sede_datos_basicos_configurados,
+    canchas_configuradas: existing.canchas_configuradas,
+    horarios_configurados: existing.horarios_configurados,
+    precios_configurados: existing.precios_configurados,
+    reservas_habilitadas: existing.reservas_habilitadas,
+    pagos_configurados: existing.pagos_configurados,
+    reglas_operativas_configuradas: existing.reglas_operativas_configuradas,
+    readiness_level: existing.readiness_level,
     checklist_completo: existing.checklist_completo,
     last_checked_at: existing.last_checked_at,
     notes: notes != null ? notes : existing.notes,
@@ -619,6 +691,7 @@ export async function markSetupStep(supabaseAdmin, sedeId, step, value, {
 export {
   SETUP_STATUS_SELECT,
   BOOLEAN_STEP_COLUMNS,
+  ALL_SETUP_STEP_KEYS,
   buildValidationFromFlags,
   computeDerivedSetupFlags,
 };
