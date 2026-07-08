@@ -2,6 +2,7 @@ import {
   PADCOINS_GLOBAL_CONFIG_DEFAULTS,
   listPadcoinsGlobalConfig,
 } from './padcoinsGlobalConfigService.js';
+import { getEffectivePadcoinsValueForSede } from './padcoinsEffectiveConfigService.js';
 import { PADCOINS_MOVEMENT_TYPES } from './padcoinsConfig.js';
 
 export const PADCOINS_EARN_LIMIT_TZ = 'America/Argentina/Buenos_Aires';
@@ -74,6 +75,52 @@ function resolveLimitFromRow(row, defaultValue) {
   const value = row?.value_integer != null ? Number(row.value_integer) : defaultValue;
   if (!Number.isInteger(value) || value <= 0) return null;
   return value;
+}
+
+function resolveLimitFromEffectiveValue(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function parseOptionalSedeId(raw) {
+  const sid = Number.parseInt(String(raw ?? '').trim(), 10);
+  return Number.isFinite(sid) && sid > 0 ? sid : null;
+}
+
+/**
+ * Topes diario/mensual efectivos por sede (override → global → default).
+ * Sin sedeId o si falla el resolver → getPadcoinsEarnLimits (global).
+ */
+export async function getPadcoinsEarnLimitsForSede(supabaseAdmin, sedeId = null) {
+  const sid = parseOptionalSedeId(sedeId);
+  if (!sid) {
+    return getPadcoinsEarnLimits(supabaseAdmin);
+  }
+
+  try {
+    const [dailyRaw, monthlyRaw] = await Promise.all([
+      getEffectivePadcoinsValueForSede(
+        supabaseAdmin,
+        sid,
+        'limite_diario_jugador',
+        PADCOINS_GLOBAL_CONFIG_DEFAULTS.limite_diario_jugador,
+      ),
+      getEffectivePadcoinsValueForSede(
+        supabaseAdmin,
+        sid,
+        'limite_mensual_jugador',
+        PADCOINS_GLOBAL_CONFIG_DEFAULTS.limite_mensual_jugador,
+      ),
+    ]);
+
+    return {
+      limite_diario_jugador: resolveLimitFromEffectiveValue(dailyRaw),
+      limite_mensual_jugador: resolveLimitFromEffectiveValue(monthlyRaw),
+    };
+  } catch {
+    return getPadcoinsEarnLimits(supabaseAdmin);
+  }
 }
 
 /**
@@ -175,7 +222,11 @@ export async function applyPadcoinsEarnCaps(supabaseAdmin, userId, montoSolicita
 
   const now = options.now ?? new Date();
   const timeZone = options.timeZone ?? PADCOINS_EARN_LIMIT_TZ;
-  const limits = options.limits ?? await getPadcoinsEarnLimits(supabaseAdmin);
+  const limits = options.limits ?? (
+    options.sedeId != null || options.sede_id != null
+      ? await getPadcoinsEarnLimitsForSede(supabaseAdmin, options.sedeId ?? options.sede_id)
+      : await getPadcoinsEarnLimits(supabaseAdmin)
+  );
 
   const dayBounds = getEarnPeriodBounds('day', now, timeZone);
   const monthBounds = getEarnPeriodBounds('month', now, timeZone);

@@ -6,6 +6,7 @@ import {
   PADCOINS_REWARDS_V1,
 } from '../padcoins/padcoinsConfig.js';
 import { getPadcoinsValue } from '../padcoins/padcoinsGlobalConfigService.js';
+import { getEffectivePadcoinsValueForSede } from '../padcoins/padcoinsEffectiveConfigService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const XP_LOGRO_DESBLOQUEADO = XP_VALORES.LOGRO_DESBLOQUEADO ?? 150;
@@ -145,7 +146,7 @@ async function hasPadcoinsMovimientoLogro(supabaseAdmin, userId, slug) {
   return Boolean(data?.id);
 }
 
-export async function sumarPadcoinsLogroDesbloqueado(supabaseAdmin, userId, slug, nombre = null) {
+export async function sumarPadcoinsLogroDesbloqueado(supabaseAdmin, userId, slug, nombre = null, options = {}) {
   if (!isValidUserId(userId)) {
     console.warn('[logrosSync] sumarPadcoins omitido — user_id inválido:', userId);
     return null;
@@ -157,11 +158,19 @@ export async function sumarPadcoinsLogroDesbloqueado(supabaseAdmin, userId, slug
     return null;
   }
 
-  const amount = await getPadcoinsValue(
-    supabaseAdmin,
-    'logro_desbloqueado',
-    PADCOINS_REWARDS_V1.logro_desbloqueado ?? 500,
-  );
+  const fallback = PADCOINS_REWARDS_V1.logro_desbloqueado ?? 500;
+  const sedeIdRaw = options.sede_id ?? options.sedeId ?? null;
+  const sedeId = Number.parseInt(String(sedeIdRaw ?? '').trim(), 10);
+  const hasSedeId = Number.isFinite(sedeId) && sedeId > 0;
+
+  const amount = hasSedeId
+    ? await getEffectivePadcoinsValueForSede(
+      supabaseAdmin,
+      sedeId,
+      'logro_desbloqueado',
+      fallback,
+    )
+    : await getPadcoinsValue(supabaseAdmin, 'logro_desbloqueado', fallback);
   const label = resolveLogroNombre(normalizedSlug, nombre);
   const descripcion = `Logro desbloqueado: ${label}`;
 
@@ -180,6 +189,7 @@ export async function sumarPadcoinsLogroDesbloqueado(supabaseAdmin, userId, slug
       referencia_tipo: 'logro',
       referencia_id: normalizedSlug,
       descripcion,
+      ...(hasSedeId ? { sede_id: sedeId } : {}),
     });
 
     if (result?.skipped) {

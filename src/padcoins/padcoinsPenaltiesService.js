@@ -2,9 +2,13 @@ import {
   PADCOINS_GLOBAL_CONFIG_DEFAULTS,
   listPadcoinsGlobalConfig,
 } from './padcoinsGlobalConfigService.js';
+import {
+  getEffectivePadcoinsValueForSede,
+  normalizePadcoinsSedeRuleOverrides,
+} from './padcoinsEffectiveConfigService.js';
 import { deductPadcoins } from './padcoinsService.js';
 import { PADCOINS_ORIGINS } from './padcoinsConfig.js';
-import { isPadcoinsActiveForSede } from './padcoinsSedeConfigService.js';
+import { getPadcoinsSedeConfig, isPadcoinsActiveForSede } from './padcoinsSedeConfigService.js';
 import { isReservaNoShow } from './padcoinsReservasService.js';
 import {
   computeHorasAnticipacionReserva,
@@ -56,16 +60,46 @@ export function isCancelacionTardeReserva(fecha, hora, horasPrecomputed) {
   return horas != null && horas < PENALIZACION_UMBRAL_HORAS;
 }
 
-export async function getPadcoinsPenaltyAmount(supabaseAdmin, key) {
+function parseOptionalSedeId(raw) {
+  const sid = Number.parseInt(String(raw ?? '').trim(), 10);
+  return Number.isFinite(sid) && sid > 0 ? sid : null;
+}
+
+function resolvePenaltyMagnitude(raw) {
+  const magnitude = Math.abs(Number(raw));
+  return Number.isInteger(magnitude) && magnitude > 0 ? magnitude : 0;
+}
+
+export async function getPadcoinsPenaltyAmount(supabaseAdmin, key, sedeId = null) {
   const normalizedKey = String(key ?? '').trim();
+  const sid = parseOptionalSedeId(sedeId);
   const rows = await listPadcoinsGlobalConfig(supabaseAdmin);
   const row = rows.find((item) => item.key === normalizedKey);
+
+  if (sid) {
+    const sedeConfig = await getPadcoinsSedeConfig(supabaseAdmin, sid);
+    const overrides = normalizePadcoinsSedeRuleOverrides(sedeConfig.rule_overrides);
+    const hasSedeOverride = Object.prototype.hasOwnProperty.call(overrides, normalizedKey);
+
+    if (hasSedeOverride) {
+      return resolvePenaltyMagnitude(overrides[normalizedKey]);
+    }
+
+    if (row?.activo === false) return 0;
+
+    const effectiveValue = await getEffectivePadcoinsValueForSede(
+      supabaseAdmin,
+      sid,
+      normalizedKey,
+      null,
+    );
+    return resolvePenaltyMagnitude(effectiveValue);
+  }
 
   if (row?.activo === false) return 0;
 
   const raw = row?.value_integer ?? PADCOINS_GLOBAL_CONFIG_DEFAULTS[normalizedKey];
-  const magnitude = Math.abs(Number(raw));
-  return Number.isInteger(magnitude) && magnitude > 0 ? magnitude : 0;
+  return resolvePenaltyMagnitude(raw);
 }
 
 export async function yaFuePenalizadaReserva(supabaseAdmin, reservaId, tipoPenalizacion) {
@@ -188,7 +222,7 @@ async function applyReservaPadcoinsPenalty(supabaseAdmin, reservaId, tipoPenaliz
     return { ok: true, penalizado: false, reason: 'ya_penalizada', reserva_id: id };
   }
 
-  const montoConfig = await getPadcoinsPenaltyAmount(supabaseAdmin, configKey);
+  const montoConfig = await getPadcoinsPenaltyAmount(supabaseAdmin, configKey, sedeId);
   if (montoConfig <= 0) {
     return { ok: true, penalizado: false, reason: 'penalizacion_inactiva_o_cero', configKey };
   }

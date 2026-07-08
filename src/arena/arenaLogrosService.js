@@ -62,6 +62,9 @@ export async function verificarLogrosArena(supabaseAdmin, userId, context = {}) 
         userId,
         slug,
         logro.nombre ?? logro.codigo,
+        {
+          sede_id: context.sede_id ?? context.sedeId ?? null,
+        },
       );
 
       desbloqueados.push({

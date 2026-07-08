@@ -16,10 +16,15 @@ import {
   updatePadcoinsGlobalConfig,
 } from '../padcoins/padcoinsGlobalConfigService.js';
 import {
+  canReadPadcoinsSedeConfig,
   getPadcoinsSedeConfig,
   listPadcoinsSedeConfig,
   upsertPadcoinsSedeConfig,
 } from '../padcoins/padcoinsSedeConfigService.js';
+import {
+  resolvePadcoinsConfigForSede,
+  updatePadcoinsSedeRuleOverrides,
+} from '../padcoins/padcoinsEffectiveConfigService.js';
 import { listPadcoinsMovimientosAdmin } from '../padcoins/padcoinsMovimientosAdminService.js';
 import { listPadcoinsAlertasAdmin } from '../padcoins/padcoinsAlertsService.js';
 
@@ -34,19 +39,12 @@ async function requirePadcoinsSedeConfigReadAccess(req, res, sedeId, adminDeps) 
   const auth = await requireAdminUser(req, res, adminDeps);
   if (!auth) return null;
 
-  if (auth.role.rol === 'super_admin') {
+  if (canReadPadcoinsSedeConfig(auth.role, sedeId)) {
     return auth;
   }
 
-  if (auth.role.rol === 'admin_club') {
-    if (auth.role.sede_id == null) {
-      res.status(403).json({ error: 'Admin de club sin sede asignada' });
-      return null;
-    }
-    if (Number(auth.role.sede_id) === Number(sedeId)) {
-      return auth;
-    }
-    res.status(403).json({ error: 'No tenés permiso para ver la configuración de esta sede' });
+  if (auth.role.rol === 'admin_club' && auth.role.sede_id == null) {
+    res.status(403).json({ error: 'Admin de club sin sede asignada' });
     return null;
   }
 
@@ -313,6 +311,71 @@ export function mountPadcoinsAdminRoutes(app, {
     } catch (err) {
       console.error('❌ GET /api/admin/padcoins-sedes-config/:sedeId:', err.message);
       return sendRouteError(res, err, 'Error al obtener participación PadCoins de la sede');
+    }
+  });
+
+  app.get('/api/admin/padcoins/sedes/:sedeId/config-effective', async (req, res) => {
+    try {
+      const sedeId = parseRequiredSedeId(req.params.sedeId);
+      if (!sedeId) {
+        return res.status(400).json({ error: 'sedeId inválido' });
+      }
+
+      const auth = await requirePadcoinsSedeConfigReadAccess(req, res, sedeId, adminDeps);
+      if (!auth) return;
+
+      const resolved = await resolvePadcoinsConfigForSede(supabaseAdmin, sedeId);
+
+      return res.json({
+        ok: true,
+        sede_id: resolved.sede_id,
+        sede: resolved.sede,
+        global: resolved.global,
+        sede_overrides: resolved.sede_overrides,
+        effective: resolved.effective,
+        keys: resolved.keys,
+      });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins/sedes/:sedeId/config-effective:', err.message);
+      return sendRouteError(res, err, 'Error al obtener configuración efectiva PadCoins de la sede');
+    }
+  });
+
+  app.put('/api/admin/padcoins/sedes/:sedeId/rule-overrides', async (req, res) => {
+    try {
+      const sedeId = parseRequiredSedeId(req.params.sedeId);
+      if (!sedeId) {
+        return res.status(400).json({ error: 'sedeId inválido' });
+      }
+
+      const auth = await requirePadcoinsSedeConfigWriteAccess(req, res, sedeId, adminDeps);
+      if (!auth) return;
+
+      const body = req.body ?? {};
+      if (!Object.prototype.hasOwnProperty.call(body, 'rule_overrides')) {
+        return res.status(400).json({ error: 'rule_overrides es obligatorio' });
+      }
+
+      await updatePadcoinsSedeRuleOverrides(supabaseAdmin, {
+        sede_id: sedeId,
+        rule_overrides: body.rule_overrides,
+        updated_by: auth.user.id,
+      });
+
+      const resolved = await resolvePadcoinsConfigForSede(supabaseAdmin, sedeId);
+
+      console.log(`✓ PUT /api/admin/padcoins/sedes/${sedeId}/rule-overrides — ${Object.keys(resolved.sede_overrides).length} override(s)`);
+
+      return res.json({
+        ok: true,
+        sede_id: resolved.sede_id,
+        rule_overrides: resolved.sede_overrides,
+        effective: resolved.effective,
+        global: resolved.global,
+      });
+    } catch (err) {
+      console.error('❌ PUT /api/admin/padcoins/sedes/:sedeId/rule-overrides:', err.message);
+      return sendRouteError(res, err, 'Error al guardar rule_overrides PadCoins de la sede');
     }
   });
 

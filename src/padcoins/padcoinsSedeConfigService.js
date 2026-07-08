@@ -2,6 +2,20 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 export const PADCOINS_SEDE_INACTIVE_MESSAGE = 'La sede no participa en Beneficios Padbol';
 
+export function canReadPadcoinsSedeConfig(role, sedeId) {
+  if (!role) return false;
+  if (role.rol === 'super_admin') return true;
+  if (role.rol === 'admin_club') {
+    if (role.sede_id == null) return false;
+    return Number(role.sede_id) === Number(sedeId);
+  }
+  return false;
+}
+
+export function canWritePadcoinsSedeConfig(role, sedeId) {
+  return canReadPadcoinsSedeConfig(role, sedeId);
+}
+
 const SEDE_CONFIG_SELECT = [
   'id',
   'sede_id',
@@ -9,6 +23,7 @@ const SEDE_CONFIG_SELECT = [
   'descripcion',
   'fecha_inicio',
   'fecha_fin',
+  'rule_overrides',
   'created_at',
   'updated_at',
   'updated_by',
@@ -53,6 +68,7 @@ function defaultSedeConfig(sedeId) {
     descripcion: null,
     fecha_inicio: null,
     fecha_fin: null,
+    rule_overrides: {},
     created_at: null,
     updated_at: null,
     updated_by: null,
@@ -63,6 +79,15 @@ function defaultSedeConfig(sedeId) {
 function normalizeSedeConfigRow(row, now = new Date()) {
   if (!row) return null;
 
+  const rawOverrides = row.rule_overrides;
+  const rule_overrides = (
+    rawOverrides != null
+    && typeof rawOverrides === 'object'
+    && !Array.isArray(rawOverrides)
+  )
+    ? rawOverrides
+    : {};
+
   const config = {
     id: row.id ?? null,
     sede_id: Number(row.sede_id),
@@ -70,6 +95,7 @@ function normalizeSedeConfigRow(row, now = new Date()) {
     descripcion: row.descripcion ?? null,
     fecha_inicio: row.fecha_inicio ?? null,
     fecha_fin: row.fecha_fin ?? null,
+    rule_overrides,
     created_at: row.created_at ?? null,
     updated_at: row.updated_at ?? null,
     updated_by: row.updated_by ?? null,

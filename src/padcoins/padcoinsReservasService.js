@@ -5,10 +5,8 @@ import {
 import { addPadcoins } from './padcoinsService.js';
 import {
   calculatePadcoinsForPaidAmount,
-  getPadcoinsReservationConfig,
-  getPadcoinsGlobalConfigMap,
-  getPadcoinsGlobalConfigTextMap,
 } from './padcoinsGlobalConfigService.js';
+import { getPadcoinsReservationConfigForSede } from './padcoinsEffectiveConfigService.js';
 import { isPadcoinsActiveForSede } from './padcoinsSedeConfigService.js';
 
 export const PADCOINS_RESERVA_REFERENCIA_TIPO = 'reserva';
@@ -272,19 +270,15 @@ export async function acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reser
   }
 
   const reservationConfig = options.reservationConfig
-    ?? await getPadcoinsReservationConfig(supabaseAdmin);
-  const configMap = options.configMap ?? await getPadcoinsGlobalConfigMap(supabaseAdmin);
-  const configTextMap = options.configTextMap ?? await getPadcoinsGlobalConfigTextMap(supabaseAdmin);
+    ?? await getPadcoinsReservationConfigForSede(supabaseAdmin, sedeId);
 
   const amountResult = computePadcoinsAmountForReserva(reserva, {
     configMap: {
-      ...configMap,
       reserva_confirmada: reservationConfig.reserva_confirmada_fallback,
       porcentaje_devolucion_reserva: reservationConfig.porcentaje_devolucion_reserva,
       padcoins_por_usd_equivalente: reservationConfig.padcoins_por_usd_equivalente,
     },
     configTextMap: {
-      ...configTextMap,
       modo_calculo_reserva: reservationConfig.modo_calculo_reserva,
     },
     fallbackFixed: reservationConfig.reserva_confirmada_fallback,

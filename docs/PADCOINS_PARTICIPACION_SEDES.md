@@ -14,6 +14,7 @@ Beneficios Padbol / PadCoins es **opt-in por sede**. Ninguna sede está obligada
 |----------|-------------|------------|------------------------|
 | `GET /api/admin/padcoins-sedes-config` | ✓ lista todas | ✗ | ✗ |
 | `GET /api/admin/padcoins-sedes-config/:sedeId` | ✓ cualquier sede | ✓ solo su sede | ✗ (sin scope claro) |
+| `GET /api/admin/padcoins/sedes/:sedeId/config-effective` | ✓ cualquier sede | ✓ solo su sede | ✗ |
 | `PUT /api/admin/padcoins-sedes-config/:sedeId` | ✓ cualquier sede | ✓ solo su sede | ✗ |
 
 Admin Club sin `sede_id` asignada → **403**.
@@ -58,4 +59,4 @@ La migración SQL incluye insert idempotente con `activo = true` para la sede pi
 
 ## Reservas automáticas
 
-Todavía **no cableadas**. Cuando se implemente, consultar `isPadcoinsActiveForSede(sedeId)` antes de acreditar.
+Cableadas en cron (`reservasCron.js` → `acreditarPadcoinsPorReservaCompletada`). Usan `getPadcoinsReservationConfigForSede` con `reserva.sede_id`. Overrides vía `rule_overrides` y `config-effective`.

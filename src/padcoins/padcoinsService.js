@@ -205,6 +205,7 @@ export async function addPadcoins(supabaseAdmin, userId, amount, options = {}) {
         now: options.now,
         timeZone: options.timeZone,
         limits: options.earnLimits,
+        sedeId: options.sede_id ?? options.sedeId ?? null,
       },
     );
     finalAmount = capResult.amountToCredit;
