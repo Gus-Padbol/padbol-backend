@@ -27,6 +27,16 @@ import {
 } from '../padcoins/padcoinsEffectiveConfigService.js';
 import { listPadcoinsMovimientosAdmin } from '../padcoins/padcoinsMovimientosAdminService.js';
 import { listPadcoinsAlertasAdmin } from '../padcoins/padcoinsAlertsService.js';
+import {
+  activatePadcoinsCampaign,
+  canReadPadcoinsCampaign,
+  createPadcoinsCampaign,
+  getPadcoinsCampaignById,
+  getPadcoinsCampaignSummary,
+  listPadcoinsCampaigns,
+  pausePadcoinsCampaign,
+  updatePadcoinsCampaign,
+} from '../padcoins/padcoinsCampaignsService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -98,6 +108,23 @@ function parseOptionalLimit(rawLimit) {
   const parsed = Number.parseInt(String(rawLimit), 10);
   if (!Number.isInteger(parsed) || parsed <= 0) return undefined;
   return parsed;
+}
+
+function parseCampaignId(raw) {
+  const id = String(raw ?? '').trim();
+  return UUID_REGEX.test(id) ? id : null;
+}
+
+async function requirePadcoinsCampaignAdmin(req, res, adminDeps) {
+  const auth = await requireAdminUser(req, res, adminDeps);
+  if (!auth) return null;
+
+  if (auth.role.rol !== 'super_admin' && auth.role.rol !== 'admin_club') {
+    res.status(403).json({ error: 'No tenés permiso para administrar campañas PadCoins' });
+    return null;
+  }
+
+  return auth;
 }
 
 export function createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }) {
@@ -411,6 +438,155 @@ export function mountPadcoinsAdminRoutes(app, {
     } catch (err) {
       console.error('❌ PUT /api/admin/padcoins-sedes-config/:sedeId:', err.message);
       return sendRouteError(res, err, 'Error al actualizar participación PadCoins de la sede');
+    }
+  });
+
+  app.get('/api/admin/padcoins/campaigns', async (req, res) => {
+    try {
+      const auth = await requirePadcoinsCampaignAdmin(req, res, adminDeps);
+      if (!auth) return;
+
+      const campaigns = await listPadcoinsCampaigns(supabaseAdmin, {
+        role: auth.role,
+        query: req.query,
+      });
+
+      return res.json({ ok: true, campaigns });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins/campaigns:', err.message);
+      return sendRouteError(res, err, 'Error al listar campañas PadCoins');
+    }
+  });
+
+  app.get('/api/admin/padcoins/campaigns/:id', async (req, res) => {
+    try {
+      const auth = await requirePadcoinsCampaignAdmin(req, res, adminDeps);
+      if (!auth) return;
+
+      const campaignId = parseCampaignId(req.params.id);
+      if (!campaignId) {
+        return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const campaign = await getPadcoinsCampaignById(supabaseAdmin, campaignId);
+      if (!canReadPadcoinsCampaign(auth.role, campaign.sede_id)) {
+        return res.status(403).json({ error: 'No tenés permiso para ver esta campaña' });
+      }
+
+      return res.json({ ok: true, campaign });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins/campaigns/:id:', err.message);
+      return sendRouteError(res, err, 'Error al obtener campaña PadCoins');
+    }
+  });
+
+  app.post('/api/admin/padcoins/campaigns', async (req, res) => {
+    try {
+      const auth = await requirePadcoinsCampaignAdmin(req, res, adminDeps);
+      if (!auth) return;
+
+      const campaign = await createPadcoinsCampaign(supabaseAdmin, {
+        role: auth.role,
+        body: req.body ?? {},
+        actor_user_id: auth.user.id,
+      });
+
+      console.log(`✓ POST /api/admin/padcoins/campaigns — ${campaign.id} sede ${campaign.sede_id}`);
+      return res.status(201).json({ ok: true, campaign });
+    } catch (err) {
+      console.error('❌ POST /api/admin/padcoins/campaigns:', err.message);
+      return sendRouteError(res, err, 'Error al crear campaña PadCoins');
+    }
+  });
+
+  app.put('/api/admin/padcoins/campaigns/:id', async (req, res) => {
+    try {
+      const auth = await requirePadcoinsCampaignAdmin(req, res, adminDeps);
+      if (!auth) return;
+
+      const campaignId = parseCampaignId(req.params.id);
+      if (!campaignId) {
+        return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const campaign = await updatePadcoinsCampaign(supabaseAdmin, campaignId, {
+        role: auth.role,
+        body: req.body ?? {},
+        actor_user_id: auth.user.id,
+      });
+
+      console.log(`✓ PUT /api/admin/padcoins/campaigns/${campaignId}`);
+      return res.json({ ok: true, campaign });
+    } catch (err) {
+      console.error('❌ PUT /api/admin/padcoins/campaigns/:id:', err.message);
+      return sendRouteError(res, err, 'Error al actualizar campaña PadCoins');
+    }
+  });
+
+  app.post('/api/admin/padcoins/campaigns/:id/activate', async (req, res) => {
+    try {
+      const auth = await requirePadcoinsCampaignAdmin(req, res, adminDeps);
+      if (!auth) return;
+
+      const campaignId = parseCampaignId(req.params.id);
+      if (!campaignId) {
+        return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const campaign = await activatePadcoinsCampaign(supabaseAdmin, campaignId, {
+        role: auth.role,
+        actor_user_id: auth.user.id,
+      });
+
+      console.log(`✓ POST /api/admin/padcoins/campaigns/${campaignId}/activate`);
+      return res.json({ ok: true, campaign });
+    } catch (err) {
+      console.error('❌ POST /api/admin/padcoins/campaigns/:id/activate:', err.message);
+      return sendRouteError(res, err, 'Error al activar campaña PadCoins');
+    }
+  });
+
+  app.post('/api/admin/padcoins/campaigns/:id/pause', async (req, res) => {
+    try {
+      const auth = await requirePadcoinsCampaignAdmin(req, res, adminDeps);
+      if (!auth) return;
+
+      const campaignId = parseCampaignId(req.params.id);
+      if (!campaignId) {
+        return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const campaign = await pausePadcoinsCampaign(supabaseAdmin, campaignId, {
+        role: auth.role,
+        actor_user_id: auth.user.id,
+      });
+
+      console.log(`✓ POST /api/admin/padcoins/campaigns/${campaignId}/pause`);
+      return res.json({ ok: true, campaign });
+    } catch (err) {
+      console.error('❌ POST /api/admin/padcoins/campaigns/:id/pause:', err.message);
+      return sendRouteError(res, err, 'Error al pausar campaña PadCoins');
+    }
+  });
+
+  app.get('/api/admin/padcoins/campaigns/:id/summary', async (req, res) => {
+    try {
+      const auth = await requirePadcoinsCampaignAdmin(req, res, adminDeps);
+      if (!auth) return;
+
+      const campaignId = parseCampaignId(req.params.id);
+      if (!campaignId) {
+        return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const result = await getPadcoinsCampaignSummary(supabaseAdmin, campaignId, {
+        role: auth.role,
+      });
+
+      return res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins/campaigns/:id/summary:', err.message);
+      return sendRouteError(res, err, 'Error al obtener resumen de campaña PadCoins');
     }
   });
 

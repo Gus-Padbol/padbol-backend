@@ -8,6 +8,11 @@ import {
 } from './padcoinsGlobalConfigService.js';
 import { getPadcoinsReservationConfigForSede } from './padcoinsEffectiveConfigService.js';
 import { isPadcoinsActiveForSede } from './padcoinsSedeConfigService.js';
+import {
+  applyCampaignToPadcoinsEarn,
+  recordCampaignApplication,
+  resolveActiveCampaignForReserva,
+} from './padcoinsCampaignResolverService.js';
 
 export const PADCOINS_RESERVA_REFERENCIA_TIPO = 'reserva';
 
@@ -284,16 +289,39 @@ export async function acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reser
     fallbackFixed: reservationConfig.reserva_confirmada_fallback,
   });
 
-  const padcoins = Number(amountResult.padcoins);
-  if (!Number.isInteger(padcoins) || padcoins <= 0) {
+  const padcoinsBase = Number(amountResult.padcoins);
+  if (!Number.isInteger(padcoinsBase) || padcoinsBase <= 0) {
     return { ok: true, acreditado: false, reason: 'monto_cero', amountResult };
   }
 
+  const activeCampaign = options.campaign ?? await resolveActiveCampaignForReserva(supabaseAdmin, {
+    sedeId,
+    userId: reserva.user_id,
+    reservaId: id,
+    now: options.now,
+  });
+
+  const campaignResult = await applyCampaignToPadcoinsEarn(supabaseAdmin, {
+    basePadcoins: padcoinsBase,
+    baseAmountResult: amountResult,
+    campaign: activeCampaign,
+    reserva,
+    reservationConfig,
+  });
+
+  const padcoins = campaignResult.final_padcoins;
+
   const referencia = buildPadcoinsReservaMovimientoReferencia(id);
-  const descripcion = appendFallbackDetail(
+  let descripcion = appendFallbackDetail(
     buildDescripcionMovimiento(reserva, amountResult),
     amountResult,
   );
+
+  if (campaignResult.campaign && campaignResult.applied) {
+    descripcion = `${descripcion} — campaña: ${campaignResult.campaign.name}`.slice(0, 500);
+  } else if (campaignResult.campaign) {
+    descripcion = `${descripcion} — campaña ${campaignResult.campaign.name} (sin cambio)`.slice(0, 500);
+  }
 
   const result = await addPadcoins(supabaseAdmin, reserva.user_id, padcoins, {
     tipo: PADCOINS_MOVEMENT_TYPES.EARN,
@@ -317,9 +345,23 @@ export async function acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reser
       method: amountResult.method,
       reserva_id: id,
       sede_id: sedeId,
+      campaign: campaignResult.campaign,
       cap: result.cap,
       saldo: result.saldo,
     };
+  }
+
+  if (campaignResult.campaign) {
+    await recordCampaignApplication(supabaseAdmin, {
+      campaign: campaignResult.campaign,
+      sedeId,
+      userId: reserva.user_id,
+      reservaId: id,
+      movimientoId: result.movimiento?.id ?? null,
+      basePadcoins: campaignResult.base_padcoins,
+      finalPadcoins: result.monto_aplicado ?? padcoins,
+      calculationDetail: campaignResult.calculation_detail,
+    });
   }
 
   return {
@@ -327,11 +369,15 @@ export async function acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reser
     acreditado: true,
     padcoins: result.monto_aplicado ?? padcoins,
     padcoins_solicitados: padcoins,
+    padcoins_base: campaignResult.base_padcoins,
     capped: Boolean(result.cap?.capped),
     cap: result.cap ?? null,
     method: amountResult.method,
     reserva_id: id,
     sede_id: sedeId,
+    campaign: campaignResult.campaign,
+    campaign_applied: campaignResult.applied,
+    campaign_detail: campaignResult.calculation_detail,
     saldo: result.saldo,
     movimiento: result.movimiento,
   };
