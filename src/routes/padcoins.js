@@ -37,6 +37,7 @@ import {
   pausePadcoinsCampaign,
   updatePadcoinsCampaign,
 } from '../padcoins/padcoinsCampaignsService.js';
+import { getActiveCampaignForSedePlayer } from '../padcoins/padcoinsCampaignPlayerService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -190,6 +191,29 @@ export function createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }) {
     } catch (err) {
       console.error('❌ Error GET /api/padcoins/mis-canjes:', err.message);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/sedes/:sedeId/active-campaign', async (req, res) => {
+    try {
+      const sedeId = parseRequiredSedeId(req.params.sedeId);
+      if (!sedeId) {
+        return res.status(400).json({ error: 'sedeId inválido' });
+      }
+
+      const { user } = await getAuthenticatedUser(req);
+      const result = await getActiveCampaignForSedePlayer(supabaseAdmin, sedeId, {
+        userId: user?.id ?? null,
+      });
+
+      return res.json({
+        ok: true,
+        active: result.active,
+        campaign: result.campaign,
+      });
+    } catch (err) {
+      console.error('❌ GET /api/padcoins/sedes/:sedeId/active-campaign:', err.message);
+      return sendRouteError(res, err, 'Error al consultar campaña PadCoins activa');
     }
   });
 
