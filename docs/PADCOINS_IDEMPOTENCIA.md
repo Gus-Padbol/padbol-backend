@@ -10,6 +10,8 @@ PadCoins **no se crean desde la app**. El backend valida eventos reales, calcula
 |--------|------------|
 | Doble acreditación por reserva | `yaFueAcreditadaReserva` + `ensurePadcoinsNotAlreadyApplied` + índice único `(reserva, earn)` |
 | Doble penalización | `yaFuePenalizadaReserva` + índice único `penalizacion` |
+| Reversa earn por cancel/no-show | `revertirPadcoinsPorReservaIncumplimiento` + `referencia_id` `reservaId:reversal_*` + `source_key` |
+| Doble reversa reserva | `yaFueRevertidaReserva` + idempotencia `reserva` + tipo `reverse` |
 | Doble aplicación de campaña | `hasApplicationForReserva` + unique `(campaign_id, reserva_id)` |
 | Doble canje (doble submit) | Canje pendiente por premio+jugador + `referencia_id = canjeId` en spend |
 | Monto manipulado desde jugador | Canje ignora `amount` en body; costo sale del premio en DB |
@@ -31,7 +33,7 @@ Ejecutar: `docs/sql/padcoins_movimientos_idempotency_migration.sql`
 ## Pendiente futuro (documentado, no bloqueante)
 
 1. **RPC transaccional** `apply_padcoins_change()` — atomicidad saldo + movimiento en una sola transacción Postgres.
-2. **Reversión de earn** si una reserva acreditada pasa después a `cancelada`/`no_show` (hoy solo penalización adicional).
+2. **Cola de deuda PadCoins** (`clawback_pendiente`) cuando la reversa es parcial por saldo insuficiente — hoy se registra en `metadata.calculation_detail` del movimiento `reverse`.
 3. **Idempotency-Key HTTP** opcional en canje para retries del cliente.
 4. **Fuentes múltiples** (torneos, partidos, reseñas) — cada una con `source_type` + unique parcial al implementarse.
 
@@ -43,6 +45,7 @@ Ejecutar: `docs/sql/padcoins_movimientos_idempotency_migration.sql`
 | Campaña | `recordCampaignApplication` | campaign_id + reserva_id |
 | Logro Arena | `sumarPadcoinsLogroDesbloqueado` | logro + slug |
 | Penalización | `penalizarPadcoinsPor*` | penalizacion + reserva:tipo |
+| Reversa reserva | `revertirPadcoinsPorReservaIncumplimiento` | reserva + reservaId:reversal_* |
 | Canje | `canjearPremioPadcoins` | canje_premio + canjeId |
 | Ajuste admin | `adjustPadcoins` | Sin idempotencia (manual, auditado por created_by) |
 

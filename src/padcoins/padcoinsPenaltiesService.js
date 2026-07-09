@@ -11,6 +11,10 @@ import { PADCOINS_ORIGINS } from './padcoinsConfig.js';
 import { getPadcoinsSedeConfig, isPadcoinsActiveForSede } from './padcoinsSedeConfigService.js';
 import { isReservaNoShow } from './padcoinsReservasService.js';
 import {
+  mapPenaltyTypeToReversalAction,
+  revertirPadcoinsPorReservaIncumplimiento,
+} from './padcoinsReservaReversalService.js';
+import {
   computeHorasAnticipacionReserva,
   PENALIZACION_UMBRAL_HORAS,
 } from '../../routes/reputacion.js';
@@ -218,13 +222,34 @@ async function applyReservaPadcoinsPenalty(supabaseAdmin, reservaId, tipoPenaliz
     }
   }
 
+  const reversalAction = mapPenaltyTypeToReversalAction(tipoPenalizacion);
+  const reversalResult = reversalAction
+    ? await revertirPadcoinsPorReservaIncumplimiento(supabaseAdmin, id, {
+      reversalAction,
+      reserva,
+      userId,
+    })
+    : null;
+
   if (await yaFuePenalizadaReserva(supabaseAdmin, id, tipoPenalizacion)) {
-    return { ok: true, penalizado: false, reason: 'ya_penalizada', reserva_id: id };
+    return {
+      ok: true,
+      penalizado: false,
+      reason: 'ya_penalizada',
+      reserva_id: id,
+      reversal: reversalResult,
+    };
   }
 
   const montoConfig = await getPadcoinsPenaltyAmount(supabaseAdmin, configKey, sedeId);
   if (montoConfig <= 0) {
-    return { ok: true, penalizado: false, reason: 'penalizacion_inactiva_o_cero', configKey };
+    return {
+      ok: true,
+      penalizado: false,
+      reason: 'penalizacion_inactiva_o_cero',
+      configKey,
+      reversal: reversalResult,
+    };
   }
 
   const referencia = buildPadcoinsPenaltyReferencia(id, tipoPenalizacion);
@@ -250,6 +275,7 @@ async function applyReservaPadcoinsPenalty(supabaseAdmin, reservaId, tipoPenaliz
       sede_id: sedeId,
       saldo: result.saldo,
       idempotent: result.idempotent === true,
+      reversal: reversalResult,
     };
   }
 
@@ -264,6 +290,7 @@ async function applyReservaPadcoinsPenalty(supabaseAdmin, reservaId, tipoPenaliz
     tipo: tipoPenalizacion,
     saldo: result.saldo,
     movimiento: result.movimiento,
+    reversal: reversalResult,
   };
 }
 
