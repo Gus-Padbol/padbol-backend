@@ -1,25 +1,17 @@
 import { reservaHoraInicioFromRow } from '../utils/reservasColumns.js';
+import {
+  PRICE_SOURCES,
+  normalizeSurgeDeporte,
+  resolveReservaBasePrice,
+} from './pricing/resolveReservaBasePrice.js';
+
+export { normalizeSurgeDeporte } from './pricing/resolveReservaBasePrice.js';
 
 const DEFAULT_TZ = 'America/Argentina/Buenos_Aires';
 const SURGE_WINDOW_MS = 8 * 60 * 60 * 1000;
-const VALID_SURGE_DEPORTES = new Set(['padbol', 'padel', 'pickleball', 'tenis']);
-
-const PRECIO_COL = {
-  60: 'precio_60min',
-  90: 'precio_90min',
-  120: 'precio_120min',
-};
 
 export function getTodayArgentinaDate() {
   return formatDateInTimezone(new Date(), DEFAULT_TZ);
-}
-
-export function normalizeSurgeDeporte(value) {
-  const key = String(value ?? 'padbol').trim().toLowerCase();
-  if (!VALID_SURGE_DEPORTES.has(key)) {
-    throw Object.assign(new Error('deporte inválido'), { status: 400 });
-  }
-  return key;
 }
 
 function roundToNearest100(value) {
@@ -27,27 +19,20 @@ function roundToNearest100(value) {
   return Math.round(n / 100) * 100;
 }
 
-function parsePrecioInt(raw) {
-  if (raw === null || raw === undefined || raw === '') return null;
-  const n = Number(String(raw).replace(/\./g, '').replace(',', '.'));
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(n);
-}
-
-function precioFijoSedeParaDuracion(sede, duracionMin) {
-  const d = parseInt(String(duracionMin), 10);
-  const col = PRECIO_COL[d];
-  if (col) {
-    const fromCol = parsePrecioInt(sede?.[col]);
-    if (fromCol != null) return fromCol;
-  }
-  if (d === 90) {
-    const legacy = parsePrecioInt(sede?.precio_turno);
-    if (legacy != null) return legacy;
-    const ppr = parsePrecioInt(sede?.precio_por_reserva);
-    if (ppr != null) return ppr;
-  }
-  return 0;
+/**
+ * Precio base fijo (sin Surge) — delega en resolveReservaBasePrice.
+ */
+export async function precioFijoSedeParaDuracion(supabaseAdmin, sede, duracionMin, options = {}) {
+  const result = await resolveReservaBasePrice(supabaseAdmin, {
+    sedeId: sede?.id,
+    sede,
+    duracionMinutos: duracionMin,
+    deporte: options.deporte ?? 'padbol',
+    slotInicio: options.slot_inicio ?? null,
+    timezone: options.timezone,
+    skipFranjas: options.skipFranjas === true,
+  });
+  return result.precio;
 }
 
 function formatDateInTimezone(date, tz) {
@@ -296,56 +281,34 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
   if (!sede) throw Object.assign(new Error('Sede no encontrada'), { status: 404 });
 
   const tz = String(sede.timezone || DEFAULT_TZ).trim() || DEFAULT_TZ;
-  const precioBase = precioFijoSedeParaDuracion(sede, duracion);
 
-  // --- Franjas de precio (tienen prioridad sobre Surge) ---
-  if (options.slot_inicio) {
-    try {
-      const slotDate = new Date(options.slot_inicio);
-      const localStr = new Intl.DateTimeFormat('es-AR', {
-        timeZone: tz,
-        weekday: 'short',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      }).formatToParts(slotDate);
-      const diaSemana = slotDate.toLocaleDateString('es-AR', { timeZone: tz, weekday: 'short' });
-      const diasMap = { dom: 0, lun: 1, mar: 2, mié: 3, jue: 4, vie: 5, sáb: 6 };
-      const diaNum = diasMap[diaSemana.toLowerCase().slice(0, 3)];
-      const horaLocal = slotDate.toLocaleTimeString('es-AR', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  const baseResolved = await resolveReservaBasePrice(supabaseAdmin, {
+    sedeId: sid,
+    sede,
+    deporte: dep,
+    duracionMinutos: duracion,
+    slotInicio: options.slot_inicio ?? null,
+    timezone: tz,
+  });
 
-      const { data: franjas } = await supabaseAdmin
-        .from('franjas_precio')
-        .select('hora_inicio, hora_fin, precio_60min, precio_90min, precio_120min, dia_semana')
-        .eq('sede_id', sid)
-        .eq('deporte', dep)
-        .eq('activo', true)
-        .or(`dia_semana.eq.${diaNum},dia_semana.is.null`);
-
-      if (franjas && franjas.length > 0) {
-        const matching = franjas
-          .filter(f => horaLocal >= f.hora_inicio.slice(0, 5) && horaLocal < f.hora_fin.slice(0, 5))
-          .sort((a, b) => (a.dia_semana === null ? 1 : -1)); // día específico tiene prioridad
-
-        if (matching.length > 0) {
-          const franja = matching[0];
-          const colMap = { 60: 'precio_60min', 90: 'precio_90min', 120: 'precio_120min' };
-          const precioFranja = franja[colMap[duracion]];
-          if (precioFranja && precioFranja > 0) {
-            return {
-              precio: precioFranja,
-              precio_base: precioFranja,
-              surge_activo: false,
-              franja_activa: true,
-            };
-          }
-        }
-      }
-    } catch (franjaErr) {
-      console.warn('⚠️ Error consultando franjas_precio, continuando con Surge:', franjaErr.message);
-    }
+  if (!baseResolved.precio || baseResolved.precio <= 0) {
+    throw Object.assign(
+      new Error(`No hay precio configurado para ${duracion} min (${dep}) en la sede ${sid}`),
+      { status: 400, code: 'PRECIO_NO_CONFIGURADO', baseResolved },
+    );
   }
-  // --- Fin franjas ---
+
+  const precioBase = baseResolved.precio;
+
+  if (baseResolved.source === PRICE_SOURCES.FRANJA_PRECIO) {
+    return {
+      precio: precioBase,
+      precio_base: precioBase,
+      surge_activo: false,
+      franja_activa: true,
+      precio_metadata: baseResolved,
+    };
+  }
 
   const { data: config, error: cfgErr } = await supabaseAdmin
     .from('surge_config')
@@ -356,7 +319,7 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
 
   if (cfgErr) throw cfgErr;
   if (!config || config.activo !== true) {
-    return { precio: precioBase, surge_activo: false };
+    return { precio: precioBase, precio_base: precioBase, surge_activo: false, precio_metadata: baseResolved };
   }
 
   const priceRange = computeSurgePriceRangeFromPct(
@@ -365,7 +328,7 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
     config.aumento_max_pct,
   );
   if (!priceRange) {
-    return { precio: precioBase, surge_activo: false };
+    return { precio: precioBase, precio_base: precioBase, surge_activo: false, precio_metadata: baseResolved };
   }
 
   const { minimo, maximo } = priceRange;
@@ -430,5 +393,6 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
     multiplicador: Number(combined.toFixed(4)),
     surge_activo: true,
     last_minute_discount: lastMinute,
+    precio_metadata: baseResolved,
   };
 }

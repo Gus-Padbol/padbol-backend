@@ -50,6 +50,7 @@ import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
 import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js';
 import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
+import { mountSedesDuracionesRoutes } from './routes/sedesDuraciones.js';
 import { mountTorneoInteresRoutes } from './routes/torneoInteres.js';
 import { mountListaEsperaGeneralRoutes } from './routes/listaEsperaGeneral.js';
 import { mountLogrosPremiosRoutes } from './routes/logrosPremios.js';
@@ -954,6 +955,12 @@ mountReservasHoldCleanupRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountSedeExtrasRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountSedesDuracionesRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
