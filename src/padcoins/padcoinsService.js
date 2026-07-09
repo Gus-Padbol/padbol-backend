@@ -5,6 +5,13 @@ import {
   applyPadcoinsEarnCaps,
   appendPadcoinsEarnCapToDescripcion,
 } from './padcoinsEarnLimitsService.js';
+import {
+  buildIdempotentSkipResult,
+  ensurePadcoinsNotAlreadyApplied,
+  enrichMovimientoOptions,
+  isDuplicateMovimientoError,
+  shouldEnforceIdempotency,
+} from './padcoinsIdempotencyService.js';
 
 const VALID_MOVEMENT_TYPES = new Set(Object.values(PADCOINS_MOVEMENT_TYPES));
 
@@ -37,6 +44,12 @@ function normalizeOptions(options = {}) {
     sede_id: options.sede_id ?? null,
     descripcion: options.descripcion ?? null,
     created_by: options.created_by ?? null,
+    metadata: options.metadata ?? null,
+    action: options.action ?? null,
+    calculation_detail: options.calculation_detail ?? options.calculationDetail ?? null,
+    campaign_id: options.campaign_id ?? options.campaignId ?? null,
+    skipIdempotency: options.skipIdempotency ?? null,
+    enforceIdempotency: options.enforceIdempotency ?? null,
   };
 }
 
@@ -45,7 +58,7 @@ function buildMovimientoPayload(userId, tipo, monto, saldoAntes, saldoDespues, o
     throw new Error(`Tipo de movimiento PadCoins inválido: ${tipo}`);
   }
 
-  return {
+  const payload = {
     user_id: userId,
     tipo,
     monto,
@@ -57,6 +70,12 @@ function buildMovimientoPayload(userId, tipo, monto, saldoAntes, saldoDespues, o
     descripcion: options.descripcion,
     created_by: options.created_by,
   };
+
+  if (options.metadata && typeof options.metadata === 'object') {
+    payload.metadata = options.metadata;
+  }
+
+  return payload;
 }
 
 async function fetchSaldoRow(supabaseAdmin, userId) {
@@ -127,7 +146,15 @@ async function insertMovimiento(supabaseAdmin, payload) {
     .select('*')
     .single();
 
-  if (error) throw error;
+  if (error) {
+    if (isDuplicateMovimientoError(error)) {
+      const dup = new Error('Movimiento PadCoins duplicado (idempotencia)');
+      dup.code = 'PADCOINS_DUPLICATE_MOVIMIENTO';
+      dup.cause = error;
+      throw dup;
+    }
+    throw error;
+  }
   return data;
 }
 
@@ -144,6 +171,29 @@ async function applyBalanceChange(
 ) {
   assertUserId(userId);
 
+  const enrichedOptions = enrichMovimientoOptions({
+    ...options,
+    userId,
+    tipo,
+  });
+
+  if (shouldEnforceIdempotency({ ...enrichedOptions, tipo })) {
+    const idem = await ensurePadcoinsNotAlreadyApplied(supabaseAdmin, {
+      user_id: userId,
+      referencia_tipo: enrichedOptions.referencia_tipo,
+      referencia_id: enrichedOptions.referencia_id,
+      tipo,
+      action: enrichedOptions.action,
+    });
+
+    if (idem.alreadyApplied) {
+      const err = new Error('Movimiento PadCoins ya aplicado');
+      err.code = 'PADCOINS_ALREADY_APPLIED';
+      err.movimiento = idem.movimiento;
+      throw err;
+    }
+  }
+
   const saldoRow = await getOrCreateSaldoRow(supabaseAdmin, userId);
   const saldoAntes = Number(saldoRow.disponible ?? 0);
   const historicoAntes = Number(saldoRow.historico_total ?? 0);
@@ -159,7 +209,7 @@ async function applyBalanceChange(
 
   const movimiento = await insertMovimiento(
     supabaseAdmin,
-    buildMovimientoPayload(userId, tipo, monto, saldoAntes, saldoDespues, options),
+    buildMovimientoPayload(userId, tipo, monto, saldoAntes, saldoDespues, enrichedOptions),
   );
 
   return {
@@ -194,6 +244,23 @@ export async function addPadcoins(supabaseAdmin, userId, amount, options = {}) {
 
   if (tipo !== PADCOINS_MOVEMENT_TYPES.EARN && tipo !== PADCOINS_MOVEMENT_TYPES.ADJUST) {
     throw new Error('addPadcoins solo admite movimientos earn o adjust positivos');
+  }
+
+  const idempotencyCheck = shouldEnforceIdempotency({ ...options, tipo })
+    ? await ensurePadcoinsNotAlreadyApplied(supabaseAdmin, {
+      user_id: userId,
+      referencia_tipo: options.referencia_tipo,
+      referencia_id: options.referencia_id,
+      tipo,
+    })
+    : { alreadyApplied: false, movimiento: null };
+
+  if (idempotencyCheck.alreadyApplied) {
+    return {
+      ...buildIdempotentSkipResult(idempotencyCheck.movimiento, 'ya_acreditado'),
+      saldo: await getPadcoinsSaldo(supabaseAdmin, userId),
+      monto_solicitado: parsedAmount,
+    };
   }
 
   if (tipo === PADCOINS_MOVEMENT_TYPES.EARN && options.skipEarnCaps !== true) {
@@ -231,37 +298,59 @@ export async function addPadcoins(supabaseAdmin, userId, amount, options = {}) {
 
   const deltaHistorico = tipo === PADCOINS_MOVEMENT_TYPES.EARN ? finalAmount : 0;
 
-  const result = await applyBalanceChange(supabaseAdmin, userId, {
-    deltaDisponible: finalAmount,
-    deltaHistorico,
-    tipo,
-    monto: finalAmount,
-    options: normalizedOptions,
-  });
+  try {
+    const result = await applyBalanceChange(supabaseAdmin, userId, {
+      deltaDisponible: finalAmount,
+      deltaHistorico,
+      tipo,
+      monto: finalAmount,
+      options: normalizedOptions,
+    });
 
-  if (capResult) {
-    return {
-      ...result,
-      cap: capResult,
-      monto_solicitado: parsedAmount,
-      monto_aplicado: finalAmount,
-    };
+    if (capResult) {
+      return {
+        ...result,
+        cap: capResult,
+        monto_solicitado: parsedAmount,
+        monto_aplicado: finalAmount,
+      };
+    }
+
+    return result;
+  } catch (err) {
+    if (err.code === 'PADCOINS_ALREADY_APPLIED' || err.code === 'PADCOINS_DUPLICATE_MOVIMIENTO') {
+      return {
+        ...buildIdempotentSkipResult(err.movimiento, 'ya_acreditado'),
+        saldo: await getPadcoinsSaldo(supabaseAdmin, userId),
+        monto_solicitado: parsedAmount,
+      };
+    }
+    throw err;
   }
-
-  return result;
 }
 
 export async function spendPadcoins(supabaseAdmin, userId, amount, options = {}) {
   const parsedAmount = assertPositiveAmount(amount);
   const normalizedOptions = normalizeOptions(options);
 
-  return applyBalanceChange(supabaseAdmin, userId, {
-    deltaDisponible: -parsedAmount,
-    deltaHistorico: 0,
-    tipo: PADCOINS_MOVEMENT_TYPES.SPEND,
-    monto: -parsedAmount,
-    options: normalizedOptions,
-  });
+  try {
+    return await applyBalanceChange(supabaseAdmin, userId, {
+      deltaDisponible: -parsedAmount,
+      deltaHistorico: 0,
+      tipo: PADCOINS_MOVEMENT_TYPES.SPEND,
+      monto: -parsedAmount,
+      options: normalizedOptions,
+    });
+  } catch (err) {
+    if (err.code === 'PADCOINS_ALREADY_APPLIED' || err.code === 'PADCOINS_DUPLICATE_MOVIMIENTO') {
+      return {
+        ...buildIdempotentSkipResult(err.movimiento, 'ya_descontado'),
+        monto_aplicado: 0,
+        saldo: await getPadcoinsSaldo(supabaseAdmin, userId),
+      };
+    }
+    throw err;
+  }
 }
 
 /**

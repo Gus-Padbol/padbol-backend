@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import { PADCOINS_ORIGINS } from './padcoinsConfig.js';
 import {
+  buildMovimientoMetadata,
+} from './padcoinsIdempotencyService.js';
+import {
   getPadcoinsSaldo,
   reversePadcoins,
   spendPadcoins,
@@ -122,16 +125,32 @@ async function restorePremioStockIfTracked(supabaseAdmin, premioId) {
   if (error) throw error;
 }
 
+async function findPendingCanjeForPremio(supabaseAdmin, userId, premioId) {
+  const { data, error } = await supabaseAdmin
+    .from('padcoins_canjes')
+    .select(CANJE_SELECT)
+    .eq('user_id', userId)
+    .eq('premio_id', premioId)
+    .in('estado', ['pendiente', 'aprobado'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data ?? null;
+}
+
 async function rollbackFailedCanje(supabaseAdmin, {
   userId,
   premio,
   costo,
   stockDecremented,
+  canjeId,
 }) {
   await reversePadcoins(supabaseAdmin, userId, costo, {
     credit: true,
     referencia_tipo: PADCOINS_ORIGINS.CANJE_PREMIO,
-    referencia_id: premio.id,
+    referencia_id: canjeId ?? premio.id,
     sede_id: premio.sede_id,
     descripcion: `Reversa canje fallido: ${premio.nombre}`,
   }).catch((err) => {
@@ -183,17 +202,46 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId) {
     throw buildHttpError('Saldo PadCoins insuficiente');
   }
 
+  const pendingCanje = await findPendingCanjeForPremio(supabaseAdmin, userId, premio.id);
+  if (pendingCanje) {
+    const saldoActual = await getPadcoinsSaldo(supabaseAdmin, userId);
+    return {
+      canje: mapCanjeRow(pendingCanje),
+      codigo: pendingCanje.codigo,
+      saldo: {
+        disponible: saldoActual.disponible,
+        historico_total: saldoActual.historico_total,
+      },
+      movimiento_id: null,
+      idempotent: true,
+    };
+  }
+
+  const canjeId = crypto.randomUUID();
+
   // Decremento optimista: UPDATE condicionado por stock actual.
-  // Sin transacción DB/RPC queda una ventana de carrera; ver comentario en respuesta al usuario.
+  // Sin transacción DB/RPC queda una ventana de carrera; ver docs/PADCOINS_IDEMPOTENCIA.md.
   const stockDecremented = await decrementPremioStockIfTracked(supabaseAdmin, premio);
+
+  const spendMetadata = buildMovimientoMetadata({
+    sourceType: PADCOINS_ORIGINS.CANJE_PREMIO,
+    sourceId: canjeId,
+    action: 'spend',
+  });
 
   let spendResult;
   try {
     spendResult = await spendPadcoins(supabaseAdmin, userId, costo, {
       referencia_tipo: PADCOINS_ORIGINS.CANJE_PREMIO,
-      referencia_id: premio.id,
+      referencia_id: canjeId,
       sede_id: premio.sede_id,
       descripcion: `Canje premio: ${premio.nombre}`,
+      metadata: spendMetadata,
+      calculation_detail: {
+        premio_id: premio.id,
+        premio_nombre: premio.nombre,
+        costo_padcoins: costo,
+      },
     });
   } catch (err) {
     if (stockDecremented) {
@@ -204,12 +252,20 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId) {
     throw err;
   }
 
+  if (spendResult.skipped) {
+    if (stockDecremented) {
+      await restorePremioStockIfTracked(supabaseAdmin, premio.id).catch(() => null);
+    }
+    throw buildHttpError('Canje ya procesado', 409);
+  }
+
   const codigo = generateCanjeCodigo();
 
   try {
     const { data: canje, error: canjeErr } = await supabaseAdmin
       .from('padcoins_canjes')
       .insert({
+        id: canjeId,
         user_id: userId,
         sede_id: premio.sede_id,
         premio_id: premio.id,
@@ -220,7 +276,24 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId) {
       .select(CANJE_SELECT)
       .single();
 
-    if (canjeErr) throw canjeErr;
+    if (canjeErr) {
+      if (canjeErr.code === '23505') {
+        const existing = await findPendingCanjeForPremio(supabaseAdmin, userId, premio.id);
+        if (existing) {
+          return {
+            canje: mapCanjeRow(existing),
+            codigo: existing.codigo,
+            saldo: {
+              disponible: spendResult.saldo_despues,
+              historico_total: spendResult.historico_total,
+            },
+            movimiento_id: spendResult.movimiento?.id ?? null,
+            idempotent: true,
+          };
+        }
+      }
+      throw canjeErr;
+    }
 
     return {
       canje: mapCanjeRow(canje),
@@ -237,6 +310,7 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId) {
       premio,
       costo,
       stockDecremented,
+      canjeId,
     });
     throw err;
   }

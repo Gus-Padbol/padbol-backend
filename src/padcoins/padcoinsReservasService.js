@@ -333,13 +333,15 @@ export async function acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reser
     now: options.now,
     timeZone: options.timeZone,
     earnLimits: options.earnLimits,
+    skipEarnCaps: options.skipEarnCaps === true,
   });
 
   if (result.skipped) {
+    const reason = result.reason === 'ya_acreditado' ? 'ya_acreditada' : (result.reason ?? 'limite_alcanzado');
     return {
       ok: true,
       acreditado: false,
-      reason: result.reason ?? 'limite_alcanzado',
+      reason,
       padcoins_solicitados: padcoins,
       padcoins: 0,
       method: amountResult.method,
@@ -348,6 +350,8 @@ export async function acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reser
       campaign: campaignResult.campaign,
       cap: result.cap,
       saldo: result.saldo,
+      movimiento: result.movimiento ?? null,
+      idempotent: result.idempotent === true,
     };
   }
 

@@ -133,6 +133,18 @@ export function mountPremiosCanjeablesRoutes(app, {
         return res.status(400).json({ error: 'id inválido' });
       }
 
+      const body = req.body ?? {};
+      if (
+        body.amount != null
+        || body.padcoins != null
+        || body.costo_padcoins != null
+        || body.monto != null
+      ) {
+        return res.status(400).json({
+          error: 'El monto del canje lo define el backend según el premio; no se aceptan montos en el request',
+        });
+      }
+
       const premio = await getPremioCanjeableById(supabaseAdmin, premioId);
       if (!premio) {
         return res.status(404).json({ error: 'Premio no encontrado' });

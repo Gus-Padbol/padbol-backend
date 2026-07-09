@@ -1,6 +1,7 @@
 import { calculatePadcoinsForPaidAmount } from './padcoinsGlobalConfigService.js';
 import { PADCOINS_CAMPAIGN_STATUSES, PADCOINS_CAMPAIGN_TYPES, PADCOINS_CAMPAIGN_AUDIT_ACTIONS } from './padcoinsCampaignsConfig.js';
 import { appendCampaignAuditLog } from './padcoinsCampaignsService.js';
+import { registerPadcoinsApplication } from './padcoinsIdempotencyService.js';
 import { getReservaPaidAmountInfo } from './padcoinsReservasService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -318,16 +319,26 @@ export async function recordCampaignApplication(supabaseAdmin, {
     calculation_detail: calculationDetail ?? {},
   };
 
-  const { data, error } = await supabaseAdmin
-    .from('padcoins_campaign_applications')
-    .insert(payload)
-    .select('id, campaign_id, reserva_id, final_padcoins, created_at')
-    .single();
+  const registered = await registerPadcoinsApplication(supabaseAdmin, async () => {
+    const { data, error } = await supabaseAdmin
+      .from('padcoins_campaign_applications')
+      .insert(payload)
+      .select('id, campaign_id, reserva_id, final_padcoins, created_at')
+      .single();
 
-  if (error) {
-    if (isMissingTable(error)) return null;
-    throw error;
+    if (error) {
+      if (isMissingTable(error)) return null;
+      throw error;
+    }
+
+    return data;
+  });
+
+  if (registered.duplicate) {
+    return { id: null, duplicate: true, campaign_id: campaign.id, reserva_id: reservaId };
   }
+
+  if (!registered.data) return null;
 
   await appendCampaignAuditLog(supabaseAdmin, {
     campaign_id: campaign.id,
@@ -343,5 +354,5 @@ export async function recordCampaignApplication(supabaseAdmin, {
     high_impact: campaign.high_impact === true,
   }).catch(() => null);
 
-  return data;
+  return registered.data;
 }

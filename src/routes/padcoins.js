@@ -249,6 +249,17 @@ export function mountPadcoinsAdminRoutes(app, {
       }
 
       const sedeId = parseOptionalSedeId(body.sede_id ?? body.sedeId);
+      if (auth.role.rol === 'admin_club') {
+        if (auth.role.sede_id == null) {
+          return res.status(403).json({ error: 'Admin de club sin sede asignada' });
+        }
+        if (sedeId == null || Number(sedeId) !== Number(auth.role.sede_id)) {
+          return res.status(403).json({
+            error: 'Admin de club solo puede ajustar PadCoins de su sede',
+          });
+        }
+      }
+
       if (body.sede_id != null || body.sedeId != null) {
         if (sedeId === undefined) {
           return res.status(400).json({ error: 'sede_id inválido' });

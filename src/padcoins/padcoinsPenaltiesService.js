@@ -239,15 +239,17 @@ async function applyReservaPadcoinsPenalty(supabaseAdmin, reservaId, tipoPenaliz
   });
 
   if (result.skipped) {
+    const reason = result.reason === 'ya_descontado' ? 'ya_penalizada' : (result.reason ?? 'saldo_insuficiente');
     return {
       ok: true,
       penalizado: false,
-      reason: result.reason ?? 'saldo_insuficiente',
+      reason,
       padcoins_solicitados: montoConfig,
       padcoins: 0,
       reserva_id: id,
       sede_id: sedeId,
       saldo: result.saldo,
+      idempotent: result.idempotent === true,
     };
   }
 
