@@ -10,6 +10,7 @@ import {
 } from './padbolMatchSetupPhase2Config.js';
 import { PADBOL_MATCH_SETUP_STEPS } from './padbolMatchSetupConfig.js';
 import { buildBeneficiosSectionPayload } from './padbolMatchSetupBenefitsService.js';
+import { buildLoyaltyPolicySectionFields } from '../padcoins/padcoinsLoyaltyPolicyService.js';
 import { PADCOINS_GLOBAL_CONFIG_DEFAULTS } from '../padcoins/padcoinsGlobalConfigService.js';
 
 const CANCHA_SELECT = 'id, sede_id, nombre, numero, nro, estado, deporte';
@@ -342,6 +343,16 @@ export function buildSetupSections(flags, phase1Checklist) {
     ),
   ];
 
+  const loyaltyPolicyFields = buildLoyaltyPolicySectionFields(flags);
+
+  const padcoinsSection = {
+    key: PADBOL_MATCH_SETUP_SECTIONS.PADCOINS,
+    title: PADBOL_MATCH_SETUP_SECTION_TITLES[PADBOL_MATCH_SETUP_SECTIONS.PADCOINS],
+    status: deriveSectionStatus(padcoinsItems),
+    items: padcoinsItems,
+    ...loyaltyPolicyFields,
+  };
+
   const beneficiosSection = {
     key: PADBOL_MATCH_SETUP_SECTIONS.BENEFICIOS,
     title: PADBOL_MATCH_SETUP_SECTION_TITLES[PADBOL_MATCH_SETUP_SECTIONS.BENEFICIOS],
@@ -349,9 +360,13 @@ export function buildSetupSections(flags, phase1Checklist) {
     detail: beneficiosExtras.detail,
     items: beneficiosItems,
     recommendations: beneficiosExtras.recommendations,
-    warnings: beneficiosExtras.warnings,
+    warnings: [
+      ...(beneficiosExtras.warnings ?? []),
+      ...(loyaltyPolicyFields.loyalty_policy_warnings ?? []),
+    ],
     loyalty_quality: beneficiosExtras.loyalty_quality,
     evaluation_summary: beneficiosExtras.evaluation_summary,
+    ...loyaltyPolicyFields,
   };
 
   const campanasItems = [
@@ -403,12 +418,7 @@ export function buildSetupSections(flags, phase1Checklist) {
       status: deriveSectionStatus(reservasItems),
       items: reservasItems,
     },
-    {
-      key: PADBOL_MATCH_SETUP_SECTIONS.PADCOINS,
-      title: PADBOL_MATCH_SETUP_SECTION_TITLES[PADBOL_MATCH_SETUP_SECTIONS.PADCOINS],
-      status: deriveSectionStatus(padcoinsItems),
-      items: padcoinsItems,
-    },
+    padcoinsSection,
     beneficiosSection,
     {
       key: PADBOL_MATCH_SETUP_SECTIONS.CAMPANAS,
@@ -457,7 +467,9 @@ export async function computePhase2OperationalFlags(supabaseAdmin, sedeId) {
   }
 
   let precioSource = null;
+  let precioTurnoReferencia = null;
   if (preciosOk) {
+    precioTurnoReferencia = resolveTurnPriceReference(sede, franjas);
     if (parsePrecioInt(sede?.precio_90min) > 0) precioSource = 'precio_90min en sedes';
     else if (parsePrecioInt(sede?.precio_turno) > 0) precioSource = 'precio_turno en sedes';
     else if (parsePrecioInt(sede?.precio_por_reserva) > 0) precioSource = 'precio_por_reserva en sedes';
@@ -479,6 +491,7 @@ export async function computePhase2OperationalFlags(supabaseAdmin, sedeId) {
       franjas_precio_count: franjas.length,
       horarios_source: horariosSource,
       precio_source: precioSource,
+      precio_turno_referencia: precioTurnoReferencia,
       pagos: pagosEval,
       reglas_operativas: reglasEval,
     },
@@ -514,8 +527,27 @@ export function buildPhase2MissingAndActions(flags) {
   return { missing, next_actions };
 }
 
+function resolveTurnPriceReference(sede, franjas = []) {
+  const from90 = parsePrecioInt(sede?.precio_90min);
+  if (from90 != null && from90 > 0) return from90;
+
+  const fromTurno = parsePrecioInt(sede?.precio_turno);
+  if (fromTurno != null && fromTurno > 0) return fromTurno;
+
+  const fromPpr = parsePrecioInt(sede?.precio_por_reserva);
+  if (fromPpr != null && fromPpr > 0) return fromPpr;
+
+  for (const franja of franjas) {
+    const fromFranja = parsePrecioInt(franja?.precio_90min);
+    if (fromFranja != null && fromFranja > 0) return fromFranja;
+  }
+
+  return null;
+}
+
 export {
   fetchSedeOperationalRow,
   fetchCanchasForSede,
   fetchFranjasPrecioForSede,
+  resolveTurnPriceReference,
 };

@@ -32,6 +32,11 @@ import {
   buildBenefitsSetupRecommendationsForSede,
 } from './padbolMatchSetupBenefitsService.js';
 import {
+  isValidLoyaltyPercentageForActivePadcoins,
+  PADCOINS_MIN_LOYALTY_PERCENT,
+  evaluateLoyaltyPolicyForSede,
+} from '../padcoins/padcoinsLoyaltyPolicyService.js';
+import {
   createPremioCanjeable,
   listPremiosCanjeables,
 } from '../padcoins/premiosCanjeablesService.js';
@@ -275,7 +280,7 @@ async function countPremiosForSede(supabaseAdmin, sedeId) {
 }
 
 function isRecommendedLoyaltyPercent(effectivePercent) {
-  return Number(effectivePercent) === PADBOL_MATCH_RECOMMENDED_LOYALTY_PERCENT;
+  return isValidLoyaltyPercentageForActivePadcoins(effectivePercent);
 }
 
 function buildChecklistItem(key, ok, detail) {
@@ -295,7 +300,6 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
     adminAssigned,
     premiosCount,
     phase2,
-    benefitsEvaluation,
   ] = await Promise.all([
     assertSedeExists(supabaseAdmin, sedeId).catch(() => null),
     getPadcoinsSedeConfig(supabaseAdmin, sedeId, { now }),
@@ -303,11 +307,15 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
     hasAdminClubForSede(supabaseAdmin, sedeId),
     countPremiosForSede(supabaseAdmin, sedeId),
     computePhase2OperationalFlags(supabaseAdmin, sedeId),
-    buildBenefitsSetupRecommendationsForSede(supabaseAdmin, sedeId),
   ]);
 
   const effectivePercent = resolvedConfig?.effective?.porcentaje_devolucion_reserva
     ?? PADCOINS_GLOBAL_CONFIG_DEFAULTS.porcentaje_devolucion_reserva;
+
+  const benefitsEvaluation = await buildBenefitsSetupRecommendationsForSede(supabaseAdmin, sedeId, {
+    turn_price: phase2.meta?.precio_turno_referencia,
+    loyalty_percentage: effectivePercent,
+  });
 
   const globalConversion = resolvedConfig?.global?.padcoins_por_usd_equivalente
     ?? PADCOINS_GLOBAL_CONFIG_DEFAULTS.padcoins_por_usd_equivalente;
@@ -317,7 +325,6 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
     sedeOverrides,
     'padcoins_por_usd_equivalente',
   );
-
   const padcoinsActivado = padcoinsConfig.participa === true;
   const padcoinsDefault5 = isRecommendedLoyaltyPercent(effectivePercent);
   const beneficiosOk = premiosCount > 0;
@@ -348,11 +355,13 @@ async function computeDerivedSetupFlags(supabaseAdmin, sedeId, { now = new Date(
       franjas_precio_count: phase2.meta?.franjas_precio_count ?? 0,
       horarios_source: phase2.meta?.horarios_source ?? null,
       precio_source: phase2.meta?.precio_source ?? null,
+      precio_turno_referencia: phase2.meta?.precio_turno_referencia ?? null,
       pagos: phase2.meta?.pagos ?? null,
       reglas_operativas: phase2.meta?.reglas_operativas ?? null,
       effective_porcentaje_devolucion_reserva: effectivePercent,
       global_padcoins_por_unidad_interna: globalConversion,
       sede_override_conversion: hasCustomConversionOverride,
+      sede_overrides: sedeOverrides,
       padcoins_config_id: padcoinsConfig.id,
       benefits_evaluation: benefitsEvaluation,
     },
@@ -366,8 +375,8 @@ function buildValidationFromFlags(sedeId, flags) {
 
     if (key === PADBOL_MATCH_SETUP_STEPS.PADCOINS_DEFAULT_5_CONFIGURADO) {
       detail = ok
-        ? `Fidelización al ${PADBOL_MATCH_RECOMMENDED_LOYALTY_PERCENT}% (recomendado)`
-        : `Porcentaje efectivo: ${flags.meta?.effective_porcentaje_devolucion_reserva ?? '—'}%`;
+        ? `Fidelización al ${flags.meta?.effective_porcentaje_devolucion_reserva ?? PADCOINS_MIN_LOYALTY_PERCENT}% (mínimo ${PADCOINS_MIN_LOYALTY_PERCENT}%)`
+        : `Porcentaje efectivo: ${flags.meta?.effective_porcentaje_devolucion_reserva ?? '—'}% (mínimo ${PADCOINS_MIN_LOYALTY_PERCENT}% con PadCoins activo)`;
     }
 
     if (key === PADBOL_MATCH_SETUP_STEPS.BENEFICIOS_INICIALES_CONFIGURADOS) {
@@ -400,9 +409,22 @@ function buildValidationFromFlags(sedeId, flags) {
     .filter(Boolean);
 
   const phase2Extras = buildPhase2MissingAndActions(flags);
+  const loyaltyPolicy = evaluateLoyaltyPolicyForSede({
+    effective_loyalty_percentage: flags.meta?.effective_porcentaje_devolucion_reserva,
+    padcoins_active: flags.padcoins_activado === true,
+    sede_override_conversion: flags.meta?.sede_override_conversion === true,
+    sede_overrides: flags.meta?.sede_overrides ?? {},
+    turn_price: flags.meta?.precio_turno_referencia,
+  });
 
   const missing = [...new Set([...phase1Missing, ...phase2Extras.missing])];
-  const next_actions = [...new Set([...phase1NextActions, ...phase2Extras.next_actions])];
+  const next_actions = [
+    ...new Set([
+      ...phase1NextActions,
+      ...phase2Extras.next_actions,
+      ...loyaltyPolicy.next_actions,
+    ]),
+  ];
 
   const checklistCompleto = phase1Missing.length === 0;
   const readiness_level = computeReadinessLevel(flags, checklistCompleto);

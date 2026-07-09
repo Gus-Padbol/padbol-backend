@@ -1,4 +1,5 @@
 import { listPremiosCanjeables } from '../padcoins/premiosCanjeablesService.js';
+import { evaluateBenefitReservationMetrics, BENEFIT_REACHABILITY } from '../padcoins/padcoinsLoyaltyPolicyService.js';
 
 /** Umbral orientativo interno — no exponer equivalencia al jugador. */
 const HIGH_PADCOINS_THRESHOLD = 1200;
@@ -47,6 +48,24 @@ const CATEGORY_DETECTORS = [
     score: 3,
   },
 ];
+
+const RETURN_LOYALTY_CATEGORIES = new Set([
+  BENEFIT_LOYALTY_CATEGORIES.TURNO,
+  BENEFIT_LOYALTY_CATEGORIES.CLASE,
+  BENEFIT_LOYALTY_CATEGORIES.TORNEO,
+  BENEFIT_LOYALTY_CATEGORIES.PRIORIDAD,
+  BENEFIT_LOYALTY_CATEGORIES.BEBIDA,
+]);
+
+const REACHABLE_LEVELS = new Set([
+  BENEFIT_REACHABILITY.MUY_FACIL,
+  BENEFIT_REACHABILITY.BUENA,
+]);
+
+const ASPIRATIONAL_LEVELS = new Set([
+  BENEFIT_REACHABILITY.ASPIRACIONAL,
+  BENEFIT_REACHABILITY.DEMASIADO_LEJANO,
+]);
 
 const WEAK_PRODUCT_KEYWORDS = [
   'producto',
@@ -140,7 +159,7 @@ export function detectBenefitLoyaltyProfile(premio) {
   };
 }
 
-function evaluateSingleBenefit(premio) {
+function evaluateSingleBenefit(premio, context = {}) {
   const warnings = [];
   const nombre = String(premio?.nombre ?? '').trim();
   const costo = Number(premio?.costo_padcoins);
@@ -210,6 +229,14 @@ function evaluateSingleBenefit(premio) {
     });
   }
 
+  const reservationEval = evaluateBenefitReservationMetrics(premio, {
+    turn_price: context.turn_price,
+    loyalty_percentage: context.loyalty_percentage,
+  });
+  if (reservationEval.warnings.length > 0) {
+    warnings.push(...reservationEval.warnings);
+  }
+
   return {
     id: premio?.id ?? null,
     nombre: nombre || null,
@@ -217,6 +244,10 @@ function evaluateSingleBenefit(premio) {
     category: profile.category,
     loyalty_score: profile.loyalty_score,
     warnings,
+    reference_value: reservationEval.reference?.value ?? null,
+    reference_source: reservationEval.reference?.source ?? null,
+    reservation_metrics: reservationEval.metrics,
+    reachability: reservationEval.reachability ?? null,
   };
 }
 
@@ -235,8 +266,8 @@ export function getSuggestedInitialBenefits() {
   return SUGGESTED_INITIAL_BENEFITS.map((item) => ({ ...item }));
 }
 
-export function evaluateBenefitsList(premios = []) {
-  const items = premios.map(evaluateSingleBenefit);
+export function evaluateBenefitsList(premios = [], context = {}) {
+  const items = premios.map((premio) => evaluateSingleBenefit(premio, context));
   const warnings = items.flatMap((item) => item.warnings);
 
   const weakCount = items.filter((item) => item.loyalty_score < 3).length;
@@ -244,6 +275,35 @@ export function evaluateBenefitsList(premios = []) {
     warnings.push({
       code: 'exceso_productos_debiles',
       message: 'Hay varios beneficios con poco vínculo con juego o comunidad. Priorizá turnos, clases o eventos.',
+      premio_id: null,
+    });
+  }
+
+  const itemsWithReachability = items.filter((item) => item.reachability != null);
+  if (itemsWithReachability.length >= 2) {
+    const hasReachable = itemsWithReachability.some((item) => REACHABLE_LEVELS.has(item.reachability));
+    const allAspirational = itemsWithReachability.every((item) => ASPIRATIONAL_LEVELS.has(item.reachability));
+    if (!hasReachable && allAspirational) {
+      warnings.push({
+        code: 'faltan_beneficios_alcanzables',
+        message: 'Todos los beneficios son aspiracionales o lejanos. Sumá al menos uno alcanzable (2 a 8 reservas estimadas).',
+        premio_id: null,
+      });
+    }
+  }
+
+  const hasReturnBenefit = items.some(
+    (item) => RETURN_LOYALTY_CATEGORIES.has(item.category) && item.loyalty_score >= 3,
+  );
+  const allWeakProducts = premios.length >= 2
+    && items.every((item) => (
+      item.category === BENEFIT_LOYALTY_CATEGORIES.PRODUCTO_DEBIL
+      || item.loyalty_score < 3
+    ));
+  if (allWeakProducts && !hasReturnBenefit) {
+    warnings.push({
+      code: 'faltan_beneficios_retorno',
+      message: 'Faltan beneficios de retorno: próximo turno, clase, torneo, evento o prioridad de reserva.',
       premio_id: null,
     });
   }
@@ -277,8 +337,8 @@ export async function evaluateBenefitsForSede(supabaseAdmin, sedeId) {
   return buildBenefitsSetupRecommendations(premios);
 }
 
-export function buildBenefitsSetupRecommendations(premios = []) {
-  const evaluation = evaluateBenefitsList(premios);
+export function buildBenefitsSetupRecommendations(premios = [], context = {}) {
+  const evaluation = evaluateBenefitsList(premios, context);
   const recommendations = getSuggestedInitialBenefits()
     .filter((suggestion) => !suggestionMatchesExisting(suggestion, premios));
 
@@ -288,9 +348,9 @@ export function buildBenefitsSetupRecommendations(premios = []) {
   };
 }
 
-export async function buildBenefitsSetupRecommendationsForSede(supabaseAdmin, sedeId) {
+export async function buildBenefitsSetupRecommendationsForSede(supabaseAdmin, sedeId, context = {}) {
   const premios = await listPremiosCanjeables(supabaseAdmin, { sede_id: sedeId });
-  return buildBenefitsSetupRecommendations(premios);
+  return buildBenefitsSetupRecommendations(premios, context);
 }
 
 export function buildBeneficiosSectionPayload(flags) {

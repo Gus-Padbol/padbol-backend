@@ -8,6 +8,7 @@ import {
   getPadcoinsValue,
 } from './padcoinsGlobalConfigService.js';
 import { getPadcoinsSedeConfig } from './padcoinsSedeConfigService.js';
+import { enforcePadcoinsSedeRuleOverridesPolicy } from './padcoinsLoyaltyPolicyService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -345,6 +346,10 @@ export async function updatePadcoinsSedeRuleOverrides(supabaseAdmin, {
 
   const validated = validatePadcoinsSedeRuleOverridesForWrite(rule_overrides);
   const existing = await getPadcoinsSedeConfig(supabaseAdmin, sid);
+
+  enforcePadcoinsSedeRuleOverridesPolicy(validated, {
+    padcoinsActive: existing.activo === true,
+  });
 
   const payload = {
     sede_id: sid,
