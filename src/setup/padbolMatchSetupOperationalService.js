@@ -11,6 +11,7 @@ import {
 import { PADBOL_MATCH_SETUP_STEPS } from './padbolMatchSetupConfig.js';
 import { buildBeneficiosSectionPayload } from './padbolMatchSetupBenefitsService.js';
 import { buildLoyaltyPolicySectionFields } from '../padcoins/padcoinsLoyaltyPolicyService.js';
+import { buildSetupEarningSourcesFields } from '../padcoins/padcoinsEarningSourcesService.js';
 import { PADCOINS_GLOBAL_CONFIG_DEFAULTS } from '../padcoins/padcoinsGlobalConfigService.js';
 
 const CANCHA_SELECT = 'id, sede_id, nombre, numero, nro, estado, deporte';
@@ -344,6 +345,7 @@ export function buildSetupSections(flags, phase1Checklist) {
   ];
 
   const loyaltyPolicyFields = buildLoyaltyPolicySectionFields(flags);
+  const earningSourcesFields = buildSetupEarningSourcesFields();
 
   const padcoinsSection = {
     key: PADBOL_MATCH_SETUP_SECTIONS.PADCOINS,
@@ -351,6 +353,7 @@ export function buildSetupSections(flags, phase1Checklist) {
     status: deriveSectionStatus(padcoinsItems),
     items: padcoinsItems,
     ...loyaltyPolicyFields,
+    ...earningSourcesFields,
   };
 
   const beneficiosSection = {

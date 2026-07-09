@@ -13,6 +13,7 @@ import {
   recordCampaignApplication,
   resolveActiveCampaignForReserva,
 } from './padcoinsCampaignResolverService.js';
+import { buildEarningMovementOptions } from './padcoinsEarningSourcesService.js';
 
 export const PADCOINS_RESERVA_REFERENCIA_TIPO = 'reserva';
 
@@ -323,12 +324,31 @@ export async function acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reser
     descripcion = `${descripcion} — campaña ${campaignResult.campaign.name} (sin cambio)`.slice(0, 500);
   }
 
+  const earningOptions = buildEarningMovementOptions({
+    sourceKey: 'reserva_jugada',
+    userId: reserva.user_id,
+    sedeId,
+    sourceId: id,
+    campaignId: campaignResult.campaign?.id ?? null,
+    calculationDetail: {
+      method: amountResult.method,
+      padcoins_base: campaignResult.base_padcoins,
+      padcoins_final: padcoins,
+      campaign_applied: campaignResult.applied === true,
+      campaign_detail: campaignResult.calculation_detail,
+    },
+  });
+
   const result = await addPadcoins(supabaseAdmin, reserva.user_id, padcoins, {
     tipo: PADCOINS_MOVEMENT_TYPES.EARN,
-    referencia_tipo: referencia.referencia_tipo,
-    referencia_id: referencia.referencia_id,
+    referencia_tipo: earningOptions.referencia_tipo ?? referencia.referencia_tipo,
+    referencia_id: earningOptions.referencia_id ?? referencia.referencia_id,
     sede_id: sedeId,
     descripcion,
+    metadata: earningOptions.metadata,
+    action: earningOptions.action,
+    campaign_id: campaignResult.campaign?.id ?? null,
+    calculation_detail: earningOptions.metadata?.calculation_detail,
     created_by: options.created_by ?? null,
     now: options.now,
     timeZone: options.timeZone,

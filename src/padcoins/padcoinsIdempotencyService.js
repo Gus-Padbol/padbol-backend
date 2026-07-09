@@ -110,21 +110,28 @@ export function enrichMovimientoOptions(options = {}) {
   const action = options.action
     ?? (options.tipo === PADCOINS_MOVEMENT_TYPES.SPEND ? PADCOINS_SOURCE_ACTIONS.SPEND : PADCOINS_SOURCE_ACTIONS.EARN);
 
-  const sourceKey = buildPadcoinsSourceKey({
+  const sourceKeyFromEarning = options.metadata?.source_key ?? null;
+  const sourceKey = sourceKeyFromEarning ?? buildPadcoinsSourceKey({
     userId: options.user_id ?? options.userId,
-    sourceType,
+    sourceType: options.earning_source_key ?? sourceType,
     sourceId,
     action,
   });
 
-  const metadata = buildMovimientoMetadata({
-    sourceType,
-    sourceId,
-    action,
-    campaignId: options.campaign_id ?? options.campaignId,
-    calculationDetail: options.calculation_detail ?? options.calculationDetail,
-    sourceKey,
-  });
+  let metadata = options.metadata && typeof options.metadata === 'object'
+    ? { ...options.metadata }
+    : buildMovimientoMetadata({
+      sourceType,
+      sourceId,
+      action,
+      campaignId: options.campaign_id ?? options.campaignId,
+      calculationDetail: options.calculation_detail ?? options.calculationDetail,
+      sourceKey,
+    });
+
+  if (metadata && sourceKey && !metadata.source_key) {
+    metadata.source_key = sourceKey;
+  }
 
   const descripcion = metadata
     ? appendMetadataToDescripcion(options.descripcion, metadata)

@@ -38,6 +38,10 @@ import {
   updatePadcoinsCampaign,
 } from '../padcoins/padcoinsCampaignsService.js';
 import { getActiveCampaignForSedePlayer } from '../padcoins/padcoinsCampaignPlayerService.js';
+import {
+  buildPadcoinsEarningSourcesAdminResponse,
+  canReadPadcoinsEarningSources,
+} from '../padcoins/padcoinsEarningSourcesService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -294,6 +298,28 @@ export function mountPadcoinsAdminRoutes(app, {
     } catch (err) {
       console.error('❌ POST /api/admin/padcoins/ajuste:', err.message);
       return sendRouteError(res, err, 'Error al ajustar PadCoins');
+    }
+  });
+
+  app.get('/api/admin/padcoins/earning-sources', async (req, res) => {
+    try {
+      const auth = await requireAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      if (!canReadPadcoinsEarningSources(auth.role)) {
+        return res.status(403).json({ error: 'No autorizado para consultar fuentes de generación PadCoins' });
+      }
+
+      const sedeId = auth.role.rol === 'admin_club'
+        ? Number(auth.role.sede_id)
+        : parseRequiredSedeId(req.query?.sede_id ?? req.query?.sedeId);
+
+      const payload = buildPadcoinsEarningSourcesAdminResponse(auth.role, { sedeId });
+
+      return res.json(payload);
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins/earning-sources:', err.message);
+      return sendRouteError(res, err, 'Error al consultar fuentes de generación PadCoins');
     }
   });
 
