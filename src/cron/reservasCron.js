@@ -2,7 +2,7 @@ import { sumarXP } from '../xp/xpService.js';
 import { partidoTieneResultadoCargado } from '../partidos/resultadoService.js';
 import { reservaHoraFinFromRow } from '../../utils/reservasColumns.js';
 import { sendPushToUser } from '../../utils/push.js';
-import { acreditarPadcoinsPorReservaCompletada } from '../padcoins/padcoinsReservasService.js';
+import { processReservationPadcoinsOnComplete } from '../matches/matchRewardsService.js';
 
 const TZ_RESERVA = 'America/Argentina/Buenos_Aires';
 
@@ -157,9 +157,10 @@ export async function procesarReservasCompletadas(supabaseAdmin) {
           String(reserva.id),
         ).catch((err) => console.warn(`⚠️ XP reserva ${reserva.id}:`, err.message));
 
-        const padcoinsResult = await acreditarPadcoinsPorReservaCompletada(
+        const padcoinsResult = await processReservationPadcoinsOnComplete(
           supabaseAdmin,
-          reserva.id,
+          reserva,
+          partido,
         ).catch((err) => {
           console.warn(`⚠️ PadCoins reserva ${reserva.id}:`, err.message);
           return null;
@@ -167,7 +168,11 @@ export async function procesarReservasCompletadas(supabaseAdmin) {
 
         if (padcoinsResult?.acreditado) {
           console.log(
-            `✓ PadCoins reserva ${reserva.id} — +${padcoinsResult.padcoins} (${padcoinsResult.method})`,
+            `✓ PadCoins reserva ${reserva.id} — +${padcoinsResult.padcoins} (${padcoinsResult.method}) [${padcoinsResult.mode ?? 'organizer_only'}]`,
+          );
+        } else if (padcoinsResult?.mode === 'match_deferred') {
+          console.log(
+            `⏸ PadCoins reserva ${reserva.id} diferidos — partido ${partidoId} vinculado; recompensa tras validación de resultado`,
           );
         }
       }

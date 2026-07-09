@@ -7,6 +7,7 @@ import {
   generateMatchSummaryForPartido,
 } from '../src/partidos/matchSummaryService.js';
 import { procesarResultadoPartidoCasual } from '../src/partidos/resultadoService.js';
+import { processCasualMatchPadcoinsAfterResultConfirmed } from '../src/matches/matchRewardsService.js';
 import {
   EquiposPartidoError,
   procesarActualizarNombresEquiposPartido,
@@ -3359,6 +3360,10 @@ export function createPartidosAbiertosRouter({ supabaseAdmin, getAuthenticatedUs
         .eq('id', partidoId);
 
       if (updateErr) throw updateErr;
+
+      await processCasualMatchPadcoinsAfterResultConfirmed(supabaseAdmin, partidoId).catch((err) => {
+        console.warn(`⚠️ PadCoins partido casual (legacy) ${partidoId}:`, err.message);
+      });
 
       console.log(`✓ POST /api/partidos-abiertos/${partidoId}/resultado — ganador ${validation.ganador}`);
       res.json({ success: true, ganador: validation.ganador });

@@ -8,6 +8,7 @@ import {
   normalizeEquipoUserIds,
   sortJugadoresRowsForEquipos,
 } from './equiposService.js';
+import { processCasualMatchPadcoinsAfterResultConfirmed } from '../matches/matchRewardsService.js';
 
 function parseResultadoBody(body) {
   const resultado = body?.resultado ?? body;
@@ -320,6 +321,14 @@ export async function procesarResultadoPartidoCasual({
     cargas,
   );
 
+  const padcoinsResult = await processCasualMatchPadcoinsAfterResultConfirmed(
+    supabaseAdmin,
+    partidoId,
+  ).catch((err) => {
+    console.warn(`⚠️ PadCoins partido casual ${partidoId}:`, err.message);
+    return null;
+  });
+
   return {
     status: 200,
     body: {
@@ -328,6 +337,16 @@ export async function procesarResultadoPartidoCasual({
       ganador,
       resultado: resultadoFinal,
       xp: xpResults,
+      padcoins: padcoinsResult?.acreditado
+        ? {
+          acreditado: true,
+          total: padcoinsResult.total_padcoins ?? 0,
+          credits: (padcoinsResult.credits ?? []).filter((c) => c.acreditado).length,
+        }
+        : {
+          acreditado: false,
+          reason: padcoinsResult?.reason ?? null,
+        },
     },
   };
 }
