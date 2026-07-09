@@ -45,6 +45,7 @@ import {
 } from './routes/reputacion.js';
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
+import { mountJugadorIdentidadRoutes } from './routes/jugadorIdentidad.js';
 import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
 import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js';
@@ -4237,6 +4238,7 @@ jugadorRouter.get('/rankings', async (req, res) => {
 });
 
 mountJugadorReputacionRoutes(jugadorRouter, { supabaseAdmin, getAuthenticatedUser });
+mountJugadorIdentidadRoutes(jugadorRouter, { supabaseAdmin, getAuthenticatedUser });
 
 const usuariosRouter = express.Router();
 
