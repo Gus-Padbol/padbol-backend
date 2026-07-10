@@ -8,10 +8,16 @@ import {
   sanitizeNotificationMetadata,
 } from './notificacionesMetadata.js';
 
+export { isMissingNotificacionesDataColumnError };
+
 const NOTIFICACIONES_TABLE = 'notificaciones';
 
-const SELECT_WITH_DATA = 'id, user_id, tipo, titulo, mensaje, data, link, leida, created_at';
-const SELECT_LINK_ONLY = 'id, user_id, tipo, titulo, mensaje, link, leida, created_at';
+/** Columnas seguras en prod sin columna `data`. */
+export const NOTIFICACIONES_PUBLIC_COLUMNS =
+  'id, user_id, tipo, titulo, mensaje, link, leida, created_at';
+
+const SELECT_WITH_DATA = `id, user_id, tipo, titulo, mensaje, data, link, leida, created_at`;
+const SELECT_LINK_ONLY = NOTIFICACIONES_PUBLIC_COLUMNS;
 
 /** @type {'auto' | 'data' | 'link'} */
 let metadataStorageMode = 'auto';
@@ -73,7 +79,7 @@ async function insertNotificacionRow(supabaseAdmin, row) {
   return supabaseAdmin
     .from(NOTIFICACIONES_TABLE)
     .insert(row)
-    .select('*')
+    .select(NOTIFICACIONES_PUBLIC_COLUMNS)
     .single();
 }
 
@@ -100,9 +106,13 @@ export async function createNotificacion(supabaseAdmin, payload) {
       }
       return data;
     } catch (err) {
-      if (mode === 'data' && isMissingNotificacionesDataColumnError(err)) {
-        metadataStorageMode = 'link';
-        continue;
+      if (isMissingNotificacionesDataColumnError(err)) {
+        if (mode === 'data') {
+          metadataStorageMode = 'link';
+          continue;
+        }
+        console.warn('⚠️ createNotificacion: schema sin columna data en modo link');
+        return null;
       }
       if (err?.code === 'NOTIFICATION_LINK_TOO_LARGE') {
         console.warn('⚠️ createNotificacion: encoded link too large');
@@ -154,17 +164,24 @@ export async function findNotificacionByDedupeKey(supabaseAdmin, userId, dedupeK
   if (!userId || !dedupeKey) return null;
 
   try {
-    if (metadataStorageMode !== 'link') {
+    if (metadataStorageMode === 'data') {
       const dataResult = await queryNotificacionByDedupeKeyData(supabaseAdmin, userId, dedupeKey);
       if (dataResult.useLinkMode) {
         metadataStorageMode = 'link';
       } else if (dataResult.row) {
-        if (metadataStorageMode === 'auto') {
-          metadataStorageMode = 'data';
-        }
         return dataResult.row;
-      } else if (metadataStorageMode === 'data') {
+      } else {
         return null;
+      }
+    }
+
+    if (metadataStorageMode === 'auto') {
+      const dataResult = await queryNotificacionByDedupeKeyData(supabaseAdmin, userId, dedupeKey);
+      if (dataResult.useLinkMode) {
+        metadataStorageMode = 'link';
+      } else if (dataResult.row) {
+        metadataStorageMode = 'data';
+        return dataResult.row;
       }
     }
 
@@ -174,6 +191,23 @@ export async function findNotificacionByDedupeKey(supabaseAdmin, userId, dedupeK
     console.warn('⚠️ findNotificacionByDedupeKey:', err.message);
     return null;
   }
+}
+
+/** Log diagnóstico sin PII (solo ids/tipos/motivos). */
+export function logNotificacionDiagnostic(event, details = {}) {
+  const safe = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (value == null) {
+      safe[key] = value;
+      continue;
+    }
+    const lower = String(key).toLowerCase();
+    if (lower.includes('email') || lower.includes('token') || lower.includes('phone')) {
+      continue;
+    }
+    safe[key] = value;
+  }
+  console.log(`[notificaciones] ${event}`, safe);
 }
 
 export async function createNotificacionIfAbsent(supabaseAdmin, payload) {
@@ -203,7 +237,7 @@ export async function markNotificacionLeida(supabaseAdmin, notificacionId, userI
     .update({ leida: true })
     .eq('id', notificacionId)
     .eq('user_id', userId)
-    .select('*')
+    .select(NOTIFICACIONES_PUBLIC_COLUMNS)
     .maybeSingle();
 
   if (error) throw error;
@@ -230,3 +264,19 @@ export function isNotificacionesTableMissing(error) {
 }
 
 export { resolveNotificationData, resolveNotificationPayload };
+
+export async function listNotificacionesForUser(supabaseAdmin, userId, { limit = 100 } = {}) {
+  const effectiveLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.floor(Number(limit))
+    : 100;
+
+  const { data, error } = await supabaseAdmin
+    .from(NOTIFICACIONES_TABLE)
+    .select(NOTIFICACIONES_PUBLIC_COLUMNS)
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(effectiveLimit);
+
+  if (error) throw error;
+  return data ?? [];
+}

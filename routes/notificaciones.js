@@ -1,6 +1,8 @@
 import {
   createNotificacion,
   isNotificacionesTableMissing,
+  isMissingNotificacionesDataColumnError,
+  listNotificacionesForUser,
   markAllNotificacionesLeidas,
   markNotificacionLeida,
   resolveNotificationPayload,
@@ -55,6 +57,8 @@ function mapNotificationRow(row) {
     created_at: row.created_at,
   };
 }
+
+export { mapNotificationRow };
 
 async function fetchPendingSolicitudPartidoItems(supabaseAdmin, userId) {
   const { data: partidosCapitan, error: capitanErr } = await supabaseAdmin
@@ -142,18 +146,18 @@ export function mountNotificacionesRoutes(app, { supabaseAdmin, getAuthenticated
 
       let dbRows = [];
       try {
-        const { data, error } = await supabaseAdmin
-          .from('notificaciones')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(100);
-
-        if (error) throw error;
-        dbRows = (data ?? []).map(mapNotificationRow);
+        const rows = await listNotificacionesForUser(supabaseAdmin, user.id, { limit: 100 });
+        dbRows = rows.map(mapNotificationRow);
       } catch (err) {
-        if (!isNotificacionesTableMissing(err)) throw err;
-        console.warn('⚠️ GET /api/notificaciones — tabla no disponible:', err.message);
+        if (isNotificacionesTableMissing(err)) {
+          console.warn('⚠️ GET /api/notificaciones — tabla no disponible:', err.message);
+        } else if (isMissingNotificacionesDataColumnError(err)) {
+          console.warn('⚠️ GET /api/notificaciones — columna data ausente, reintento link-only:', err.message);
+          const rows = await listNotificacionesForUser(supabaseAdmin, user.id, { limit: 100 });
+          dbRows = rows.map(mapNotificationRow);
+        } else {
+          throw err;
+        }
       }
 
       let pendingVirtual = [];

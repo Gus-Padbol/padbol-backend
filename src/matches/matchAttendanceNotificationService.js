@@ -1,4 +1,4 @@
-import { createNotificacionIfAbsent } from '../../utils/notificaciones.js';
+import { createNotificacionIfAbsent, logNotificacionDiagnostic } from '../../utils/notificaciones.js';
 import { sendPushToUser } from '../../utils/push.js';
 import {
   getMatchAttendanceFirstReminderHours,
@@ -84,6 +84,21 @@ function buildAttendanceNotificationPayload(matchId, userId, {
       dedupe_key: dedupeKey,
     },
   };
+}
+
+export function classifyAttendanceNotificationParticipant(participant) {
+  const userId = participant?.user_id;
+  if (!isValidUserId(userId)) {
+    return { eligible: false, reason: 'invalid_user_id' };
+  }
+  const status = normalizeAttendanceStatus(participant?.attendance_status);
+  if (status !== MATCH_ATTENDANCE_STATUS.PENDING) {
+    return { eligible: false, reason: 'not_pending', attendance_status: status };
+  }
+  if (participant?.attendance_requested_at) {
+    return { eligible: false, reason: 'already_requested', duplicate: true };
+  }
+  return { eligible: true, reason: 'candidate', attendance_status: status };
 }
 
 function shouldSkipAttendanceNotificationPartido(partido = {}) {
@@ -300,7 +315,21 @@ export async function notifyInitialAttendancePendingParticipants(supabaseAdmin, 
     duplicates: 0,
     errors: 0,
     push_failures: 0,
+    participant_outcomes: [],
   };
+
+  for (const participant of rows ?? []) {
+    const classification = classifyAttendanceNotificationParticipant(participant);
+    if (!classification.eligible) {
+      results.participant_outcomes.push({
+        user_id: participant?.user_id ?? null,
+        role: participant?.role ?? null,
+        outcome: classification.duplicate ? 'duplicate' : 'skipped',
+        reason: classification.reason,
+        attendance_status: classification.attendance_status ?? participant?.attendance_status ?? null,
+      });
+    }
+  }
 
   for (const participant of pending) {
     try {
@@ -312,26 +341,80 @@ export async function notifyInitialAttendancePendingParticipants(supabaseAdmin, 
         deps,
       });
 
+      const outcome = {
+        user_id: participant.user_id,
+        role: participant.role ?? null,
+        outcome: 'unknown',
+        reason: result.reason ?? null,
+        attendance_status: participant.attendance_status ?? null,
+      };
+
       if (result.skipped && result.duplicate) {
         results.duplicates += 1;
         results.skipped += 1;
+        outcome.outcome = 'duplicate';
+        results.participant_outcomes.push(outcome);
+        logNotificacionDiagnostic('attendance_notify_duplicate', {
+          match_id: matchId,
+          user_id: participant.user_id,
+          reason: result.reason,
+        });
         continue;
       }
       if (result.skipped) {
         results.skipped += 1;
+        outcome.outcome = 'skipped';
+        results.participant_outcomes.push(outcome);
+        logNotificacionDiagnostic('attendance_notify_skipped', {
+          match_id: matchId,
+          user_id: participant.user_id,
+          reason: result.reason,
+        });
         continue;
       }
       if (result.ok === false) {
         results.errors += 1;
+        outcome.outcome = 'insert_error';
+        results.participant_outcomes.push(outcome);
+        logNotificacionDiagnostic('attendance_notify_insert_error', {
+          match_id: matchId,
+          user_id: participant.user_id,
+          reason: result.reason,
+        });
         continue;
       }
 
       results.notified += 1;
+      outcome.outcome = 'insert_success';
+      outcome.notification_id = result.notification?.id ?? null;
+      results.participant_outcomes.push(outcome);
+      logNotificacionDiagnostic('attendance_notify_insert_success', {
+        match_id: matchId,
+        user_id: participant.user_id,
+        notification_id: outcome.notification_id,
+      });
       if (result.push?.ok === false && result.push?.skipped !== true) {
         results.push_failures += 1;
+        logNotificacionDiagnostic('attendance_notify_push_failure', {
+          match_id: matchId,
+          user_id: participant.user_id,
+          reason: result.push?.reason ?? 'push_failed',
+        });
+      } else {
+        logNotificacionDiagnostic('attendance_notify_push_success', {
+          match_id: matchId,
+          user_id: participant.user_id,
+        });
       }
     } catch (err) {
       results.errors += 1;
+      results.participant_outcomes.push({
+        user_id: participant.user_id,
+        role: participant.role ?? null,
+        outcome: 'error',
+        reason: err?.message ?? 'exception',
+        attendance_status: participant.attendance_status ?? null,
+      });
       console.warn(
         `[Attendance Fase 3.5] initial notify error partido=${matchId} user=${participant.user_id}:`,
         err?.message ?? err,
@@ -339,7 +422,7 @@ export async function notifyInitialAttendancePendingParticipants(supabaseAdmin, 
     }
   }
 
-  if (results.notified > 0 || results.errors > 0) {
+  if (results.notified > 0 || results.errors > 0 || results.skipped > 0) {
     console.log(
       `[Attendance Fase 3.5] initial notifications partido=${matchId} notified=${results.notified} skipped=${results.skipped} duplicates=${results.duplicates} errors=${results.errors}`,
     );
