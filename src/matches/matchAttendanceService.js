@@ -26,9 +26,18 @@ import {
   getEligibleParticipantsForRewards,
   listMatchParticipants,
 } from './matchParticipantsService.js';
+import { creditValidatedMatchPadcoins } from './matchRewardsService.js';
+import {
+  processCasualMatchRankingAfterResultConfirmed,
+  processCasualMatchRankingAfterScoreboardFinished,
+} from '../ranking/casualMatchRankingService.js';
+import { isScoreboardEstadoTerminado } from './scoreboardMatchRewardsService.js';
 
 export const PARTIDOS_ATTENDANCE_SELECT =
   'id, sede_id, capitan_user_id, attendance_collection_status, attendance_opened_at, attendance_deadline_at, attendance_resolved_at, attendance_resolution_reason, rewards_processed_at';
+
+export const PARTIDOS_ATTENDANCE_REWARDS_SELECT =
+  `${PARTIDOS_ATTENDANCE_SELECT}, estado, ganador, resultado, deporte, reserva_id, partido_torneo_id, torneo_id, equipos_asignacion`;
 
 export const PARTICIPANTS_ATTENDANCE_SELECT =
   'id, user_id, role, team, attendance_status, attendance_confirmed_at, attendance_requested_at, attendance_responded_at, attendance_response_source, attendance_denial_reason, reward_status';
@@ -1252,13 +1261,626 @@ export async function evaluateAttendanceCollectionState(supabaseAdmin, matchId, 
   };
 }
 
-function buildSubmitPlayerAttendanceResponsePayload(matchId, participant, partidoFields, summary) {
+const PADCOINS_ACCEPTABLE_SKIP_REASONS = new Set([
+  'reserva_ya_acreditada_legacy',
+  'sede_no_participa',
+  'estado_no_acreditable',
+  'reserva_no_acreditable',
+  'monto_cero',
+  'sin_shares',
+  'sin_reserva_vinculada',
+]);
+
+const PADCOINS_CREDIT_SOFT_REASONS = new Set([
+  'ya_acreditado_event',
+]);
+
+const RANKING_CREDIT_SOFT_REASONS = new Set([
+  'ya_acreditado_event',
+]);
+
+export function buildAttendanceRewardsResponse({
+  processed = false,
+  padcoins = { ok: false, reason: 'not_attempted' },
+  ranking = { ok: false, reason: 'not_attempted' },
+} = {}) {
+  return {
+    processed: processed === true,
+    padcoins: {
+      ok: padcoins.ok === true,
+      reason: padcoins.reason ?? null,
+    },
+    ranking: {
+      ok: ranking.ok === true,
+      reason: ranking.reason ?? null,
+    },
+  };
+}
+
+export function evaluatePadcoinsBranchResult(result = {}) {
+  if (result?.ok === false) {
+    return { ok: false, reason: result.reason ?? 'padcoins_failed' };
+  }
+
+  if (result.acreditado === true) {
+    return { ok: true, reason: 'credited' };
+  }
+
+  const credits = Array.isArray(result.credits) ? result.credits : [];
+  if (credits.length > 0) {
+    const hasHardFailure = credits.some(
+      (credit) => credit.acreditado !== true && !PADCOINS_CREDIT_SOFT_REASONS.has(credit.reason),
+    );
+    if (hasHardFailure) {
+      return { ok: false, reason: 'padcoins_credit_failed' };
+    }
+
+    const hasSuccess = credits.some((credit) => credit.acreditado === true);
+    const allDuplicate = credits.every((credit) => credit.reason === 'ya_acreditado_event');
+    if (hasSuccess || allDuplicate) {
+      return { ok: true, reason: hasSuccess ? 'credited' : 'already_credited' };
+    }
+
+    return { ok: false, reason: 'padcoins_not_credited' };
+  }
+
+  if (PADCOINS_ACCEPTABLE_SKIP_REASONS.has(result.reason)) {
+    return { ok: true, reason: result.reason };
+  }
+
+  if (result.reason === 'sin_participantes_elegibles') {
+    return { ok: false, reason: result.reason };
+  }
+
+  return { ok: false, reason: result.reason ?? 'padcoins_not_credited' };
+}
+
+export function evaluateRankingBranchResult(result = {}) {
+  if (result?.ok === false) {
+    return { ok: false, reason: result.reason ?? 'ranking_failed' };
+  }
+
+  if (result.skipped === true && result.reason === 'torneo_out_of_scope') {
+    return { ok: true, reason: result.reason };
+  }
+
+  if (result.acreditado === true) {
+    return { ok: true, reason: 'credited' };
+  }
+
+  const credits = Array.isArray(result.credits) ? result.credits : [];
+  if (credits.length > 0) {
+    const hasHardFailure = credits.some(
+      (credit) => credit.acreditado !== true && !RANKING_CREDIT_SOFT_REASONS.has(credit.reason),
+    );
+    if (hasHardFailure) {
+      const recoverable = credits.some((credit) => credit.recoverable === true);
+      return {
+        ok: false,
+        reason: recoverable ? 'ranking_recoverable_failure' : 'ranking_credit_failed',
+      };
+    }
+
+    const hasSuccess = credits.some((credit) => credit.acreditado === true);
+    const allDuplicate = credits.every((credit) => credit.reason === 'ya_acreditado_event');
+    if (hasSuccess || allDuplicate) {
+      return { ok: true, reason: hasSuccess ? 'credited' : 'already_credited' };
+    }
+
+    return { ok: false, reason: 'ranking_not_credited' };
+  }
+
+  if (result.reason === 'sin_resultado_claro' || result.reason === 'partido_no_finalizado') {
+    return { ok: false, reason: result.reason };
+  }
+
+  if (result.reason === 'sin_participantes_elegibles') {
+    return { ok: false, reason: result.reason };
+  }
+
+  return { ok: false, reason: result.reason ?? 'ranking_not_credited' };
+}
+
+async function fetchReservaForAttendanceRewards(supabaseAdmin, partido = {}) {
+  if (partido?.reserva_id != null) {
+    const { data, error } = await supabaseAdmin
+      .from('reservas')
+      .select('id, user_id, sede_id, sede, estado, fecha, hora, hora_fin, hora_inicio, partido_id, precio, precio_esperado, monto_pagado, moneda, pago_estado')
+      .eq('id', Number(partido.reserva_id))
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data) return data;
+  }
+
+  if (partido?.id == null) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('reservas')
+    .select('id, user_id, sede_id, sede, estado, fecha, hora, hora_fin, hora_inicio, partido_id, precio, precio_esperado, monto_pagado, moneda, pago_estado')
+    .eq('partido_id', partido.id)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data ?? null;
+}
+
+async function fetchTerminatedScoreboardForPartido(supabaseAdmin, partidoId) {
+  const normalizedPartidoId = Number(partidoId);
+  if (!Number.isFinite(normalizedPartidoId) || normalizedPartidoId <= 0) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('scoreboard_partidos')
+    .select('*')
+    .eq('partido_abierto_id', normalizedPartidoId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+  if (!isScoreboardEstadoTerminado(data.estado)) {
+    return null;
+  }
+
+  return data;
+}
+
+async function fetchPartidoForAttendanceRewards(supabaseAdmin, matchId) {
+  const normalizedMatchId = Number(matchId);
+  if (!Number.isFinite(normalizedMatchId) || normalizedMatchId <= 0) {
+    return { partido: null, schemaAttendanceColumnsAvailable: false };
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select(PARTIDOS_ATTENDANCE_REWARDS_SELECT)
+    .eq('id', normalizedMatchId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingMatchAttendanceColumnError(error)) {
+      return { partido: null, schemaAttendanceColumnsAvailable: false };
+    }
+    throw error;
+  }
+
+  return {
+    partido: data ?? null,
+    schemaAttendanceColumnsAvailable: true,
+  };
+}
+
+function isCasualMatchForAttendanceRewards(partido = {}) {
+  if (partido.partido_torneo_id != null || partido.torneo_id != null) {
+    return false;
+  }
+  return true;
+}
+
+async function blockReadyMatchForNoEligibleParticipants(supabaseAdmin, matchId, {
+  now = new Date(),
+} = {}) {
+  const resolvedAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const { data, error } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .update({
+      attendance_collection_status: MATCH_ATTENDANCE_COLLECTION_STATUS.BLOCKED,
+      attendance_resolution_reason: MATCH_ATTENDANCE_RESOLUTION_REASON.NO_ELIGIBLE_PARTICIPANTS,
+      attendance_resolved_at: resolvedAt,
+    })
+    .eq('id', Number(matchId))
+    .eq('attendance_collection_status', MATCH_ATTENDANCE_COLLECTION_STATUS.READY)
+    .select(PARTIDOS_ATTENDANCE_SELECT)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data ?? null;
+}
+
+async function markMatchAttendanceRewardsCredited(supabaseAdmin, matchId, partidoFields, {
+  now = new Date(),
+} = {}) {
+  const processedAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const updatePayload = {
+    attendance_collection_status: MATCH_ATTENDANCE_COLLECTION_STATUS.CREDITED,
+    rewards_processed_at: processedAt,
+  };
+
+  if (!partidoFields?.resolved_at) {
+    updatePayload.attendance_resolved_at = processedAt;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .update(updatePayload)
+    .eq('id', Number(matchId))
+    .eq('attendance_collection_status', MATCH_ATTENDANCE_COLLECTION_STATUS.READY)
+    .select(PARTIDOS_ATTENDANCE_SELECT)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (data) {
+    return {
+      credited: true,
+      idempotent: false,
+      partidoFields: normalizePartidoAttendanceFields(data, {
+        schemaAttendanceColumnsAvailable: true,
+      }),
+    };
+  }
+
+  const refreshed = await getMatchAttendanceState(supabaseAdmin, matchId);
+  const refreshedStatus = refreshed.partidoFields?.collection_status;
+  return {
+    credited: refreshedStatus === MATCH_ATTENDANCE_COLLECTION_STATUS.CREDITED,
+    idempotent: refreshedStatus === MATCH_ATTENDANCE_COLLECTION_STATUS.CREDITED,
+    partidoFields: refreshed.partidoFields ?? partidoFields,
+  };
+}
+
+async function processRankingForAttendanceRewards(supabaseAdmin, {
+  partido,
+  reservaId = null,
+  scoreboard = null,
+  deps = {},
+} = {}) {
+  const rankingAfterScoreboard = deps.processCasualMatchRankingAfterScoreboardFinished
+    ?? processCasualMatchRankingAfterScoreboardFinished;
+  const rankingAfterManual = deps.processCasualMatchRankingAfterResultConfirmed
+    ?? processCasualMatchRankingAfterResultConfirmed;
+
+  if (scoreboard) {
+    return rankingAfterScoreboard(supabaseAdmin, {
+      scoreboard,
+      partidoId: partido.id,
+      reservaId,
+    });
+  }
+
+  return rankingAfterManual(supabaseAdmin, partido.id, {
+    partido,
+    reservaId,
+  });
+}
+
+/**
+ * Orquestador Fase 3.3: acredita PadCoins + Ranking cuando la ventana queda ready.
+ */
+export async function tryFinalizeMatchAttendanceRewards(supabaseAdmin, matchId, options = {}) {
+  const {
+    now = new Date(),
+    scoreboard: scoreboardInput = null,
+    deps = {},
+  } = options;
+
+  const state = await getMatchAttendanceState(supabaseAdmin, matchId);
+  if (!state.ok) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: state.reason ?? 'partido_no_encontrado',
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: state.reason ?? 'partido_no_encontrado' },
+        ranking: { ok: false, reason: state.reason ?? 'partido_no_encontrado' },
+      }),
+    };
+  }
+
+  const { partidoFields, participants, summary } = state;
+
+  if (partidoFields.schema_attendance_columns_available !== true) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'schema_missing',
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: 'schema_missing' },
+        ranking: { ok: false, reason: 'schema_missing' },
+      }),
+    };
+  }
+
+  if (!partidoFields.feature_enabled) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'feature_disabled',
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: 'feature_disabled' },
+        ranking: { ok: false, reason: 'feature_disabled' },
+      }),
+    };
+  }
+
+  const { partido: rewardsPartido } = await fetchPartidoForAttendanceRewards(supabaseAdmin, matchId);
+  if (!rewardsPartido) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'partido_no_encontrado',
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: 'partido_no_encontrado' },
+        ranking: { ok: false, reason: 'partido_no_encontrado' },
+      }),
+    };
+  }
+
+  if (!isCasualMatchForAttendanceRewards(rewardsPartido)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'torneo_out_of_scope',
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: 'torneo_out_of_scope' },
+        ranking: { ok: false, reason: 'torneo_out_of_scope' },
+      }),
+    };
+  }
+
+  if (String(rewardsPartido.estado ?? '').trim().toLowerCase() === 'cancelado') {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'partido_cancelado',
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: 'partido_cancelado' },
+        ranking: { ok: false, reason: 'partido_cancelado' },
+      }),
+    };
+  }
+
+  if (partidoFields.collection_status === MATCH_ATTENDANCE_COLLECTION_STATUS.CREDITED
+    || partidoFields.rewards_processed_at) {
+    return {
+      ok: true,
+      skipped: true,
+      idempotent: true,
+      reason: 'already_credited',
+      partidoFields,
+      summary,
+      rewards: buildAttendanceRewardsResponse({
+        processed: true,
+        padcoins: { ok: true, reason: 'already_credited' },
+        ranking: { ok: true, reason: 'already_credited' },
+      }),
+    };
+  }
+
+  if (partidoFields.collection_status === MATCH_ATTENDANCE_COLLECTION_STATUS.BLOCKED) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'blocked',
+      partidoFields,
+      summary,
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: 'blocked' },
+        ranking: { ok: false, reason: 'blocked' },
+      }),
+    };
+  }
+
+  if (partidoFields.collection_status !== MATCH_ATTENDANCE_COLLECTION_STATUS.READY) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'not_ready',
+      partidoFields,
+      summary,
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: 'not_ready' },
+        ranking: { ok: false, reason: 'not_ready' },
+      }),
+    };
+  }
+
+  const eligibleParticipants = getEligibleParticipantsForRewards(participants);
+  if (!eligibleParticipants.length) {
+    const blockedPartido = await blockReadyMatchForNoEligibleParticipants(supabaseAdmin, matchId, { now });
+    const refreshed = blockedPartido
+      ? normalizePartidoAttendanceFields(blockedPartido, { schemaAttendanceColumnsAvailable: true })
+      : partidoFields;
+
+    return {
+      ok: true,
+      blocked: true,
+      reason: MATCH_ATTENDANCE_RESOLUTION_REASON.NO_ELIGIBLE_PARTICIPANTS,
+      partidoFields: refreshed,
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: MATCH_ATTENDANCE_RESOLUTION_REASON.NO_ELIGIBLE_PARTICIPANTS },
+        ranking: { ok: false, reason: MATCH_ATTENDANCE_RESOLUTION_REASON.NO_ELIGIBLE_PARTICIPANTS },
+      }),
+    };
+  }
+
+  const refreshedState = await getMatchAttendanceState(supabaseAdmin, matchId);
+  if (refreshedState.ok) {
+    const refreshedStatus = refreshedState.partidoFields.collection_status;
+    if (refreshedStatus !== MATCH_ATTENDANCE_COLLECTION_STATUS.READY) {
+      if (refreshedStatus === MATCH_ATTENDANCE_COLLECTION_STATUS.CREDITED
+        || refreshedState.partidoFields.rewards_processed_at) {
+        return {
+          ok: true,
+          skipped: true,
+          idempotent: true,
+          reason: 'already_credited',
+          partidoFields: refreshedState.partidoFields,
+          summary: refreshedState.summary,
+          rewards: buildAttendanceRewardsResponse({
+            processed: true,
+            padcoins: { ok: true, reason: 'already_credited' },
+            ranking: { ok: true, reason: 'already_credited' },
+          }),
+        };
+      }
+
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'state_changed',
+        partidoFields: refreshedState.partidoFields,
+        summary: refreshedState.summary,
+        rewards: buildAttendanceRewardsResponse({
+          padcoins: { ok: false, reason: 'state_changed' },
+          ranking: { ok: false, reason: 'state_changed' },
+        }),
+      };
+    }
+
+    if (String(refreshedState.partido?.estado ?? rewardsPartido.estado ?? '').trim().toLowerCase() === 'cancelado') {
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'partido_cancelado',
+        partidoFields: refreshedState.partidoFields,
+        summary: refreshedState.summary,
+        rewards: buildAttendanceRewardsResponse({
+          padcoins: { ok: false, reason: 'partido_cancelado' },
+          ranking: { ok: false, reason: 'partido_cancelado' },
+        }),
+      };
+    }
+  }
+
+  const fetchReserva = deps.fetchReservaForPartido ?? fetchReservaForAttendanceRewards;
+  const reserva = await fetchReserva(supabaseAdmin, rewardsPartido);
+
+  const fetchScoreboard = deps.fetchTerminatedScoreboardForPartido ?? fetchTerminatedScoreboardForPartido;
+  const scoreboard = scoreboardInput ?? await fetchScoreboard(supabaseAdmin, matchId);
+
+  const creditPadcoins = deps.creditValidatedMatchPadcoins ?? creditValidatedMatchPadcoins;
+
+  let padcoinsRaw = { ok: true, acreditado: false, reason: 'sin_reserva_vinculada' };
+  if (reserva?.id) {
+    try {
+      padcoinsRaw = await creditPadcoins(supabaseAdmin, {
+        matchId: normalizeMatchId(matchId),
+        reserva,
+        organizerUserId: reserva.user_id,
+      });
+    } catch (err) {
+      console.error(
+        `[Attendance Fase 3.3] PadCoins error partido=${matchId}:`,
+        err?.message ?? err,
+      );
+      padcoinsRaw = { ok: false, reason: 'padcoins_exception' };
+    }
+  }
+
+  let rankingRaw = { ok: true, acreditado: false, reason: 'ranking_not_attempted' };
+  try {
+    rankingRaw = await processRankingForAttendanceRewards(supabaseAdmin, {
+      partido: rewardsPartido,
+      reservaId: reserva?.id ?? rewardsPartido.reserva_id ?? null,
+      scoreboard,
+      deps,
+    });
+  } catch (err) {
+    console.error(
+      `[Attendance Fase 3.3] Ranking error partido=${matchId}:`,
+      err?.message ?? err,
+    );
+    rankingRaw = { ok: false, reason: 'ranking_exception' };
+  }
+
+  const padcoinsEval = evaluatePadcoinsBranchResult(padcoinsRaw);
+  const rankingEval = evaluateRankingBranchResult(rankingRaw);
+  const rewards = buildAttendanceRewardsResponse({
+    processed: padcoinsEval.ok && rankingEval.ok,
+    padcoins: padcoinsEval,
+    ranking: rankingEval,
+  });
+
+  if (!padcoinsEval.ok || !rankingEval.ok) {
+    console.warn(
+      `[Attendance Fase 3.3] partial failure partido=${matchId} padcoins=${padcoinsEval.reason} ranking=${rankingEval.reason}`,
+    );
+    return {
+      ok: true,
+      credited: false,
+      partidoFields: refreshedState.ok ? refreshedState.partidoFields : partidoFields,
+      summary: refreshedState.ok ? refreshedState.summary : summary,
+      eligible_count: eligibleParticipants.length,
+      rewards,
+    };
+  }
+
+  const markResult = await markMatchAttendanceRewardsCredited(
+    supabaseAdmin,
+    matchId,
+    refreshedState.ok ? refreshedState.partidoFields : partidoFields,
+    { now },
+  );
+
+  const finalState = await getMatchAttendanceState(supabaseAdmin, matchId);
+
+  console.log(
+    `[Attendance Fase 3.3] credited partido=${matchId} eligible=${eligibleParticipants.length} idempotent=${markResult.idempotent === true}`,
+  );
+
+  return {
+    ok: true,
+    credited: markResult.credited === true,
+    idempotent: markResult.idempotent === true,
+    partidoFields: finalState.ok ? finalState.partidoFields : markResult.partidoFields,
+    summary: finalState.ok ? finalState.summary : summary,
+    eligible_count: eligibleParticipants.length,
+    rewards: buildAttendanceRewardsResponse({
+      processed: markResult.credited === true,
+      padcoins: padcoinsEval,
+      ranking: rankingEval,
+    }),
+  };
+}
+
+async function maybeFinalizeRewardsAfterAttendanceEvaluation(supabaseAdmin, matchId, partidoFields, {
+  now = new Date(),
+  deps = {},
+} = {}) {
+  if (partidoFields.collection_status !== MATCH_ATTENDANCE_COLLECTION_STATUS.READY) {
+    return {
+      partidoFields,
+      summary: null,
+      rewards: buildAttendanceRewardsResponse({
+        padcoins: { ok: false, reason: 'not_ready' },
+        ranking: { ok: false, reason: 'not_ready' },
+      }),
+    };
+  }
+
+  const finalizeResult = await tryFinalizeMatchAttendanceRewards(supabaseAdmin, matchId, {
+    now,
+    deps,
+  });
+
+  const refreshed = await getMatchAttendanceState(supabaseAdmin, matchId);
+  return {
+    partidoFields: refreshed.ok ? refreshed.partidoFields : (finalizeResult.partidoFields ?? partidoFields),
+    summary: refreshed.ok ? refreshed.summary : finalizeResult.summary,
+    rewards: finalizeResult.rewards,
+  };
+}
+
+function buildSubmitPlayerAttendanceResponsePayload(matchId, participant, partidoFields, summary, {
+  rewards = null,
+  idempotent = false,
+} = {}) {
   const playerFields = normalizeParticipantAttendanceFields(participant);
+  const rewardsBlock = rewards ?? buildAttendanceRewardsResponse({
+    padcoins: { ok: false, reason: 'not_attempted' },
+    ranking: { ok: false, reason: 'not_attempted' },
+  });
 
   return {
     ok: true,
     match_id: Number(matchId),
-    idempotent: false,
+    idempotent,
     player: {
       attendance_status: playerFields.attendance_status,
       attendance_responded_at: playerFields.attendance_responded_at,
@@ -1270,6 +1892,7 @@ function buildSubmitPlayerAttendanceResponsePayload(matchId, participant, partid
       deadline_at: partidoFields.deadline_at,
       resolved_at: partidoFields.resolved_at,
       resolution_reason: partidoFields.resolution_reason,
+      rewards_processed_at: partidoFields.rewards_processed_at,
     },
     summary: {
       total_participants: summary.total_participants,
@@ -1280,11 +1903,13 @@ function buildSubmitPlayerAttendanceResponsePayload(matchId, participant, partid
       excluded: summary.excluded,
       eligible: summary.eligible,
     },
+    rewards: rewardsBlock,
   };
 }
 
 export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, userId, body = {}, {
   now = new Date(),
+  deps = {},
 } = {}) {
   if (!isValidUserId(userId)) {
     return { ok: false, httpStatus: 400, reason: 'invalid_user_id' };
@@ -1345,13 +1970,20 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
 
   if (isSamePlayerAttendanceResponse(participant, parsed.targetStatus, parsed.denialReason)) {
     const state = await getMatchAttendanceState(supabaseAdmin, matchId);
+    const finalize = await maybeFinalizeRewardsAfterAttendanceEvaluation(
+      supabaseAdmin,
+      matchId,
+      state.partidoFields,
+      { now, deps },
+    );
     const payload = buildSubmitPlayerAttendanceResponsePayload(
       matchId,
       participant,
-      state.partidoFields,
-      state.summary,
+      finalize.partidoFields ?? state.partidoFields,
+      finalize.summary ?? state.summary,
+      { rewards: finalize.rewards, idempotent: true },
     );
-    return { ...payload, idempotent: true };
+    return payload;
   }
 
   const updatePayload = buildPlayerAttendanceUpdatePayload(parsed.targetStatus, {
@@ -1385,13 +2017,20 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
 
     if (refetched && isSamePlayerAttendanceResponse(refetched, parsed.targetStatus, parsed.denialReason)) {
       const state = await getMatchAttendanceState(supabaseAdmin, matchId);
+      const finalize = await maybeFinalizeRewardsAfterAttendanceEvaluation(
+        supabaseAdmin,
+        matchId,
+        state.partidoFields,
+        { now, deps },
+      );
       const payload = buildSubmitPlayerAttendanceResponsePayload(
         matchId,
         refetched,
-        state.partidoFields,
-        state.summary,
+        finalize.partidoFields ?? state.partidoFields,
+        finalize.summary ?? state.summary,
+        { rewards: finalize.rewards, idempotent: true },
       );
-      return { ...payload, idempotent: true };
+      return payload;
     }
 
     return { ok: false, httpStatus: 409, reason: 'concurrent_update_conflict' };
@@ -1404,11 +2043,19 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
     (await fetchParticipantsForAttendance(supabaseAdmin, matchId)).participants,
   );
 
+  const finalize = await maybeFinalizeRewardsAfterAttendanceEvaluation(
+    supabaseAdmin,
+    matchId,
+    partidoFieldsAfter,
+    { now, deps },
+  );
+
   return buildSubmitPlayerAttendanceResponsePayload(
     matchId,
     updatedParticipant,
-    partidoFieldsAfter,
-    summaryAfter,
+    finalize.partidoFields ?? partidoFieldsAfter,
+    finalize.summary ?? summaryAfter,
+    { rewards: finalize.rewards },
   );
 }
 

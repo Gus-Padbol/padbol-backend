@@ -150,6 +150,72 @@ Tras cada respuesta, con ventana `open`:
 
 No se marca `credited` ni se completa `rewards_processed_at` en Fase 3.2.
 
+## Fase 3.3 (orquestador de recompensas)
+
+| Incluido | Excluido |
+|----------|----------|
+| `tryFinalizeMatchAttendanceRewards` | Cron |
+| Acreditación PadCoins + Ranking tras `ready` | Notificaciones |
+| Transición `ready → credited` idempotente | Endpoints admin |
+| Bloque `rewards` en POST asistencia | Activación en producción |
+| Reproceso seguro ante fallos parciales | |
+
+### Orquestador central
+
+`tryFinalizeMatchAttendanceRewards(matchId, options)` en `matchAttendanceService.js`:
+
+1. Carga partido + resumen de asistencia.
+2. Verifica: casual, no torneo, no cancelado, flag ON, `attendance_collection_status = ready`, sin `rewards_processed_at`, al menos un elegible.
+3. Acredita PadCoins vía `creditValidatedMatchPadcoins` (sin modificar su lógica interna).
+4. Acredita Ranking vía `processCasualMatchRankingAfterResultConfirmed` o `processCasualMatchRankingAfterScoreboardFinished`.
+5. Si ambas ramas terminan OK → `credited` + `rewards_processed_at = now`.
+
+### Participantes elegibles
+
+Solo `confirmed` y `admin_validated` con `user_id` UUID válido. Excluye `pending`, `denied`, `excluded` y filas sin `user_id`. No se modifica `attendance_status` durante la acreditación.
+
+### Transición final
+
+| Resultado | Estado partido |
+|-----------|----------------|
+| PadCoins OK + Ranking OK | `credited`, `rewards_processed_at` completado |
+| Rama ya acreditada (ledger) | Rama exitosa; completa la otra si falta |
+| Fallo en una rama | Permanece `ready`; reproceso seguro |
+| 0 elegibles en `ready` | `blocked`, motivo `no_eligible_participants` |
+
+Se conservan `attendance_resolved_at` y `attendance_resolution_reason` existentes (p. ej. `all_responded`).
+
+### Idempotencia
+
+Soporta: llamadas repetidas, doble respuesta simultánea del último participante, PadCoins credited + Ranking pendiente (y viceversa), partido ya credited, eventos pending recuperables y reintentos tras error. Los ledgers (`match_reward_events`) son la fuente de verdad; no depende solo de `rewards_processed_at`.
+
+### Flag OFF vs ON
+
+| Flag | Comportamiento |
+|------|----------------|
+| **OFF** | POST devuelve 409; flujo legacy acredita inmediato al finalizar partido |
+| **ON** | No acredita antes de `ready`; tras última respuesta POST invoca orquestador automáticamente |
+
+### POST — bloque `rewards`
+
+Tras `evaluateAttendanceCollectionState`, si el partido queda `ready` se invoca el orquestador. Respuesta ampliada:
+
+```json
+{
+  "rewards": {
+    "processed": true,
+    "padcoins": { "ok": true, "reason": "credited" },
+    "ranking": { "ok": true, "reason": "credited" }
+  }
+}
+```
+
+- `processed: true` cuando ambas ramas OK y el partido quedó `credited`.
+- `processed: false` si sigue `ready`, falló alguna rama o no aplicaba acreditación.
+- No expone saldos ni datos sensibles de otros usuarios.
+
+El `match.collection_status` refleja el estado final (`ready` o `credited`).
+
 ## Columnas preparadas
 
 Ver [`docs/sql/match_attendance_phase3.sql`](./sql/match_attendance_phase3.sql).
@@ -175,5 +241,4 @@ Default: **apagado**.
 ## Próximas fases
 
 1. Notificaciones + cron de vencimiento.
-2. Acreditación PadCoins/Ranking tras ventana `ready`.
-3. Endpoints admin + overrides por sede.
+2. Endpoints admin + overrides por sede.
