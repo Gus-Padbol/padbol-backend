@@ -34,9 +34,13 @@ import {
 import {
   getEligibleParticipantsForRewards,
   listMatchParticipants,
+  markAttendance,
 } from './matchParticipantsService.js';
 import { notifyInitialAttendancePendingParticipants } from './matchAttendanceNotificationService.js';
-import { creditValidatedMatchPadcoins } from './matchRewardsService.js';
+import {
+  creditIndividualAttendancePadcoins,
+  creditValidatedMatchPadcoins,
+} from './matchRewardsService.js';
 import {
   processCasualMatchRankingAfterResultConfirmed,
   processCasualMatchRankingAfterScoreboardFinished,
@@ -1712,7 +1716,11 @@ const PADCOINS_ACCEPTABLE_SKIP_REASONS = new Set([
   'reserva_no_acreditable',
   'monto_cero',
   'sin_shares',
+  'sin_share',
   'sin_reserva_vinculada',
+  'already_credited_individually',
+  'denied',
+  'not_eligible',
 ]);
 
 const PADCOINS_CREDIT_SOFT_REASONS = new Set([
@@ -1728,16 +1736,136 @@ export function buildAttendanceRewardsResponse({
   padcoins = { ok: false, reason: 'not_attempted' },
   ranking = { ok: false, reason: 'not_attempted' },
 } = {}) {
+  const padcoinsAmount = Number(padcoins.amount ?? padcoins.padcoins ?? 0);
   return {
     processed: processed === true,
     padcoins: {
       ok: padcoins.ok === true,
+      processed: padcoins.processed === true,
+      credited: padcoins.credited === true || padcoins.acreditado === true,
+      amount: Number.isFinite(padcoinsAmount) ? padcoinsAmount : 0,
       reason: padcoins.reason ?? null,
     },
     ranking: {
       ok: ranking.ok === true,
+      pending: ranking.pending === true,
       reason: ranking.reason ?? null,
     },
+  };
+}
+
+export function buildSubmitPlayerAttendanceRewards({
+  individualPadcoins = null,
+  globalRewards = null,
+  partidoFields = {},
+} = {}) {
+  const collectionStatus = normalizeAttendanceCollectionStatus(
+    partidoFields?.collection_status,
+    MATCH_ATTENDANCE_COLLECTION_STATUS.NONE,
+  );
+  const rankingPending = collectionStatus !== MATCH_ATTENDANCE_COLLECTION_STATUS.CREDITED
+    && collectionStatus !== MATCH_ATTENDANCE_COLLECTION_STATUS.BLOCKED;
+
+  const padcoinsProcessed = individualPadcoins?.processed === true
+    || individualPadcoins?.reason === 'denied'
+    || individualPadcoins?.reason === 'ya_acreditado_event';
+  const padcoinsCredited = individualPadcoins?.acreditado === true;
+  const padcoinsAmount = padcoinsCredited
+    ? Number(individualPadcoins?.amount ?? individualPadcoins?.padcoins ?? 0)
+    : 0;
+
+  let padcoinsReason = individualPadcoins?.reason ?? 'not_attempted';
+  if (padcoinsCredited) {
+    padcoinsReason = 'credited';
+  } else if (individualPadcoins?.reason === 'ya_acreditado_event') {
+    padcoinsReason = 'already_credited';
+  }
+
+  const padcoinsOk = padcoinsCredited
+    || individualPadcoins?.reason === 'ya_acreditado_event'
+    || PADCOINS_ACCEPTABLE_SKIP_REASONS.has(individualPadcoins?.reason);
+
+  const globalRanking = globalRewards?.ranking ?? {};
+  const rankingOk = !rankingPending && globalRanking.ok === true;
+
+  return {
+    processed: globalRewards?.processed === true,
+    padcoins: {
+      ok: padcoinsOk === true,
+      processed: padcoinsProcessed === true,
+      credited: padcoinsCredited,
+      amount: padcoinsAmount,
+      reason: padcoinsReason,
+    },
+    ranking: {
+      ok: rankingOk,
+      pending: rankingPending,
+      reason: rankingPending
+        ? 'pending_global_close'
+        : (globalRanking.reason ?? null),
+    },
+  };
+}
+
+async function applyIndividualAttendanceRewardsOnResponse(supabaseAdmin, matchId, userId, targetStatus, partido, {
+  deps = {},
+} = {}) {
+  if (targetStatus === MATCH_ATTENDANCE_STATUS.DENIED) {
+    await markAttendance(supabaseAdmin, {
+      matchId,
+      userId,
+      attendanceStatus: MATCH_ATTENDANCE_STATUS.DENIED,
+      rewardStatus: MATCH_REWARD_STATUS.SKIPPED,
+    }).catch(() => null);
+
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      credited: false,
+      reason: 'denied',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  if (targetStatus !== MATCH_ATTENDANCE_STATUS.CONFIRMED) {
+    return {
+      ok: true,
+      processed: false,
+      acreditado: false,
+      credited: false,
+      reason: 'not_attempted',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  const fetchReserva = deps.fetchReservaForPartido ?? fetchReservaForAttendanceRewards;
+  const reserva = await fetchReserva(supabaseAdmin, partido);
+  if (!reserva?.id) {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      credited: false,
+      reason: 'sin_reserva_vinculada',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  const creditFn = deps.creditIndividualAttendancePadcoins ?? creditIndividualAttendancePadcoins;
+  const result = await creditFn(supabaseAdmin, {
+    matchId,
+    userId,
+    reserva,
+    organizerUserId: reserva.user_id,
+  });
+
+  return {
+    ...result,
+    credited: result.acreditado === true,
   };
 }
 
@@ -2213,6 +2341,18 @@ export async function tryFinalizeMatchAttendanceRewards(supabaseAdmin, matchId, 
       );
       padcoinsRaw = { ok: false, reason: 'padcoins_exception' };
     }
+
+    const credits = Array.isArray(padcoinsRaw.credits) ? padcoinsRaw.credits : [];
+    const allIndividuallyCredited = credits.length > 0
+      && credits.every((credit) => credit.reason === 'ya_acreditado_event');
+    if (allIndividuallyCredited && !padcoinsRaw.acreditado) {
+      padcoinsRaw = {
+        ...padcoinsRaw,
+        ok: true,
+        acreditado: true,
+        reason: 'already_credited_individually',
+      };
+    }
   }
 
   let rankingRaw = { ok: true, acreditado: false, reason: 'ranking_not_attempted' };
@@ -2290,8 +2430,8 @@ export async function maybeFinalizeRewardsAfterAttendanceEvaluation(supabaseAdmi
       partidoFields,
       summary: null,
       rewards: buildAttendanceRewardsResponse({
-        padcoins: { ok: false, reason: 'not_ready' },
-        ranking: { ok: false, reason: 'not_ready' },
+        padcoins: { ok: false, processed: false, reason: 'not_ready' },
+        ranking: { ok: false, pending: true, reason: 'pending_global_close' },
       }),
     };
   }
@@ -2303,21 +2443,42 @@ export async function maybeFinalizeRewardsAfterAttendanceEvaluation(supabaseAdmi
   });
 
   const refreshed = await getMatchAttendanceState(supabaseAdmin, matchId);
+  const refreshedFields = refreshed.ok ? refreshed.partidoFields : (finalizeResult.partidoFields ?? partidoFields);
+  const rankingPending = refreshedFields.collection_status !== MATCH_ATTENDANCE_COLLECTION_STATUS.CREDITED;
+
   return {
-    partidoFields: refreshed.ok ? refreshed.partidoFields : (finalizeResult.partidoFields ?? partidoFields),
+    partidoFields: refreshedFields,
     summary: refreshed.ok ? refreshed.summary : finalizeResult.summary,
-    rewards: finalizeResult.rewards,
+    rewards: buildAttendanceRewardsResponse({
+      processed: finalizeResult.rewards?.processed === true,
+      padcoins: {
+        ok: finalizeResult.rewards?.padcoins?.ok === true,
+        processed: false,
+        credited: false,
+        amount: 0,
+        reason: 'credited_on_confirm',
+      },
+      ranking: {
+        ok: finalizeResult.rewards?.ranking?.ok === true,
+        pending: rankingPending,
+        reason: rankingPending
+          ? 'pending_global_close'
+          : (finalizeResult.rewards?.ranking?.reason ?? null),
+      },
+    }),
   };
 }
 
 function buildSubmitPlayerAttendanceResponsePayload(matchId, participant, partidoFields, summary, {
-  rewards = null,
+  individualPadcoins = null,
+  globalRewards = null,
   idempotent = false,
 } = {}) {
   const playerFields = normalizeParticipantAttendanceFields(participant);
-  const rewardsBlock = rewards ?? buildAttendanceRewardsResponse({
-    padcoins: { ok: false, reason: 'not_attempted' },
-    ranking: { ok: false, reason: 'not_attempted' },
+  const rewardsBlock = buildSubmitPlayerAttendanceRewards({
+    individualPadcoins,
+    globalRewards,
+    partidoFields,
   });
 
   return {
@@ -2329,6 +2490,7 @@ function buildSubmitPlayerAttendanceResponsePayload(matchId, participant, partid
       attendance_responded_at: playerFields.attendance_responded_at,
       attendance_response_source: playerFields.attendance_response_source,
       attendance_denial_reason: playerFields.attendance_denial_reason,
+      reward_status: playerFields.reward_status,
     },
     match: {
       collection_status: partidoFields.collection_status,
@@ -2347,6 +2509,8 @@ function buildSubmitPlayerAttendanceResponsePayload(matchId, participant, partid
       eligible: summary.eligible,
     },
     rewards: rewardsBlock,
+    padcoins: rewardsBlock.padcoins,
+    ranking: rewardsBlock.ranking,
   };
 }
 
@@ -2419,6 +2583,14 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
   }
 
   if (isSamePlayerAttendanceResponse(participant, parsed.targetStatus, parsed.denialReason)) {
+    const individualPadcoins = await applyIndividualAttendanceRewardsOnResponse(
+      supabaseAdmin,
+      matchId,
+      userId,
+      parsed.targetStatus,
+      partido,
+      { deps },
+    );
     const state = await getMatchAttendanceState(supabaseAdmin, matchId);
     const finalize = await maybeFinalizeRewardsAfterAttendanceEvaluation(
       supabaseAdmin,
@@ -2426,14 +2598,13 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
       state.partidoFields,
       { now, deps },
     );
-    const payload = buildSubmitPlayerAttendanceResponsePayload(
+    return buildSubmitPlayerAttendanceResponsePayload(
       matchId,
       participant,
       finalize.partidoFields ?? state.partidoFields,
       finalize.summary ?? state.summary,
-      { rewards: finalize.rewards, idempotent: true },
+      { individualPadcoins, globalRewards: finalize.rewards, idempotent: true },
     );
-    return payload;
   }
 
   const updatePayload = buildPlayerAttendanceUpdatePayload(parsed.targetStatus, {
@@ -2466,6 +2637,14 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
       .maybeSingle();
 
     if (refetched && isSamePlayerAttendanceResponse(refetched, parsed.targetStatus, parsed.denialReason)) {
+      const individualPadcoins = await applyIndividualAttendanceRewardsOnResponse(
+        supabaseAdmin,
+        matchId,
+        userId,
+        parsed.targetStatus,
+        partido,
+        { deps },
+      );
       const state = await getMatchAttendanceState(supabaseAdmin, matchId);
       const finalize = await maybeFinalizeRewardsAfterAttendanceEvaluation(
         supabaseAdmin,
@@ -2473,18 +2652,26 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
         state.partidoFields,
         { now, deps },
       );
-      const payload = buildSubmitPlayerAttendanceResponsePayload(
+      return buildSubmitPlayerAttendanceResponsePayload(
         matchId,
         refetched,
         finalize.partidoFields ?? state.partidoFields,
         finalize.summary ?? state.summary,
-        { rewards: finalize.rewards, idempotent: true },
+        { individualPadcoins, globalRewards: finalize.rewards, idempotent: true },
       );
-      return payload;
     }
 
     return { ok: false, httpStatus: 409, reason: 'concurrent_update_conflict' };
   }
+
+  const individualPadcoins = await applyIndividualAttendanceRewardsOnResponse(
+    supabaseAdmin,
+    matchId,
+    userId,
+    parsed.targetStatus,
+    partido,
+    { deps },
+  );
 
   const evaluation = await evaluateAttendanceCollectionState(supabaseAdmin, matchId, { now });
   const partidoFieldsAfter = evaluation.partidoFields ?? partidoFields;
@@ -2505,7 +2692,7 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
     updatedParticipant,
     finalize.partidoFields ?? partidoFieldsAfter,
     finalize.summary ?? summaryAfter,
-    { rewards: finalize.rewards },
+    { individualPadcoins, globalRewards: finalize.rewards },
   );
 }
 

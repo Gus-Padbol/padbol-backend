@@ -83,6 +83,29 @@ export function buildMatchOrganizerBonusSourceKey(matchType, matchId, userId) {
   return `user|match|${matchType}|${matchId}|padcoins|organizer_bonus|${userId}`;
 }
 
+/** Idempotencia PadCoins inmediatos al confirmar asistencia (Fase 3.7). */
+export function buildAttendanceParticipantPadcoinsSourceKey(matchId, userId) {
+  const mid = normalizeMatchId(matchId);
+  const uid = String(userId ?? '').trim();
+  return `attendance|match|${mid}|user|${uid}|padcoins`;
+}
+
+/**
+ * Participantes que aún pueden recibir PadCoins para calcular shares al confirmar.
+ * Excluye denied/excluded; incluye pending para reparto estable mientras la ventana está open.
+ */
+export function getParticipantsForPadcoinsShareProjection(participants = []) {
+  return (participants ?? []).filter((participant) => {
+    if (!isValidUserId(participant?.user_id)) {
+      return false;
+    }
+    const status = String(participant?.attendance_status ?? '').trim();
+    return status === MATCH_ATTENDANCE_STATUS.PENDING
+      || status === MATCH_ATTENDANCE_STATUS.CONFIRMED
+      || status === MATCH_ATTENDANCE_STATUS.ADMIN_VALIDATED;
+  });
+}
+
 export function buildMatchPadcoinsReferenciaId(matchId, userId, kind = 'participant') {
   return `${matchId}:${kind}:${userId}`;
 }
@@ -378,6 +401,7 @@ async function creditSingleMatchPadcoinsShare(supabaseAdmin, {
   reserva,
   sedeId,
   poolMeta,
+  sourceKeyOverride = null,
 } = {}) {
   const userId = share.userId;
   const amount = share.amount;
@@ -388,13 +412,13 @@ async function creditSingleMatchPadcoinsShare(supabaseAdmin, {
   const participantSourceKey = buildMatchParticipantPadcoinsSourceKey(matchType, matchId, userId);
   const bonusSourceKey = buildMatchOrganizerBonusSourceKey(matchType, matchId, userId);
 
-  let sourceKey = participantSourceKey;
+  let sourceKey = sourceKeyOverride ?? participantSourceKey;
   let referenciaKind = 'participant';
 
-  if (share.kind === 'organizer_only') {
+  if (!sourceKeyOverride && share.kind === 'organizer_only') {
     sourceKey = buildReservationOrganizerSourceKey(reservaId);
     referenciaKind = 'organizer';
-  } else if (isOrganizerBonus && share.kind === 'organizer_bonus') {
+  } else if (!sourceKeyOverride && isOrganizerBonus && share.kind === 'organizer_bonus') {
     sourceKey = bonusSourceKey;
     referenciaKind = 'organizer_bonus';
   }
@@ -497,6 +521,223 @@ async function creditSingleMatchPadcoinsShare(supabaseAdmin, {
 }
 
 /**
+ * Acredita PadCoins de un participante al confirmar asistencia (inmediato, idempotente).
+ * No procesa Ranking.
+ */
+export async function creditIndividualAttendancePadcoins(supabaseAdmin, {
+  matchType = MATCH_TYPES.CASUAL,
+  matchId,
+  userId,
+  reserva,
+  organizerUserId = null,
+  participants = null,
+  reservationConfig = null,
+  campaign = null,
+  now = undefined,
+} = {}) {
+  const normalizedMatchId = normalizeMatchId(matchId);
+  const normalizedUserId = String(userId ?? '').trim();
+
+  if (!normalizedMatchId || !isValidUserId(normalizedUserId)) {
+    return {
+      ok: false,
+      processed: true,
+      acreditado: false,
+      reason: 'invalid_payload',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  const sourceKey = buildAttendanceParticipantPadcoinsSourceKey(normalizedMatchId, normalizedUserId);
+  const duplicateCheck = await preventDuplicateRewardBySourceKey(supabaseAdmin, sourceKey);
+  if (duplicateCheck.duplicate && duplicateCheck.event?.status === MATCH_REWARD_EVENT_STATUS.CREDITED) {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: 'ya_acreditado_event',
+      padcoins: Number(duplicateCheck.event?.amount ?? 0),
+      amount: Number(duplicateCheck.event?.amount ?? 0),
+      sourceKey,
+      event: duplicateCheck.event,
+    };
+  }
+
+  const reservaId = reserva?.id;
+  if (!reservaId || !isValidUserId(reserva?.user_id)) {
+    return {
+      ok: false,
+      processed: true,
+      acreditado: false,
+      reason: 'invalid_match_or_reserva',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  if (isReservaCancelada(reserva) || isReservaNoShow(reserva)) {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: 'reserva_no_acreditable',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  if (!isReservaEstadoAcreditable(reserva.estado) && reserva.estado !== 'confirmada') {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: 'estado_no_acreditable',
+      estado: reserva.estado,
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  const sedeId = Number.parseInt(String(reserva.sede_id ?? ''), 10);
+  if (!Number.isFinite(sedeId) || sedeId <= 0) {
+    return {
+      ok: false,
+      processed: true,
+      acreditado: false,
+      reason: 'sede_id_invalido',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  const sedeActiva = await isPadcoinsActiveForSede(supabaseAdmin, sedeId);
+  if (!sedeActiva) {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: 'sede_no_participa',
+      sede_id: sedeId,
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  if (await yaFueAcreditadaReserva(supabaseAdmin, reservaId)) {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: 'reserva_ya_acreditada_legacy',
+      reserva_id: reservaId,
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  const allParticipants = participants ?? await listMatchParticipants(supabaseAdmin, {
+    matchType,
+    matchId: normalizedMatchId,
+  });
+
+  const participantRow = (allParticipants ?? []).find(
+    (row) => String(row.user_id) === normalizedUserId,
+  );
+  const participantStatus = String(participantRow?.attendance_status ?? '').trim();
+  if (
+    participantStatus !== MATCH_ATTENDANCE_STATUS.CONFIRMED
+    && participantStatus !== MATCH_ATTENDANCE_STATUS.ADMIN_VALIDATED
+  ) {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: 'not_eligible',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  const projection = getParticipantsForPadcoinsShareProjection(allParticipants);
+  if (!projection.some((row) => String(row.user_id) === normalizedUserId)) {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: 'not_in_projection',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  const pool = await computePadcoinsPoolForReserva(supabaseAdmin, reserva, {
+    reservationConfig,
+    campaign,
+    now,
+  });
+  if (!pool.ok || !pool.padcoins) {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: pool.reason ?? 'monto_cero',
+      padcoins: 0,
+      amount: 0,
+      pool,
+    };
+  }
+
+  const organizerId = organizerUserId ?? reserva.user_id;
+  const shares = splitMatchPadcoinsPool(pool.padcoins, projection, organizerId);
+  const share = shares.find((row) => String(row.userId) === normalizedUserId);
+  if (!share || share.amount <= 0) {
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: 'sin_share',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
+  const poolMeta = {
+    total: pool.padcoins,
+    method: pool.amountResult?.method ?? null,
+    eligible_count: projection.length,
+    individual_attendance: true,
+  };
+
+  const creditResult = await creditSingleMatchPadcoinsShare(supabaseAdmin, {
+    share,
+    matchType,
+    matchId: normalizedMatchId,
+    reservaId,
+    reserva,
+    sedeId,
+    poolMeta,
+    sourceKeyOverride: sourceKey,
+  });
+
+  const amount = creditResult.acreditado === true
+    ? (creditResult.padcoins ?? share.amount)
+    : 0;
+
+  return {
+    ok: true,
+    processed: true,
+    acreditado: creditResult.acreditado === true,
+    reason: creditResult.reason ?? (creditResult.acreditado ? 'credited' : 'not_credited'),
+    padcoins: amount,
+    amount,
+    sourceKey,
+    movimiento: creditResult.movimiento ?? null,
+    event: creditResult.event ?? null,
+  };
+}
+
+/**
  * Acredita PadCoins tras validación de partido (confirmación dual Fase 1).
  * No escribe ranking casual.
  */
@@ -576,6 +817,22 @@ export async function creditValidatedMatchPadcoins(supabaseAdmin, {
 
   const credits = [];
   for (const share of shares) {
+    const attendanceSourceKey = buildAttendanceParticipantPadcoinsSourceKey(
+      normalizedMatchId,
+      share.userId,
+    );
+    const attendanceDup = await preventDuplicateRewardBySourceKey(supabaseAdmin, attendanceSourceKey);
+    if (attendanceDup.duplicate && attendanceDup.event?.status === MATCH_REWARD_EVENT_STATUS.CREDITED) {
+      credits.push({
+        acreditado: false,
+        reason: 'ya_acreditado_event',
+        userId: share.userId,
+        sourceKey: attendanceSourceKey,
+        event: attendanceDup.event,
+      });
+      continue;
+    }
+
     const creditResult = await creditSingleMatchPadcoinsShare(supabaseAdmin, {
       share,
       matchType,
