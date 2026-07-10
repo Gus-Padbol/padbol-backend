@@ -337,17 +337,50 @@ export async function updatePlayerRanking(supabaseAdmin, {
   const nextPuntos = (Number(existing?.puntos) || 0) + rpDelta;
   const now = new Date().toISOString();
 
-  const { data, error } = await supabaseAdmin
-    .from('rankings_leaderboard')
-    .upsert({
-      user_id: userId,
-      deporte: normalizedDeporte,
-      nivel: normalizedNivel,
-      puntos: nextPuntos,
-      updated_at: now,
-    }, { onConflict: 'user_id,deporte,nivel' })
-    .select('id, puntos')
-    .single();
+  let data;
+  let error;
+
+  if (existing?.id != null) {
+    ({ data, error } = await supabaseAdmin
+      .from('rankings_leaderboard')
+      .update({ puntos: nextPuntos, updated_at: now })
+      .eq('id', existing.id)
+      .select('id, puntos')
+      .single());
+  } else {
+    ({ data, error } = await supabaseAdmin
+      .from('rankings_leaderboard')
+      .insert({
+        user_id: userId,
+        deporte: normalizedDeporte,
+        nivel: normalizedNivel,
+        puntos: nextPuntos,
+        updated_at: now,
+      })
+      .select('id, puntos')
+      .single());
+
+    if (error?.code === '23505') {
+      const { data: retryExisting, error: retryFetchErr } = await supabaseAdmin
+        .from('rankings_leaderboard')
+        .select('id, puntos')
+        .eq('user_id', userId)
+        .eq('deporte', normalizedDeporte)
+        .eq('nivel', normalizedNivel)
+        .maybeSingle();
+
+      if (retryFetchErr) throw retryFetchErr;
+      if (retryExisting?.id != null) {
+        const retryPuntos = (Number(retryExisting.puntos) || 0) + rpDelta;
+        ({ data, error } = await supabaseAdmin
+          .from('rankings_leaderboard')
+          .update({ puntos: retryPuntos, updated_at: now })
+          .eq('id', retryExisting.id)
+          .select('id, puntos')
+          .single());
+      }
+    }
+  }
 
   if (error) {
     if (isMissingRankingsLeaderboardTable(error)) {
