@@ -4,10 +4,10 @@ import {
   getMatchAttendanceFirstReminderHours,
   getMatchAttendanceReminderBatchSize,
   getMatchAttendanceSecondReminderHours,
-  isAttendanceConfirmationEnabledForMatch,
   isMatchAttendanceConfirmationEnabled,
   isMatchAttendanceRemindersEnabled,
 } from './matchAttendanceConfig.js';
+import { resolveAttendanceFeatureForPartido } from './matchAttendanceSedeConfigService.js';
 import {
   MATCH_ATTENDANCE_COLLECTION_STATUS,
   MATCH_ATTENDANCE_STATUS,
@@ -262,11 +262,12 @@ export async function notifyInitialAttendancePendingParticipants(supabaseAdmin, 
   participants = null,
   deps = {},
 } = {}) {
-  if (!isMatchAttendanceConfirmationEnabled()) {
-    return { ok: true, skipped: true, reason: 'feature_disabled', notified: 0 };
-  }
-
-  if (partido && !isAttendanceConfirmationEnabledForMatch(partido)) {
+  if (partido) {
+    const { featureEnabled } = await resolveAttendanceFeatureForPartido(supabaseAdmin, partido);
+    if (!featureEnabled) {
+      return { ok: true, skipped: true, reason: 'feature_disabled', notified: 0 };
+    }
+  } else if (!isMatchAttendanceConfirmationEnabled()) {
     return { ok: true, skipped: true, reason: 'feature_disabled', notified: 0 };
   }
 
@@ -349,7 +350,7 @@ export async function notifyInitialAttendancePendingParticipants(supabaseAdmin, 
 export async function fetchOpenPartidosForAttendanceReminders(supabaseAdmin, {
   limit = getMatchAttendanceReminderBatchSize(),
 } = {}) {
-  if (!isMatchAttendanceConfirmationEnabled() || !isMatchAttendanceRemindersEnabled()) {
+  if (!isMatchAttendanceRemindersEnabled()) {
     return [];
   }
 
@@ -402,10 +403,6 @@ export async function processAttendanceReminders(supabaseAdmin, options = {}) {
     errors: 0,
   };
 
-  if (!isMatchAttendanceConfirmationEnabled()) {
-    return { ...summary, cron_skipped: true, reason: 'feature_disabled' };
-  }
-
   if (!isMatchAttendanceRemindersEnabled()) {
     return { ...summary, cron_skipped: true, reason: 'reminders_disabled' };
   }
@@ -415,6 +412,11 @@ export async function processAttendanceReminders(supabaseAdmin, options = {}) {
   });
 
   for (const partido of partidos) {
+    const { featureEnabled } = await resolveAttendanceFeatureForPartido(supabaseAdmin, partido);
+    if (!featureEnabled) {
+      continue;
+    }
+
     if (!isAttendanceReminderDeadlineValid(partido.attendance_deadline_at, now)) {
       continue;
     }

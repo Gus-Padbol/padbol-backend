@@ -147,6 +147,7 @@ import { createArenaRouter } from './src/routes/arena.js';
 import { createRangosRouter } from './src/routes/rangos.js';
 import { createPadcoinsRouter, mountPadcoinsAdminRoutes } from './src/routes/padcoins.js';
 import { mountPadbolMatchSetupRoutes } from './src/routes/padbolMatchSetup.js';
+import { mountMatchAttendanceAdminRoutes } from './src/routes/matchAttendanceAdmin.js';
 import { mountPremiosCanjeablesRoutes } from './src/routes/premiosCanjeables.js';
 import { initReservasCron } from './src/cron/reservasCron.js';
 import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
@@ -2645,6 +2646,12 @@ mountPadcoinsAdminRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountPadbolMatchSetupRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountMatchAttendanceAdminRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,

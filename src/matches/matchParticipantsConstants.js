@@ -43,6 +43,7 @@ export const MATCH_ATTENDANCE_RESOLUTION_REASON = Object.freeze({
   ALL_RESPONDED: 'all_responded',
   TIMEOUT_PARTIAL: 'timeout_partial',
   NO_ELIGIBLE_PARTICIPANTS: 'no_eligible_participants',
+  ADMIN_OVERRIDE: 'admin_override',
 });
 
 export const ATTENDANCE_DENIAL_REASON_MAX_LENGTH = 280;

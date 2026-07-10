@@ -16,12 +16,31 @@ export function isMatchAttendanceConfirmationEnabled() {
 }
 
 /**
- * Preparado para configuración futura por sede.
- * Fase 3.0: solo el flag global habilita la confirmación.
+ * Resolución global + sede (Fase 3.6):
+ * - global ON → habilitado;
+ * - global OFF + sede ON → habilitado para esa sede;
+ * - ambos OFF → deshabilitado.
  */
-export function isAttendanceConfirmationEnabledForMatch(match = null) {
+export function resolveAttendanceConfirmationEnabled({
+  globalEnabled = isMatchAttendanceConfirmationEnabled(),
+  sedeEnabled = false,
+} = {}) {
+  if (globalEnabled === true) return true;
+  return sedeEnabled === true;
+}
+
+/**
+ * @param {object|null} match — partido con sede_id (opcional)
+ * @param {{ sedeEnabled?: boolean }} options — override explícito de sede
+ */
+export function isAttendanceConfirmationEnabledForMatch(match = null, { sedeEnabled = false } = {}) {
   void match;
-  return isMatchAttendanceConfirmationEnabled();
+  const effectiveSedeEnabled = sedeEnabled === true
+    || match?.attendance_confirmation_enabled_sede === true;
+  return resolveAttendanceConfirmationEnabled({
+    globalEnabled: isMatchAttendanceConfirmationEnabled(),
+    sedeEnabled: effectiveSedeEnabled,
+  });
 }
 
 /**

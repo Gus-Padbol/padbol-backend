@@ -4,6 +4,10 @@ import {
   isAttendanceConfirmationEnabledForMatch,
   isMatchAttendanceConfirmationEnabled,
 } from './matchAttendanceConfig.js';
+import {
+  getSedeAttendanceConfirmationEnabled,
+  resolveAttendanceFeatureForPartido,
+} from './matchAttendanceSedeConfigService.js';
 import { resolveAuthRoleForUser } from '../../lib/authAccess.js';
 import {
   isEquiposAsignacionValida,
@@ -80,7 +84,9 @@ function safeCount(value) {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-export function buildLegacyPartidoAttendanceFields(partido = {}) {
+export function buildLegacyPartidoAttendanceFields(partido = {}, {
+  sedeAttendanceConfirmationEnabled = false,
+} = {}) {
   return {
     match_id: Number(partido?.id) || null,
     collection_status: MATCH_ATTENDANCE_COLLECTION_STATUS.NONE,
@@ -90,15 +96,18 @@ export function buildLegacyPartidoAttendanceFields(partido = {}) {
     resolution_reason: null,
     rewards_processed_at: null,
     schema_attendance_columns_available: false,
-    feature_enabled: isAttendanceConfirmationEnabledForMatch(partido),
+    feature_enabled: isAttendanceConfirmationEnabledForMatch(partido, {
+      sedeEnabled: sedeAttendanceConfirmationEnabled,
+    }),
   };
 }
 
 export function normalizePartidoAttendanceFields(partido = {}, {
   schemaAttendanceColumnsAvailable = true,
+  sedeAttendanceConfirmationEnabled = false,
 } = {}) {
   if (!schemaAttendanceColumnsAvailable) {
-    return buildLegacyPartidoAttendanceFields(partido);
+    return buildLegacyPartidoAttendanceFields(partido, { sedeAttendanceConfirmationEnabled });
   }
 
   return {
@@ -110,7 +119,9 @@ export function normalizePartidoAttendanceFields(partido = {}, {
     resolution_reason: partido?.attendance_resolution_reason ?? null,
     rewards_processed_at: partido?.rewards_processed_at ?? null,
     schema_attendance_columns_available: true,
-    feature_enabled: isAttendanceConfirmationEnabledForMatch(partido),
+    feature_enabled: isAttendanceConfirmationEnabledForMatch(partido, {
+      sedeEnabled: sedeAttendanceConfirmationEnabled,
+    }),
   };
 }
 
@@ -324,9 +335,16 @@ export async function getMatchAttendanceState(supabaseAdmin, matchId) {
     return { ok: false, reason: 'partido_no_encontrado' };
   }
 
+  const { sedeEnabled, featureEnabled } = await resolveAttendanceFeatureForPartido(
+    supabaseAdmin,
+    partido,
+  );
+
   const partidoFields = normalizePartidoAttendanceFields(partido, {
     schemaAttendanceColumnsAvailable,
+    sedeAttendanceConfirmationEnabled: sedeEnabled,
   });
+  partidoFields.feature_enabled = featureEnabled;
 
   const { participants } = await fetchParticipantsForAttendance(supabaseAdmin, matchId);
 
@@ -336,6 +354,7 @@ export async function getMatchAttendanceState(supabaseAdmin, matchId) {
     partidoFields,
     participants,
     summary: buildMatchAttendanceSummary(partidoFields, participants),
+    sede_attendance_confirmation_enabled: sedeEnabled,
   };
 }
 
@@ -488,8 +507,10 @@ export function scoreboardHasClearResult(scoreboard = {}) {
 
 export function shouldOpenAttendanceWindow(match = {}, {
   hasClearResult = false,
+  featureEnabled = null,
 } = {}) {
-  if (!match || !isAttendanceConfirmationEnabledForMatch(match)) {
+  const enabled = featureEnabled ?? isAttendanceConfirmationEnabledForMatch(match);
+  if (!match || !enabled) {
     return false;
   }
 
@@ -896,7 +917,8 @@ export async function openAttendanceWindowForMatch(supabaseAdmin, matchId, optio
     return { ok: false, reason: 'schema_missing' };
   }
 
-  if (!isAttendanceConfirmationEnabledForMatch(partido)) {
+  const { featureEnabled } = await resolveAttendanceFeatureForPartido(supabaseAdmin, partido);
+  if (!featureEnabled) {
     return { ok: false, reason: 'feature_disabled' };
   }
 
@@ -919,7 +941,10 @@ export async function openAttendanceWindowForMatch(supabaseAdmin, matchId, optio
       : partidoHasClearManualResult(partido)
   );
 
-  if (!shouldOpenAttendanceWindow(partido, { hasClearResult: resolvedHasClearResult })) {
+  if (!shouldOpenAttendanceWindow(partido, {
+    hasClearResult: resolvedHasClearResult,
+    featureEnabled,
+  })) {
     return {
       ok: false,
       reason: resolvedHasClearResult ? 'window_not_applicable' : 'resultado_no_claro',
@@ -1022,7 +1047,13 @@ export async function openAttendanceWindowForMatch(supabaseAdmin, matchId, optio
 }
 
 export async function maybeDeferCasualRewardsForAttendance(supabaseAdmin, matchId, options = {}) {
-  if (!isAttendanceConfirmationEnabledForMatch(options.partido)) {
+  const partido = options.partido ?? null;
+  if (partido) {
+    const { featureEnabled } = await resolveAttendanceFeatureForPartido(supabaseAdmin, partido);
+    if (!featureEnabled) {
+      return { deferred: false, reason: 'feature_disabled' };
+    }
+  } else if (!isMatchAttendanceConfirmationEnabled()) {
     return { deferred: false, reason: 'feature_disabled' };
   }
 
@@ -1352,10 +1383,6 @@ export async function fetchExpiredOpenAttendanceWindows(supabaseAdmin, {
   now = new Date(),
   limit = getMatchAttendanceCronBatchSize(),
 } = {}) {
-  if (!isMatchAttendanceConfirmationEnabled()) {
-    return [];
-  }
-
   const nowIso = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
   const effectiveLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
     ? Math.floor(Number(limit))
@@ -1393,15 +1420,6 @@ export async function expireAttendanceWindow(supabaseAdmin, matchId, options = {
     partido: partidoInput = null,
     deps = {},
   } = options;
-
-  if (!isMatchAttendanceConfirmationEnabled()) {
-    return {
-      ok: true,
-      skipped: true,
-      reason: 'feature_disabled',
-      match_id: Number(matchId) || null,
-    };
-  }
 
   let partido = partidoInput;
   let schemaAttendanceColumnsAvailable = true;
@@ -1446,11 +1464,17 @@ export async function expireAttendanceWindow(supabaseAdmin, matchId, options = {
     };
   }
 
+  const { sedeEnabled, featureEnabled } = await resolveAttendanceFeatureForPartido(
+    supabaseAdmin,
+    partido,
+  );
   const partidoFields = normalizePartidoAttendanceFields(partido, {
     schemaAttendanceColumnsAvailable: true,
+    sedeAttendanceConfirmationEnabled: sedeEnabled,
   });
+  partidoFields.feature_enabled = featureEnabled;
 
-  if (!partidoFields.feature_enabled) {
+  if (!featureEnabled) {
     return {
       ok: true,
       skipped: true,
@@ -1557,14 +1581,6 @@ export async function processExpiredAttendanceWindows(supabaseAdmin, options = {
     errors: 0,
     skipped: 0,
   };
-
-  if (!isMatchAttendanceConfirmationEnabled()) {
-    return {
-      ...summary,
-      cron_skipped: true,
-      reason: 'feature_disabled',
-    };
-  }
 
   const matches = await fetchExpiredOpenAttendanceWindows(supabaseAdmin, {
     now,
@@ -2264,7 +2280,7 @@ export async function tryFinalizeMatchAttendanceRewards(supabaseAdmin, matchId, 
   };
 }
 
-async function maybeFinalizeRewardsAfterAttendanceEvaluation(supabaseAdmin, matchId, partidoFields, {
+export async function maybeFinalizeRewardsAfterAttendanceEvaluation(supabaseAdmin, matchId, partidoFields, {
   now = new Date(),
   deps = {},
 } = {}) {
@@ -2279,7 +2295,8 @@ async function maybeFinalizeRewardsAfterAttendanceEvaluation(supabaseAdmin, matc
     };
   }
 
-  const finalizeResult = await tryFinalizeMatchAttendanceRewards(supabaseAdmin, matchId, {
+  const finalizeFn = deps.tryFinalizeMatchAttendanceRewards ?? tryFinalizeMatchAttendanceRewards;
+  const finalizeResult = await finalizeFn(supabaseAdmin, matchId, {
     now,
     deps,
   });
@@ -2514,4 +2531,4 @@ export async function userCanViewAttendanceSummary(user, partido, {
   return false;
 }
 
-export { isAttendanceConfirmationEnabledForMatch };
+export { isAttendanceConfirmationEnabledForMatch, resolveAttendanceFeatureForPartido };

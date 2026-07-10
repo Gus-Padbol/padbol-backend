@@ -353,4 +353,144 @@ Default: **apagado**.
 
 ## Próximas fases
 
-1. Endpoints admin + overrides por sede.
+1. ~~Endpoints admin + overrides por sede.~~ **Implementado en Fase 3.6 (sin activación productiva).**
+
+---
+
+## Fase 3.6 — Admin, overrides y activación por sede
+
+Permite que `super_admin` y `admin_club` autorizado gestionen ventanas bloqueadas o disputadas, y prepara activación por sede sin depender del flag global.
+
+**Todavía sin activación productiva:** los flags globales siguen apagados por defecto.
+
+### Activación por sede
+
+Tabla reutilizada: `padbol_match_setup_status`.
+
+| Clave / columna | Tipo | Default |
+|-----------------|------|---------|
+| `attendance_confirmation_enabled` | boolean | `false` |
+
+SQL (no ejecutado): [`docs/sql/match_attendance_sede_config_phase36.sql`](./sql/match_attendance_sede_config_phase36.sql)
+
+Resolución runtime (`isAttendanceConfirmationEnabledForMatch`):
+
+| Global | Sede | Resultado |
+|--------|------|-----------|
+| ON | OFF | habilitado |
+| ON | ON | habilitado |
+| OFF | ON | habilitado solo esa sede |
+| OFF | OFF | deshabilitado (legacy intacto) |
+
+El flag global `MATCH_ATTENDANCE_CONFIRMATION_ENABLED` sigue siendo override general.
+
+### Permisos admin
+
+| Rol | Alcance |
+|-----|---------|
+| `super_admin` | cualquier sede |
+| `admin_club` | solo sede del rol (`partido.sede_id`) |
+| capitán sin rol admin | **403** |
+| jugador común | **403** |
+
+Validación de sede en **cada** endpoint admin.
+
+### Endpoints admin
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/api/admin/partidos/:id/asistencia` | Resumen detallado (ventana + participantes sin PII sensible) |
+| POST | `/api/admin/partidos/:id/asistencia/participantes/:userId` | Override individual |
+| POST | `/api/admin/partidos/:id/asistencia/cerrar` | Cierre forzado `ready` / `blocked` |
+| POST | `/api/admin/partidos/:id/asistencia/reprocesar` | Reproceso seguro si `collection_status=ready` |
+
+#### GET `/api/admin/partidos/:id/asistencia`
+
+Respuesta incluye:
+
+- `window`: `collection_status`, `deadline_at`, `resolved_at`, `resolution_reason`, `rewards_processed_at`, `feature_enabled`
+- `summary`: contadores agregados
+- `participants[]`: `user_id`, `display_name`, `role`, `team`, `attendance_status`, `attendance_requested_at`, `attendance_responded_at`, `attendance_response_source`, `attendance_denial_reason`, `reward_status`
+
+No expone email, teléfono ni PII innecesaria.
+
+#### POST override participante
+
+```json
+{
+  "status": "admin_validated" | "excluded",
+  "reason": "opcional"
+}
+```
+
+Reglas:
+
+- partido casual, no cancelado, no torneo
+- no modificar si `attendance_collection_status = credited`
+- `admin_validated` → `attendance_confirmed_at = now`
+- `excluded` → `attendance_confirmed_at = null`
+- `attendance_responded_at = now`, `attendance_response_source = admin`
+- `reward_status` no se modifica
+- post-override: `evaluateAttendanceCollectionState`; si `ready` → `tryFinalizeMatchAttendanceRewards`
+
+#### POST cerrar
+
+```json
+{
+  "action": "ready" | "blocked",
+  "reason": "texto obligatorio"
+}
+```
+
+- `ready`: requiere al menos un elegible; `attendance_resolution_reason = admin_override`; acredita si aplica
+- `blocked`: no acredita
+- no permitir si ya `credited`
+- no permitir `ready` con cero elegibles
+
+#### POST reprocesar
+
+- solo si `collection_status = ready`
+- ejecuta `tryFinalizeMatchAttendanceRewards` (idempotente)
+- no modifica participantes
+
+### Auditoría
+
+Tabla append-only: `match_attendance_audit_log` (SQL no ejecutado).
+
+Campos: `match_id`, `actor_user_id`, `actor_role`, `action`, `target_user_id`, `previous_status`, `new_status`, `reason`, `metadata`, `created_at`.
+
+SQL: [`docs/sql/match_attendance_audit_log_phase36.sql`](./sql/match_attendance_audit_log_phase36.sql)
+
+**Deploy de escritura de auditoría requiere SQL aplicado.** Si la tabla no existe, los endpoints siguen funcionando (fallback silencioso).
+
+Acciones registradas:
+
+- `participant_override`
+- `force_close_ready`
+- `force_close_blocked`
+- `reprocess_rewards`
+
+### Flags globales (sin cambios — apagados por defecto)
+
+| Flag | Default |
+|------|---------|
+| `MATCH_ATTENDANCE_CONFIRMATION_ENABLED` | false |
+| `MATCH_ATTENDANCE_CRON_ENABLED` | false |
+| `MATCH_ATTENDANCE_REMINDERS_ENABLED` | false |
+
+Cron y recordatorios respetan configuración por sede cuando sus flags están activos (mínimo cambio en batch: filtro por partido, no solo global).
+
+### Compatibilidad
+
+Con sede deshabilitada y flag global OFF:
+
+- flujo legacy intacto
+- endpoints admin pueden leer estado existente
+- no se abren ventanas automáticamente
+
+No se modificó la lógica interna de `creditValidatedMatchPadcoins`, `creditCasualMatchRanking`, `creditSingleUserRanking`.
+
+### Tests
+
+Cobertura en `lib/matchAttendancePhase36.test.js`.
+
