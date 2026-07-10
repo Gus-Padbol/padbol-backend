@@ -31,6 +31,7 @@ import { syncScoreboardToTorneoPartido } from '../src/scoreboard/scoreboardTorne
 import { onPartidoTorneoFinalizado } from '../lib/torneos/partidoTorneoFinalizadoEffectsService.js';
 import { advanceWinnerIfNeeded } from '../lib/torneos/bracketAdvanceService.js';
 import { ensureScoreboardForCompletedBracketPartido } from '../lib/torneos/bracketScoreboardService.js';
+import { maybeProcessCasualPadcoinsAfterScoreboardTerminated } from '../src/matches/scoreboardMatchRewardsService.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -389,6 +390,7 @@ export function mountScoreboardRoutes(app, {
     registrarPunto(partido, equipo);
     const saved = await savePartido(supabaseAdmin, partido);
     await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
+    await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
     emitScoreboardUpdate(io, saved.id, saved);
     return enrichPartidoResponse(saved);
   }
