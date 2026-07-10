@@ -2392,9 +2392,16 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
     throw participantErr;
   }
 
+  const { sedeEnabled, featureEnabled } = await resolveAttendanceFeatureForPartido(
+    supabaseAdmin,
+    partido,
+  );
+
   const partidoFields = normalizePartidoAttendanceFields(partido, {
     schemaAttendanceColumnsAvailable,
+    sedeAttendanceConfirmationEnabled: sedeEnabled,
   });
+  partidoFields.feature_enabled = featureEnabled;
 
   const validation = validatePlayerAttendanceSubmission({
     featureEnabled: partidoFields.feature_enabled,
