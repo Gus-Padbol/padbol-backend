@@ -24,6 +24,7 @@ import {
   normalizeParticipantAttendanceFields,
   tryFinalizeMatchAttendanceRewards,
 } from './matchAttendanceService.js';
+import { isTorneoOutOfScopeForCasualAttendance } from './matchAttendanceTorneoScope.js';
 
 const PERFIL_DISPLAY_SELECT = 'user_id, nombre, apodo, username, alias';
 
@@ -75,7 +76,7 @@ function validateAdminAttendanceMatchContext(state) {
     return { ok: false, httpStatus: 503, reason: 'schema_missing' };
   }
 
-  if (partido.partido_torneo_id != null || partido.torneo_id != null) {
+  if (isTorneoOutOfScopeForCasualAttendance({ partido })) {
     return { ok: false, httpStatus: 400, reason: 'torneo_out_of_scope' };
   }
 

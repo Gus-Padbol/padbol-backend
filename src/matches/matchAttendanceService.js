@@ -42,12 +42,15 @@ import {
   processCasualMatchRankingAfterScoreboardFinished,
 } from '../ranking/casualMatchRankingService.js';
 import { isScoreboardEstadoTerminado } from './scoreboardMatchRewardsService.js';
+import {
+  isTorneoOutOfScopeForCasualAttendance,
+} from './matchAttendanceTorneoScope.js';
 
 export const PARTIDOS_ATTENDANCE_SELECT =
   'id, sede_id, capitan_user_id, attendance_collection_status, attendance_opened_at, attendance_deadline_at, attendance_resolved_at, attendance_resolution_reason, rewards_processed_at';
 
 export const PARTIDOS_ATTENDANCE_REWARDS_SELECT =
-  `${PARTIDOS_ATTENDANCE_SELECT}, estado, ganador, resultado, deporte, reserva_id, partido_torneo_id, torneo_id, equipos_asignacion`;
+  `${PARTIDOS_ATTENDANCE_SELECT}, estado, ganador, resultado, deporte, reserva_id, equipos_asignacion`;
 
 export const PARTICIPANTS_ATTENDANCE_SELECT =
   'id, user_id, role, team, attendance_status, attendance_confirmed_at, attendance_requested_at, attendance_responded_at, attendance_response_source, attendance_denial_reason, reward_status';
@@ -508,6 +511,7 @@ export function scoreboardHasClearResult(scoreboard = {}) {
 export function shouldOpenAttendanceWindow(match = {}, {
   hasClearResult = false,
   featureEnabled = null,
+  scoreboard = null,
 } = {}) {
   const enabled = featureEnabled ?? isAttendanceConfirmationEnabledForMatch(match);
   if (!match || !enabled) {
@@ -518,7 +522,7 @@ export function shouldOpenAttendanceWindow(match = {}, {
     return false;
   }
 
-  if (match.partido_torneo_id != null || match.torneo_id != null) {
+  if (isTorneoOutOfScopeForCasualAttendance({ partido: match, scoreboard })) {
     return false;
   }
 
@@ -944,6 +948,7 @@ export async function openAttendanceWindowForMatch(supabaseAdmin, matchId, optio
   if (!shouldOpenAttendanceWindow(partido, {
     hasClearResult: resolvedHasClearResult,
     featureEnabled,
+    scoreboard,
   })) {
     return {
       ok: false,
@@ -1275,7 +1280,7 @@ function shouldSkipExpiredAttendancePartido(partido = {}) {
     return { skip: true, reason: 'partido_no_encontrado' };
   }
 
-  if (partido.partido_torneo_id != null || partido.torneo_id != null) {
+  if (isTorneoOutOfScopeForCasualAttendance({ partido })) {
     return { skip: true, reason: 'torneo_out_of_scope' };
   }
 
@@ -1377,7 +1382,7 @@ async function transitionOpenAttendanceWindowAfterTimeout(supabaseAdmin, matchId
 }
 
 const EXPIRED_ATTENDANCE_WINDOWS_SELECT =
-  `${PARTIDOS_ATTENDANCE_SELECT}, estado, partido_torneo_id, torneo_id`;
+  `${PARTIDOS_ATTENDANCE_SELECT}, estado`;
 
 export async function fetchExpiredOpenAttendanceWindows(supabaseAdmin, {
   now = new Date(),
@@ -1393,8 +1398,6 @@ export async function fetchExpiredOpenAttendanceWindows(supabaseAdmin, {
     .select(EXPIRED_ATTENDANCE_WINDOWS_SELECT)
     .eq('attendance_collection_status', MATCH_ATTENDANCE_COLLECTION_STATUS.OPEN)
     .lte('attendance_deadline_at', nowIso)
-    .is('partido_torneo_id', null)
-    .is('torneo_id', null)
     .order('attendance_deadline_at', { ascending: true })
     .limit(effectiveLimit);
 
@@ -1896,13 +1899,6 @@ async function fetchPartidoForAttendanceRewards(supabaseAdmin, matchId) {
   };
 }
 
-function isCasualMatchForAttendanceRewards(partido = {}) {
-  if (partido.partido_torneo_id != null || partido.torneo_id != null) {
-    return false;
-  }
-  return true;
-}
-
 async function blockReadyMatchForNoEligibleParticipants(supabaseAdmin, matchId, {
   now = new Date(),
 } = {}) {
@@ -2052,7 +2048,13 @@ export async function tryFinalizeMatchAttendanceRewards(supabaseAdmin, matchId, 
     };
   }
 
-  if (!isCasualMatchForAttendanceRewards(rewardsPartido)) {
+  const fetchScoreboardEarly = deps.fetchTerminatedScoreboardForPartido ?? fetchTerminatedScoreboardForPartido;
+  const scoreboardForScope = scoreboardInput ?? await fetchScoreboardEarly(supabaseAdmin, matchId);
+
+  if (isTorneoOutOfScopeForCasualAttendance({
+    partido: rewardsPartido,
+    scoreboard: scoreboardForScope,
+  })) {
     return {
       ok: true,
       skipped: true,
@@ -2192,8 +2194,7 @@ export async function tryFinalizeMatchAttendanceRewards(supabaseAdmin, matchId, 
   const fetchReserva = deps.fetchReservaForPartido ?? fetchReservaForAttendanceRewards;
   const reserva = await fetchReserva(supabaseAdmin, rewardsPartido);
 
-  const fetchScoreboard = deps.fetchTerminatedScoreboardForPartido ?? fetchTerminatedScoreboardForPartido;
-  const scoreboard = scoreboardInput ?? await fetchScoreboard(supabaseAdmin, matchId);
+  const scoreboard = scoreboardForScope;
 
   const creditPadcoins = deps.creditValidatedMatchPadcoins ?? creditValidatedMatchPadcoins;
 

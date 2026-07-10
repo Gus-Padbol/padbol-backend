@@ -8,6 +8,7 @@ import {
   isMatchAttendanceRemindersEnabled,
 } from './matchAttendanceConfig.js';
 import { resolveAttendanceFeatureForPartido } from './matchAttendanceSedeConfigService.js';
+import { isTorneoOutOfScopeForCasualAttendance } from './matchAttendanceTorneoScope.js';
 import {
   MATCH_ATTENDANCE_COLLECTION_STATUS,
   MATCH_ATTENDANCE_STATUS,
@@ -44,7 +45,7 @@ const PARTICIPANTS_REMINDER_SELECT =
   'id, user_id, match_id, attendance_status, attendance_requested_at, reward_status';
 
 const OPEN_PARTIDOS_REMINDER_SELECT =
-  'id, attendance_opened_at, attendance_deadline_at, attendance_collection_status, partido_torneo_id, torneo_id, estado';
+  'id, sede_id, attendance_opened_at, attendance_deadline_at, attendance_collection_status, estado';
 
 export function buildAttendanceNotificationDedupeKey(matchId, userId, stage) {
   const normalizedMatchId = normalizeMatchId(matchId);
@@ -86,7 +87,7 @@ function buildAttendanceNotificationPayload(matchId, userId, {
 }
 
 function shouldSkipAttendanceNotificationPartido(partido = {}) {
-  if (partido.partido_torneo_id != null || partido.torneo_id != null) {
+  if (isTorneoOutOfScopeForCasualAttendance({ partido })) {
     return { skip: true, reason: 'torneo_out_of_scope' };
   }
   if (String(partido.estado ?? '').trim().toLowerCase() === 'cancelado') {
@@ -362,8 +363,6 @@ export async function fetchOpenPartidosForAttendanceReminders(supabaseAdmin, {
     .from('partidos_abiertos')
     .select(OPEN_PARTIDOS_REMINDER_SELECT)
     .eq('attendance_collection_status', MATCH_ATTENDANCE_COLLECTION_STATUS.OPEN)
-    .is('partido_torneo_id', null)
-    .is('torneo_id', null)
     .order('attendance_opened_at', { ascending: true })
     .limit(effectiveLimit);
 
