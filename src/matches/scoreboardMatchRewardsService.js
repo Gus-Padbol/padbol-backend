@@ -4,6 +4,9 @@ import {
   upsertMatchParticipant,
 } from './matchParticipantsService.js';
 import {
+  processCasualMatchRankingAfterScoreboardFinished,
+} from '../ranking/casualMatchRankingService.js';
+import {
   creditValidatedMatchPadcoins,
 } from './matchRewardsService.js';
 import {
@@ -427,6 +430,19 @@ export async function processScoreboardPadcoinsAfterFinished(supabaseAdmin, scor
     `[PadCoins Scoreboard] scoreboard=${scoreboardId} partido_abierto_id=${link.partidoId} reserva_id=${reserva.id} participants=${syncResult.identified_count} credited_users=${creditedCount} total_padcoins=${totalPadcoins} skipped_no_user_id=${syncResult.skipped_no_user_id ?? 0} acreditado=${creditResult.acreditado === true}`,
   );
 
+  const rankingResult = await processCasualMatchRankingAfterScoreboardFinished(supabaseAdmin, {
+    scoreboard,
+    partidoId: link.partidoId,
+    reservaId: reserva.id,
+    scorePayload: resultPayload,
+  }).catch((err) => {
+    console.warn(
+      `[Ranking Scoreboard] error scoreboard=${scoreboardId} partido=${link.partidoId}:`,
+      err.message,
+    );
+    return null;
+  });
+
   return {
     ok: true,
     scoreboard_id: scoreboardId,
@@ -435,6 +451,7 @@ export async function processScoreboardPadcoinsAfterFinished(supabaseAdmin, scor
     resolved_via: link.resolvedVia ?? null,
     sync: syncResult,
     score_payload: resultPayload,
+    ranking: rankingResult,
     ...creditResult,
   };
 }

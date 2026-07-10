@@ -16,6 +16,9 @@ import { addPadcoins } from '../padcoins/padcoinsService.js';
 import { PADCOINS_MOVEMENT_TYPES, PADCOINS_ORIGINS } from '../padcoins/padcoinsConfig.js';
 import { PADCOINS_SOURCE_ACTIONS } from '../padcoins/padcoinsIdempotencyService.js';
 import {
+  processCasualMatchRankingAfterResultConfirmed,
+} from '../ranking/casualMatchRankingService.js';
+import {
   ensureOrganizerParticipantFromReserva,
   listMatchParticipants,
   markAttendance,
@@ -657,7 +660,7 @@ export async function processCasualMatchPadcoinsAfterResultConfirmed(supabaseAdm
 
   const { data: partido, error: partidoErr } = await supabaseAdmin
     .from('partidos_abiertos')
-    .select('id, capitan_user_id, reserva_id, estado')
+    .select('id, capitan_user_id, reserva_id, estado, ganador, resultado, deporte, equipos_asignacion')
     .eq('id', Number(partidoId))
     .maybeSingle();
 
@@ -701,9 +704,18 @@ export async function processCasualMatchPadcoinsAfterResultConfirmed(supabaseAdm
     });
   }
 
-  return creditValidatedMatchPadcoins(supabaseAdmin, {
+  const padcoinsResult = await creditValidatedMatchPadcoins(supabaseAdmin, {
     matchId: normalizedPartidoId,
     reserva,
     organizerUserId: reserva.user_id,
   });
+
+  await processCasualMatchRankingAfterResultConfirmed(supabaseAdmin, partidoId, {
+    partido,
+    reservaId: reserva.id,
+  }).catch((err) => {
+    console.warn(`⚠️ Ranking casual partido ${partidoId}:`, err.message);
+  });
+
+  return padcoinsResult;
 }
