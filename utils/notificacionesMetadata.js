@@ -21,12 +21,23 @@ const METADATA_BLOCKLIST = new Set([
   'phone',
 ]);
 
-export function isMissingNotificacionesDataColumnError(error) {
-  if (error?.code !== '42703') {
+function messageRefersToNotificacionesDataColumn(message) {
+  const msg = String(message ?? '').toLowerCase();
+  if (!msg.includes('data')) {
     return false;
   }
-  const message = String(error?.message ?? '').toLowerCase();
-  return message.includes("'data'") && message.includes('notificaciones');
+  if (!msg.includes('notificaciones')) {
+    return false;
+  }
+  return msg.includes("'data'") || msg.includes('column \'data\'') || msg.includes('column "data"');
+}
+
+export function isMissingNotificacionesDataColumnError(error) {
+  const code = String(error?.code ?? '');
+  if (code !== '42703' && code !== 'PGRST204') {
+    return false;
+  }
+  return messageRefersToNotificacionesDataColumn(error?.message);
 }
 
 export function hasNotificationMetadata(metadata) {
