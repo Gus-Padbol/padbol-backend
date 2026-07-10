@@ -11,6 +11,7 @@ import { processCasualMatchPadcoinsAfterResultConfirmed } from '../src/matches/m
 import {
   getMatchAttendanceState,
   getPlayerAttendanceState,
+  submitPlayerAttendanceResponse,
   userCanViewAttendanceSummary,
 } from '../src/matches/matchAttendanceService.js';
 import {
@@ -3369,6 +3370,53 @@ export function createPartidosRouter({
       });
     } catch (err) {
       console.error('❌ Error GET /api/partidos/:id/asistencia:', err.message);
+      return sendHttpError(res, err);
+    }
+  });
+
+  router.post('/:id/asistencia', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const result = await submitPlayerAttendanceResponse(
+        supabaseAdmin,
+        partidoId,
+        user.id,
+        req.body ?? {},
+      );
+
+      if (!result.ok) {
+        const statusCode = result.httpStatus ?? 400;
+        const errorMessages = {
+          feature_disabled: 'La confirmación de asistencia no está habilitada',
+          window_not_open: 'La ventana de confirmación no está abierta',
+          window_expired: 'La ventana de confirmación expiró',
+          deadline_expired: 'El plazo para confirmar asistencia venció',
+          status_locked: 'Tu asistencia ya fue validada y no puede modificarse',
+          participant_not_found: 'No tenés registro de participación para confirmar asistencia',
+          not_a_participant: 'No formás parte de este partido',
+          partido_no_encontrado: 'Partido no encontrado',
+          schema_missing: 'Confirmación de asistencia no disponible',
+          invalid_response: 'response debe ser "confirm" o "deny"',
+          concurrent_update_conflict: 'Conflicto al registrar la respuesta, intentá de nuevo',
+          rewards_already_processed: 'Las recompensas del partido ya fueron procesadas',
+        };
+        return res.status(statusCode).json({
+          error: errorMessages[result.reason] ?? result.reason ?? 'invalid_request',
+        });
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error('❌ Error POST /api/partidos/:id/asistencia:', err.message);
       return sendHttpError(res, err);
     }
   });

@@ -39,6 +39,13 @@ export const MATCH_ATTENDANCE_RESPONSE_SOURCE = Object.freeze({
   SYSTEM_LEGACY: 'system_legacy',
 });
 
+export const MATCH_ATTENDANCE_RESOLUTION_REASON = Object.freeze({
+  ALL_RESPONDED: 'all_responded',
+  NO_ELIGIBLE_PARTICIPANTS: 'no_eligible_participants',
+});
+
+export const ATTENDANCE_DENIAL_REASON_MAX_LENGTH = 280;
+
 const ATTENDANCE_COLLECTION_STATUS_VALUES = new Set(
   Object.values(MATCH_ATTENDANCE_COLLECTION_STATUS),
 );

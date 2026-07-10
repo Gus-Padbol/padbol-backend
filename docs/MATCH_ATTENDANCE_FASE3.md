@@ -1,16 +1,16 @@
 # Confirmación de asistencia — Fase 3 Backend
 
-Preparación y apertura de ventana de confirmación «¿Jugaste este partido?» para partidos casuales.
+Preparación, apertura de ventana y respuesta del jugador para partidos casuales «¿Jugaste este partido?».
 
 ## Fase 3.0 (lectura)
 
 | Incluido | Excluido |
 |----------|----------|
-| SQL idempotente | POST confirmar / rechazar |
-| Constantes y normalización | Notificaciones push |
-| Feature flag `MATCH_ATTENDANCE_CONFIRMATION_ENABLED` (default **off**) | Cron de vencimiento |
-| GET `/api/partidos/:id/asistencia` | Acreditación diferida activa con flag OFF |
-| GET `/api/partidos/:id/asistencia/resumen` | Configuración por sede activa |
+| SQL idempotente | Notificaciones push |
+| Constantes y normalización | Cron de vencimiento |
+| Feature flag `MATCH_ATTENDANCE_CONFIRMATION_ENABLED` (default **off**) | Acreditación diferida activa con flag OFF |
+| GET `/api/partidos/:id/asistencia` | Configuración por sede activa |
+| GET `/api/partidos/:id/asistencia/resumen` | |
 
 ## Fase 3.1 (apertura de ventana)
 
@@ -36,33 +36,119 @@ Cuando un partido casual termina **y** `MATCH_ATTENDANCE_CONFIRMATION_ENABLED=tr
    - `attendance_resolution_reason = null`
    - `rewards_processed_at = null`
 
-### Plazo
-
-Variable de entorno opcional:
-
-```bash
-MATCH_ATTENDANCE_WINDOW_HOURS=72
-```
-
-Lectura centralizada: `getMatchAttendanceWindowHours()` en `matchAttendanceConfig.js`.
-
-### Flag OFF vs ON
+### Flag OFF vs ON (Fase 3.1)
 
 | Flag | Resultado manual | Smart Score casual |
 |------|------------------|-------------------|
 | **OFF** | Sync `admin_validated` + PadCoins + Ranking inmediatos (sin cambios) | Flujo actual intacto |
 | **ON** | Sync `pending` + ventana `open`; **no** PadCoins ni Ranking | Sync `pending` + ventana `open`; **no** PadCoins ni Ranking |
 
-Si el flag está ON pero la ventana no puede abrirse (resultado no claro, cancelado, schema faltante): **no se acreditan** recompensas por accidente; se registra warning.
+## Fase 3.2 (respuesta del jugador)
 
-### Idempotencia
+| Incluido | Excluido |
+|----------|----------|
+| POST `/api/partidos/:id/asistencia` | Notificaciones |
+| Confirmar / rechazar asistencia propia | Cron |
+| `evaluateAttendanceCollectionState` | Endpoints admin |
+| Transición `open → ready` o `blocked` | Acreditación PadCoins/Ranking |
+| Idempotencia y cambios confirm ↔ deny | Activación en producción |
 
-- Si la ventana ya está `open`, `expired`, `ready`, `credited` o `blocked`: no se reinicia ni se mueve el deadline.
-- Segunda ejecución devuelve resultado idempotente.
+### Endpoint POST
 
-### Preservación de estados
+```http
+POST /api/partidos/:id/asistencia
+Authorization: Bearer <JWT>
+Content-Type: application/json
 
-Al sincronizar participantes **no** se degradan filas ya `confirmed`, `denied`, `admin_validated` o `excluded`.
+{
+  "response": "confirm" | "deny",
+  "reason": "texto opcional"
+}
+```
+
+**Respuesta exitosa:**
+
+```json
+{
+  "ok": true,
+  "match_id": 88,
+  "idempotent": false,
+  "player": {
+    "attendance_status": "confirmed",
+    "attendance_responded_at": "...",
+    "attendance_response_source": "player",
+    "attendance_denial_reason": null
+  },
+  "match": {
+    "collection_status": "open",
+    "deadline_at": "...",
+    "resolved_at": null,
+    "resolution_reason": null
+  },
+  "summary": {
+    "total_participants": 4,
+    "pending": 2,
+    "confirmed": 1,
+    "denied": 0,
+    "admin_validated": 1,
+    "excluded": 0,
+    "eligible": 1
+  }
+}
+```
+
+### Reglas de respuesta
+
+| Condición | HTTP |
+|-----------|------|
+| Sin auth | 401 |
+| Usuario ajeno al partido | 403 |
+| Flag OFF | 409 |
+| Ventana `none` / `ready` / `credited` / `blocked` | 409 |
+| Ventana `expired` | 409 |
+| `deadline_at` vencido | 409 |
+| Sin fila en `match_participants` | 404 |
+| `admin_validated` / `excluded` | 409 |
+| Columnas Fase 3 ausentes | 503 (sin escritura parcial) |
+
+### Efecto por acción
+
+**Confirm (`confirm`):**
+- `attendance_status = confirmed`
+- `attendance_confirmed_at = now`
+- `attendance_responded_at = now`
+- `attendance_response_source = player`
+- `attendance_denial_reason = null`
+- `reward_status` permanece `pending`
+
+**Deny (`deny`):**
+- `attendance_status = denied`
+- `attendance_confirmed_at = null`
+- `attendance_responded_at = now`
+- `attendance_response_source = player`
+- `attendance_denial_reason` normalizado (máx. 280 chars) o `null`
+- `reward_status` permanece `pending`
+
+### Idempotencia y cambios
+
+| Transición | Permitido |
+|------------|-----------|
+| Misma respuesta repetida | Sí (idempotente, sin alterar timestamps) |
+| `pending → confirmed/denied` | Sí |
+| `confirmed ↔ denied` | Sí mientras ventana `open` y sin `rewards_processed_at` |
+| Modificar `admin_validated` / `excluded` | No |
+
+### Transición agregada (`evaluateAttendanceCollectionState`)
+
+Tras cada respuesta, con ventana `open`:
+
+| Situación | Nuevo estado | `attendance_resolution_reason` |
+|-----------|--------------|--------------------------------|
+| Quedan `pending` | `open` | — |
+| Sin `pending`, hay `confirmed` o `admin_validated` | `ready` | `all_responded` |
+| Todos `denied` o `excluded` | `blocked` | `no_eligible_participants` |
+
+No se marca `credited` ni se completa `rewards_processed_at` en Fase 3.2.
 
 ## Columnas preparadas
 
@@ -73,20 +159,21 @@ Ver [`docs/sql/match_attendance_phase3.sql`](./sql/match_attendance_phase3.sql).
 ```bash
 # NO activar en producción hasta fases posteriores
 MATCH_ATTENDANCE_CONFIRMATION_ENABLED=true
+MATCH_ATTENDANCE_WINDOW_HOURS=72
 ```
 
-Valores reconocidos: `true`, `1`, `yes`. Default: **apagado**.
+Default: **apagado**.
 
-## Endpoints (solo lectura — Fase 3.0)
+## Endpoints
 
-- GET `/api/partidos/:id/asistencia` — participante autenticado.
-- GET `/api/partidos/:id/asistencia/resumen` — capitán / admin_club / super_admin.
-
-Con flag OFF: `can_respond=false`. Con flag ON y ventana open: `can_respond` evalúa estado `pending` (POST aún no implementado).
+| Método | Ruta | Acceso |
+|--------|------|--------|
+| GET | `/api/partidos/:id/asistencia` | Participante autenticado |
+| GET | `/api/partidos/:id/asistencia/resumen` | Capitán / admin_club / super_admin |
+| POST | `/api/partidos/:id/asistencia` | Participante con fila en `match_participants` |
 
 ## Próximas fases
 
-1. POST confirmar/rechazar.
-2. Notificaciones + cron de vencimiento.
-3. Acreditación PadCoins/Ranking tras ventana cerrada.
-4. Endpoints admin + flag por sede.
+1. Notificaciones + cron de vencimiento.
+2. Acreditación PadCoins/Ranking tras ventana `ready`.
+3. Endpoints admin + overrides por sede.
