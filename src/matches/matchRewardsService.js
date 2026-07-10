@@ -18,6 +18,7 @@ import { PADCOINS_SOURCE_ACTIONS } from '../padcoins/padcoinsIdempotencyService.
 import {
   processCasualMatchRankingAfterResultConfirmed,
 } from '../ranking/casualMatchRankingService.js';
+import { maybeDeferCasualRewardsForAttendance } from './matchAttendanceService.js';
 import {
   ensureOrganizerParticipantFromReserva,
   listMatchParticipants,
@@ -660,7 +661,7 @@ export async function processCasualMatchPadcoinsAfterResultConfirmed(supabaseAdm
 
   const { data: partido, error: partidoErr } = await supabaseAdmin
     .from('partidos_abiertos')
-    .select('id, capitan_user_id, reserva_id, estado, ganador, resultado, deporte, equipos_asignacion')
+    .select('id, capitan_user_id, reserva_id, estado, ganador, resultado, deporte, equipos_asignacion, attendance_collection_status, attendance_opened_at, attendance_deadline_at, sede_id')
     .eq('id', Number(partidoId))
     .maybeSingle();
 
@@ -672,6 +673,33 @@ export async function processCasualMatchPadcoinsAfterResultConfirmed(supabaseAdm
   const reserva = await resolveReservaForPartido(supabaseAdmin, partido);
   if (!reserva?.id) {
     return { ok: true, acreditado: false, reason: 'sin_reserva_vinculada' };
+  }
+
+  const attendanceDefer = await maybeDeferCasualRewardsForAttendance(supabaseAdmin, partidoId, {
+    partido,
+    source: 'manual',
+    reservaId: reserva.id,
+  }).catch((err) => {
+    console.error(`[Attendance Fase 3.1] error partido=${partidoId}:`, err.message);
+    return {
+      deferred: true,
+      attendance_pending: false,
+      reason: 'attendance_window_error',
+      error: err.message,
+    };
+  });
+
+  if (attendanceDefer.deferred) {
+    console.log(
+      `[Attendance Fase 3.1] partido=${partidoId} rewards deferred reason=${attendanceDefer.reason}`,
+    );
+    return {
+      ok: true,
+      acreditado: false,
+      attendance_pending: attendanceDefer.attendance_pending === true,
+      reason: attendanceDefer.reason ?? 'attendance_pending',
+      attendance: attendanceDefer.attendance ?? null,
+    };
   }
 
   await ensureOrganizerParticipantFromReserva(supabaseAdmin, {

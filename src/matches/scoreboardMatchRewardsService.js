@@ -9,6 +9,7 @@ import {
 import {
   creditValidatedMatchPadcoins,
 } from './matchRewardsService.js';
+import { maybeDeferCasualRewardsForAttendance } from './matchAttendanceService.js';
 import {
   MATCH_ATTENDANCE_STATUS,
   MATCH_PARTICIPANT_ROLES,
@@ -370,6 +371,46 @@ export async function processScoreboardPadcoinsAfterFinished(supabaseAdmin, scor
   }
 
   const partido = { id: link.partidoId, capitan_user_id: link.capitanUserId, reserva_id: reserva.id };
+
+  const { data: partidoAttendance, error: partidoAttendanceErr } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select('id, capitan_user_id, reserva_id, estado, equipos_asignacion, attendance_collection_status, attendance_opened_at, attendance_deadline_at, sede_id')
+    .eq('id', link.partidoId)
+    .maybeSingle();
+
+  if (partidoAttendanceErr) throw partidoAttendanceErr;
+
+  const attendanceDefer = await maybeDeferCasualRewardsForAttendance(supabaseAdmin, link.partidoId, {
+    partido: partidoAttendance ?? partido,
+    scoreboard,
+    source: 'scoreboard',
+    reservaId: reserva.id,
+  }).catch((err) => {
+    console.error(`[Attendance Fase 3.1] scoreboard=${scoreboardId} error:`, err.message);
+    return {
+      deferred: true,
+      attendance_pending: false,
+      reason: 'attendance_window_error',
+      error: err.message,
+    };
+  });
+
+  if (attendanceDefer.deferred) {
+    console.log(
+      `[Attendance Fase 3.1] scoreboard=${scoreboardId} partido=${link.partidoId} rewards deferred reason=${attendanceDefer.reason}`,
+    );
+    return {
+      ok: true,
+      acreditado: false,
+      attendance_pending: attendanceDefer.attendance_pending === true,
+      reason: attendanceDefer.reason ?? 'attendance_pending',
+      scoreboard_id: scoreboardId,
+      partido_abierto_id: link.partidoId,
+      reserva_id: reserva.id,
+      score_payload: resultPayload,
+      attendance: attendanceDefer.attendance ?? null,
+    };
+  }
 
   await ensureOrganizerParticipantFromReserva(supabaseAdmin, { reserva, partido });
 

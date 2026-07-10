@@ -329,6 +329,23 @@ export async function procesarResultadoPartidoCasual({
     return null;
   });
 
+  const padcoinsBody = padcoinsResult?.attendance_pending
+    ? {
+      acreditado: false,
+      attendance_pending: true,
+      reason: padcoinsResult.reason ?? 'attendance_window_open',
+    }
+    : padcoinsResult?.acreditado
+      ? {
+        acreditado: true,
+        total: padcoinsResult.total_padcoins ?? 0,
+        credits: (padcoinsResult.credits ?? []).filter((c) => c.acreditado).length,
+      }
+      : {
+        acreditado: false,
+        reason: padcoinsResult?.reason ?? null,
+      };
+
   return {
     status: 200,
     body: {
@@ -337,16 +354,7 @@ export async function procesarResultadoPartidoCasual({
       ganador,
       resultado: resultadoFinal,
       xp: xpResults,
-      padcoins: padcoinsResult?.acreditado
-        ? {
-          acreditado: true,
-          total: padcoinsResult.total_padcoins ?? 0,
-          credits: (padcoinsResult.credits ?? []).filter((c) => c.acreditado).length,
-        }
-        : {
-          acreditado: false,
-          reason: padcoinsResult?.reason ?? null,
-        },
+      padcoins: padcoinsBody,
     },
   };
 }

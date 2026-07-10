@@ -60,6 +60,13 @@ export const ELIGIBLE_ATTENDANCE_STATUSES = new Set([
   MATCH_ATTENDANCE_STATUS.ADMIN_VALIDATED,
 ]);
 
+export const RESOLVED_ATTENDANCE_STATUSES = new Set([
+  MATCH_ATTENDANCE_STATUS.CONFIRMED,
+  MATCH_ATTENDANCE_STATUS.DENIED,
+  MATCH_ATTENDANCE_STATUS.ADMIN_VALIDATED,
+  MATCH_ATTENDANCE_STATUS.EXCLUDED,
+]);
+
 export function normalizeAttendanceStatus(value, fallback = MATCH_ATTENDANCE_STATUS.PENDING) {
   const normalized = String(value ?? '').trim().toLowerCase();
   if (ATTENDANCE_STATUS_VALUES.has(normalized)) {
@@ -97,6 +104,10 @@ export function isEligibleAttendanceStatus(status) {
 export function isNonEligibleAttendanceStatus(status) {
   const normalized = normalizeAttendanceStatus(status, '');
   return normalized !== '' && NON_ELIGIBLE_ATTENDANCE_STATUSES.has(normalized);
+}
+
+export function isResolvedAttendanceStatus(status) {
+  return RESOLVED_ATTENDANCE_STATUSES.has(normalizeAttendanceStatus(status, ''));
 }
 
 export const MATCH_REWARD_STATUS = Object.freeze({
