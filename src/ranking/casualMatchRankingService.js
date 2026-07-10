@@ -6,6 +6,7 @@ import {
   listMatchParticipants,
   resolveEligibleParticipantsForRewards,
 } from '../matches/matchParticipantsService.js';
+import { isMissingRankingsStatsColumnError } from '../../lib/rankingsLeaderboardPublic.js';
 import {
   isEquiposAsignacionValida,
   normalizeEquipoUserIds,
@@ -32,12 +33,12 @@ const MANUAL_WINNER_SIDES = new Set(['equipo1', 'equipo2']);
 const SCOREBOARD_WINNER_SIDES = new Set(['A', 'B']);
 
 function isMissingRankingsLeaderboardTable(error) {
+  if (isMissingRankingsStatsColumnError(error)) return false;
   const message = String(error?.message ?? '').toLowerCase();
   return (
     error?.code === '42P01'
     || error?.code === 'PGRST205'
-    || message.includes('rankings_leaderboard')
-    || message.includes('does not exist')
+    || (message.includes('rankings_leaderboard') && message.includes('does not exist'))
     || message.includes('could not find the table')
   );
 }
@@ -99,7 +100,7 @@ function hasManualResult(partido = {}) {
       return true;
     }
     if (Number.isFinite(Number(resultado.equipo1)) && Number.isFinite(Number(resultado.equipo2))) {
-      return Number(resultado.equipo1) !== Number(resultado.equipo2);
+      return true;
     }
   }
 
@@ -303,6 +304,278 @@ export async function createRankingRewardEvent(supabaseAdmin, payload = {}) {
   });
 }
 
+const RANKINGS_STATS_SELECT =
+  'id, puntos, partidos_jugados, ganados, perdidos, empatados, racha_actual, mejor_racha';
+
+export function computeStatsDeltaForOutcome(outcome) {
+  switch (String(outcome ?? '').trim().toLowerCase()) {
+    case 'win':
+      return {
+        partidos_jugados: 1,
+        ganados: 1,
+        perdidos: 0,
+        empatados: 0,
+        reset_racha: false,
+      };
+    case 'loss':
+      return {
+        partidos_jugados: 1,
+        ganados: 0,
+        perdidos: 1,
+        empatados: 0,
+        reset_racha: true,
+      };
+    case 'draw':
+      return {
+        partidos_jugados: 1,
+        ganados: 0,
+        perdidos: 0,
+        empatados: 1,
+        reset_racha: true,
+      };
+    default:
+      return null;
+  }
+}
+
+export function applyStatsDeltaToRow(existing = {}, outcome) {
+  const delta = computeStatsDeltaForOutcome(outcome);
+  if (!delta) return null;
+
+  const partidos_jugados = (Number(existing.partidos_jugados) || 0) + delta.partidos_jugados;
+  const ganados = (Number(existing.ganados) || 0) + delta.ganados;
+  const perdidos = (Number(existing.perdidos) || 0) + delta.perdidos;
+  const empatados = (Number(existing.empatados) || 0) + delta.empatados;
+
+  let racha_actual;
+  if (delta.reset_racha) {
+    racha_actual = 0;
+  } else {
+    racha_actual = (Number(existing.racha_actual) || 0) + 1;
+  }
+
+  const mejor_racha = Math.max(Number(existing.mejor_racha) || 0, racha_actual);
+
+  return {
+    stats_delta: {
+      partidos_jugados: delta.partidos_jugados,
+      ganados: delta.ganados,
+      perdidos: delta.perdidos,
+      empatados: delta.empatados,
+    },
+    partidos_jugados,
+    ganados,
+    perdidos,
+    empatados,
+    racha_actual,
+    mejor_racha,
+  };
+}
+
+async function fetchRankingLeaderboardRow(supabaseAdmin, {
+  userId,
+  deporte,
+  nivel,
+  includeStats = true,
+} = {}) {
+  const selectCols = includeStats ? RANKINGS_STATS_SELECT : 'id, puntos';
+  const { data, error } = await supabaseAdmin
+    .from('rankings_leaderboard')
+    .select(selectCols)
+    .eq('user_id', userId)
+    .eq('deporte', deporte)
+    .eq('nivel', nivel)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingRankingsLeaderboardTable(error)) {
+      return { row: null, error: null, tableMissing: true };
+    }
+    if (includeStats && isMissingRankingsStatsColumnError(error)) {
+      return fetchRankingLeaderboardRow(supabaseAdmin, {
+        userId, deporte, nivel, includeStats: false,
+      });
+    }
+    throw error;
+  }
+
+  return {
+    row: data ?? null,
+    error: null,
+    tableMissing: false,
+    statsAvailable: includeStats,
+  };
+}
+
+async function persistRankingLeaderboardRow(supabaseAdmin, {
+  userId,
+  deporte,
+  nivel,
+  existing,
+  puntos,
+  statsPayload = null,
+  statsAvailable = true,
+} = {}) {
+  const now = new Date().toISOString();
+  const updatePayload = {
+    puntos,
+    updated_at: now,
+  };
+
+  if (statsPayload && statsAvailable) {
+    Object.assign(updatePayload, {
+      partidos_jugados: statsPayload.partidos_jugados,
+      ganados: statsPayload.ganados,
+      perdidos: statsPayload.perdidos,
+      empatados: statsPayload.empatados,
+      racha_actual: statsPayload.racha_actual,
+      mejor_racha: statsPayload.mejor_racha,
+    });
+  }
+
+  const resultSelectCols = statsAvailable && statsPayload
+    ? RANKINGS_STATS_SELECT
+    : 'id, puntos';
+
+  let data;
+  let error;
+
+  if (existing?.id != null) {
+    ({ data, error } = await supabaseAdmin
+      .from('rankings_leaderboard')
+      .update(updatePayload)
+      .eq('id', existing.id)
+      .select(resultSelectCols)
+      .maybeSingle());
+
+    if (error && isMissingRankingsStatsColumnError(error)) {
+      const puntosOnly = { puntos, updated_at: now };
+      ({ data, error } = await supabaseAdmin
+        .from('rankings_leaderboard')
+        .update(puntosOnly)
+        .eq('id', existing.id)
+        .select('id, puntos')
+        .maybeSingle());
+      if (!error) {
+        return {
+          ok: true,
+          row: data,
+          statsApplied: false,
+          statsOmittedReason: 'stats_columns_missing',
+        };
+      }
+    }
+  } else {
+    const insertPayload = {
+      user_id: userId,
+      deporte,
+      nivel,
+      ...updatePayload,
+    };
+
+    ({ data, error } = await supabaseAdmin
+      .from('rankings_leaderboard')
+      .insert(insertPayload)
+      .select(resultSelectCols)
+      .maybeSingle());
+
+    if (error?.code === '23505') {
+      const retry = await fetchRankingLeaderboardRow(supabaseAdmin, {
+        userId, deporte, nivel, includeStats: statsAvailable,
+      });
+      if (retry.row?.id != null) {
+        return persistRankingLeaderboardRow(supabaseAdmin, {
+          userId,
+          deporte,
+          nivel,
+          existing: retry.row,
+          puntos,
+          statsPayload,
+          statsAvailable: retry.statsAvailable !== false && statsAvailable,
+        });
+      }
+    }
+
+    if (error && isMissingRankingsStatsColumnError(error)) {
+      ({ data, error } = await supabaseAdmin
+        .from('rankings_leaderboard')
+        .insert({
+          user_id: userId,
+          deporte,
+          nivel,
+          puntos,
+          updated_at: now,
+        })
+        .select('id, puntos')
+        .maybeSingle());
+      if (!error) {
+        return {
+          ok: true,
+          row: data,
+          statsApplied: false,
+          statsOmittedReason: 'stats_columns_missing',
+        };
+      }
+    }
+  }
+
+  if (error) {
+    if (isMissingRankingsStatsColumnError(error)) {
+      if (existing?.id != null) {
+        const puntosOnly = { puntos, updated_at: now };
+        ({ data, error } = await supabaseAdmin
+          .from('rankings_leaderboard')
+          .update(puntosOnly)
+          .eq('id', existing.id)
+          .select('id, puntos')
+          .maybeSingle());
+        if (!error) {
+          return {
+            ok: true,
+            row: data,
+            statsApplied: false,
+            statsOmittedReason: 'stats_columns_missing',
+          };
+        }
+      } else {
+        ({ data, error } = await supabaseAdmin
+          .from('rankings_leaderboard')
+          .insert({
+            user_id: userId,
+            deporte,
+            nivel,
+            puntos,
+            updated_at: now,
+          })
+          .select('id, puntos')
+          .maybeSingle());
+        if (!error) {
+          return {
+            ok: true,
+            row: data,
+            statsApplied: false,
+            statsOmittedReason: 'stats_columns_missing',
+          };
+        }
+      }
+    }
+    if (isMissingRankingsLeaderboardTable(error)) {
+      return { ok: false, reason: 'rankings_leaderboard_missing', skipped: true };
+    }
+    throw error;
+  }
+
+  return {
+    ok: true,
+    row: data,
+    statsApplied: Boolean(statsPayload && statsAvailable),
+    statsOmittedReason: statsPayload && !statsAvailable ? 'stats_columns_missing' : null,
+  };
+}
+
+/**
+ * Actualiza RP y estadísticas en una sola lectura/escritura por jugador.
+ */
 export async function updatePlayerRanking(supabaseAdmin, {
   userId,
   deporte = CASUAL_RANKING_DEFAULT_DEPORTE,
@@ -319,82 +592,111 @@ export async function updatePlayerRanking(supabaseAdmin, {
   const normalizedNivel = String(nivel ?? CASUAL_RANKING_DEFAULT_NIVEL).trim().toLowerCase()
     || CASUAL_RANKING_DEFAULT_NIVEL;
 
-  const { data: existing, error: fetchErr } = await supabaseAdmin
-    .from('rankings_leaderboard')
-    .select('id, puntos')
-    .eq('user_id', userId)
-    .eq('deporte', normalizedDeporte)
-    .eq('nivel', normalizedNivel)
-    .maybeSingle();
+  const fetched = await fetchRankingLeaderboardRow(supabaseAdmin, {
+    userId,
+    deporte: normalizedDeporte,
+    nivel: normalizedNivel,
+    includeStats: true,
+  });
 
-  if (fetchErr) {
-    if (isMissingRankingsLeaderboardTable(fetchErr)) {
-      return { ok: false, reason: 'rankings_leaderboard_missing', skipped: true };
-    }
-    throw fetchErr;
+  if (fetched.tableMissing) {
+    return { ok: false, reason: 'rankings_leaderboard_missing', skipped: true };
   }
 
-  const nextPuntos = (Number(existing?.puntos) || 0) + rpDelta;
-  const now = new Date().toISOString();
+  const existing = fetched.row ?? {};
+  const nextPuntos = (Number(existing.puntos) || 0) + rpDelta;
+  const statsPayload = outcome ? applyStatsDeltaToRow(existing, outcome) : null;
+  const statsAvailable = fetched.statsAvailable !== false;
 
-  let data;
-  let error;
+  const persisted = await persistRankingLeaderboardRow(supabaseAdmin, {
+    userId,
+    deporte: normalizedDeporte,
+    nivel: normalizedNivel,
+    existing: existing.id != null ? existing : null,
+    puntos: nextPuntos,
+    statsPayload,
+    statsAvailable,
+  });
 
-  if (existing?.id != null) {
-    ({ data, error } = await supabaseAdmin
-      .from('rankings_leaderboard')
-      .update({ puntos: nextPuntos, updated_at: now })
-      .eq('id', existing.id)
-      .select('id, puntos')
-      .single());
-  } else {
-    ({ data, error } = await supabaseAdmin
-      .from('rankings_leaderboard')
-      .insert({
-        user_id: userId,
-        deporte: normalizedDeporte,
-        nivel: normalizedNivel,
-        puntos: nextPuntos,
-        updated_at: now,
-      })
-      .select('id, puntos')
-      .single());
-
-    if (error?.code === '23505') {
-      const { data: retryExisting, error: retryFetchErr } = await supabaseAdmin
-        .from('rankings_leaderboard')
-        .select('id, puntos')
-        .eq('user_id', userId)
-        .eq('deporte', normalizedDeporte)
-        .eq('nivel', normalizedNivel)
-        .maybeSingle();
-
-      if (retryFetchErr) throw retryFetchErr;
-      if (retryExisting?.id != null) {
-        const retryPuntos = (Number(retryExisting.puntos) || 0) + rpDelta;
-        ({ data, error } = await supabaseAdmin
-          .from('rankings_leaderboard')
-          .update({ puntos: retryPuntos, updated_at: now })
-          .eq('id', retryExisting.id)
-          .select('id, puntos')
-          .single());
-      }
-    }
+  if (!persisted.ok) {
+    return persisted;
   }
 
-  if (error) {
-    if (isMissingRankingsLeaderboardTable(error)) {
-      return { ok: false, reason: 'rankings_leaderboard_missing', skipped: true };
-    }
-    throw error;
+  const statsApplied = persisted.statsApplied === true;
+  const statsOmittedReason = persisted.statsOmittedReason
+    ?? (statsPayload && !statsApplied ? 'stats_columns_missing' : null);
+
+  if (statsOmittedReason) {
+    console.warn(
+      `[Ranking Casual] stats omitidas user=${userId} deporte=${normalizedDeporte} reason=${statsOmittedReason}`,
+    );
   }
 
+  const row = persisted.row ?? {};
   return {
     ok: true,
     userId,
     rpDelta,
-    puntos: data?.puntos ?? nextPuntos,
+    puntos: Number(row.puntos) || nextPuntos,
     outcome,
+    stats_applied: statsApplied,
+    stats_omitted_reason: statsOmittedReason,
+    stats_delta: statsPayload?.stats_delta ?? null,
+    partidos_jugados_after: statsApplied ? (Number(row.partidos_jugados) || statsPayload?.partidos_jugados) : null,
+    ganados_after: statsApplied ? (Number(row.ganados) || statsPayload?.ganados) : null,
+    perdidos_after: statsApplied ? (Number(row.perdidos) || statsPayload?.perdidos) : null,
+    empatados_after: statsApplied ? (Number(row.empatados) || statsPayload?.empatados) : null,
+    racha_actual_after: statsApplied ? (Number(row.racha_actual) ?? statsPayload?.racha_actual) : null,
+    mejor_racha_after: statsApplied ? (Number(row.mejor_racha) ?? statsPayload?.mejor_racha) : null,
+  };
+}
+
+async function markRankingRewardEventCredited(supabaseAdmin, eventId, metadata = {}) {
+  if (!eventId) return;
+  await supabaseAdmin
+    .from('match_reward_events')
+    .update({
+      status: MATCH_REWARD_EVENT_STATUS.CREDITED,
+      updated_at: new Date().toISOString(),
+      metadata,
+    })
+    .eq('id', eventId);
+}
+
+async function resolvePendingRankingEvent(supabaseAdmin, {
+  duplicateCheck,
+  createPayload,
+} = {}) {
+  if (duplicateCheck.duplicate && duplicateCheck.event?.status === MATCH_REWARD_EVENT_STATUS.CREDITED) {
+    return {
+      reuse: false,
+      credited: true,
+      event: duplicateCheck.event,
+    };
+  }
+
+  if (duplicateCheck.duplicate && duplicateCheck.event) {
+    return {
+      reuse: true,
+      credited: false,
+      event: duplicateCheck.event,
+    };
+  }
+
+  const created = await createRankingRewardEvent(supabaseAdmin, createPayload);
+  if (created.duplicate && created.event) {
+    if (created.event.status === MATCH_REWARD_EVENT_STATUS.CREDITED) {
+      return { reuse: false, credited: true, event: created.event };
+    }
+    return { reuse: true, credited: false, event: created.event };
+  }
+
+  return {
+    reuse: false,
+    credited: false,
+    event: created.event ?? null,
+    createFailed: !created.ok,
+    reason: created.reason ?? null,
   };
 }
 
@@ -411,38 +713,64 @@ async function creditSingleUserRanking(supabaseAdmin, {
   const sourceKey = buildCasualMatchRankingSourceKey(matchId, userId);
   const duplicateCheck = await preventDuplicateRankingBySourceKey(supabaseAdmin, sourceKey);
 
-  if (duplicateCheck.duplicate && duplicateCheck.event?.status === MATCH_REWARD_EVENT_STATUS.CREDITED) {
+  const eventResolution = await resolvePendingRankingEvent(supabaseAdmin, {
+    duplicateCheck,
+    createPayload: {
+      match_type: MATCH_TYPES.CASUAL,
+      match_id: matchId,
+      reserva_id: reservaId,
+      user_id: userId,
+      amount: rp,
+      status: MATCH_REWARD_EVENT_STATUS.PENDING,
+      source_key: sourceKey,
+      metadata: {
+        outcome,
+        rp,
+        ...metadata,
+      },
+    },
+  });
+
+  if (eventResolution.credited) {
     return {
       acreditado: false,
       reason: 'ya_acreditado_event',
       userId,
       sourceKey,
-      event: duplicateCheck.event,
+      event: eventResolution.event,
     };
   }
 
-  const pendingEvent = duplicateCheck.event ?? (await createRankingRewardEvent(supabaseAdmin, {
-    match_type: MATCH_TYPES.CASUAL,
-    match_id: matchId,
-    reserva_id: reservaId,
-    user_id: userId,
-    amount: rp,
-    status: MATCH_REWARD_EVENT_STATUS.PENDING,
-    source_key: sourceKey,
-    metadata: {
-      outcome,
-      rp,
-      ...metadata,
-    },
-  })).event;
+  const pendingEvent = eventResolution.event;
+  if (!pendingEvent?.id) {
+    return {
+      acreditado: false,
+      reason: eventResolution.reason ?? 'event_create_failed',
+      userId,
+      sourceKey,
+    };
+  }
 
-  const rankingUpdate = await updatePlayerRanking(supabaseAdmin, {
-    userId,
-    deporte,
-    nivel,
-    rpDelta: rp,
-    outcome,
-  });
+  let rankingUpdate;
+  try {
+    rankingUpdate = await updatePlayerRanking(supabaseAdmin, {
+      userId,
+      deporte,
+      nivel,
+      rpDelta: rp,
+      outcome,
+    });
+  } catch (err) {
+    console.error(`[Ranking Casual] ranking update error user=${userId} match=${matchId}:`, err?.message ?? err);
+    return {
+      acreditado: false,
+      reason: 'ranking_update_failed',
+      userId,
+      sourceKey,
+      pendingEvent,
+      recoverable: true,
+    };
+  }
 
   if (!rankingUpdate.ok) {
     return {
@@ -452,24 +780,29 @@ async function creditSingleUserRanking(supabaseAdmin, {
       sourceKey,
       pendingEvent,
       rankingUpdate,
+      recoverable: rankingUpdate.reason !== 'rankings_leaderboard_missing',
     };
   }
 
-  if (pendingEvent?.id) {
-    await supabaseAdmin
-      .from('match_reward_events')
-      .update({
-        status: MATCH_REWARD_EVENT_STATUS.CREDITED,
-        updated_at: new Date().toISOString(),
-        metadata: {
-          ...(pendingEvent.metadata ?? {}),
-          outcome,
-          rp,
-          puntos_totales: rankingUpdate.puntos,
-        },
-      })
-      .eq('id', pendingEvent.id);
-  }
+  const eventMetadata = {
+    ...(pendingEvent.metadata ?? {}),
+    outcome,
+    rp,
+    participant_side: metadata.participant_side ?? null,
+    mode: metadata.mode ?? null,
+    puntos_totales: rankingUpdate.puntos,
+    stats_applied: rankingUpdate.stats_applied === true,
+    stats_omitted_reason: rankingUpdate.stats_omitted_reason ?? null,
+    stats_delta: rankingUpdate.stats_delta ?? null,
+    partidos_jugados_after: rankingUpdate.partidos_jugados_after,
+    ganados_after: rankingUpdate.ganados_after,
+    perdidos_after: rankingUpdate.perdidos_after,
+    empatados_after: rankingUpdate.empatados_after,
+    racha_actual_after: rankingUpdate.racha_actual_after,
+    mejor_racha_after: rankingUpdate.mejor_racha_after,
+  };
+
+  await markRankingRewardEventCredited(supabaseAdmin, pendingEvent.id, eventMetadata);
 
   return {
     acreditado: true,
@@ -478,6 +811,16 @@ async function creditSingleUserRanking(supabaseAdmin, {
     outcome,
     sourceKey,
     puntos: rankingUpdate.puntos,
+    stats_applied: rankingUpdate.stats_applied === true,
+    stats_omitted_reason: rankingUpdate.stats_omitted_reason ?? null,
+    stats: {
+      partidos_jugados: rankingUpdate.partidos_jugados_after,
+      ganados: rankingUpdate.ganados_after,
+      perdidos: rankingUpdate.perdidos_after,
+      empatados: rankingUpdate.empatados_after,
+      racha_actual: rankingUpdate.racha_actual_after,
+      mejor_racha: rankingUpdate.mejor_racha_after,
+    },
   };
 }
 

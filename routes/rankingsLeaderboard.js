@@ -1,18 +1,21 @@
 import {
   mapRankingsLeaderboardPublicRow,
   RANKINGS_LEADERBOARD_PERFIL_SELECT,
+  RANKINGS_LEADERBOARD_STATS_SELECT,
+  isMissingRankingsStatsColumnError,
+  normalizeRankingsStatsRow,
 } from '../lib/rankingsLeaderboardPublic.js';
 
 const VALID_NIVELES = new Set(['club', 'nacional', 'fipa']);
 const VALID_DEPORTES = new Set(['padbol', 'padel', 'pickleball', 'tenis', 'futbol']);
 
 function isMissingRankingsLeaderboardTable(error) {
+  if (isMissingRankingsStatsColumnError(error)) return false;
   const message = String(error?.message ?? '').toLowerCase();
   return (
     error?.code === '42P01'
     || error?.code === 'PGRST205'
-    || message.includes('rankings_leaderboard')
-    || message.includes('does not exist')
+    || (message.includes('rankings_leaderboard') && message.includes('does not exist'))
     || message.includes('could not find the table')
   );
 }
@@ -36,20 +39,45 @@ export function mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenti
       const auth = await getAuthenticatedUser(req);
       const currentUserId = auth.user?.id ?? null;
 
-      const { data: rows, error } = await supabaseAdmin
+      let rows;
+      let query = supabaseAdmin
         .from('rankings_leaderboard')
-        .select('user_id, puntos')
+        .select(RANKINGS_LEADERBOARD_STATS_SELECT)
         .eq('deporte', deporte)
         .eq('nivel', nivel)
         .order('puntos', { ascending: false })
         .order('updated_at', { ascending: true })
         .limit(500);
 
-      if (error) {
-        if (isMissingRankingsLeaderboardTable(error)) {
+      const { data: rowsWithStats, error: statsErr } = await query;
+      if (statsErr) {
+        if (isMissingRankingsLeaderboardTable(statsErr)) {
           return res.json({ rankings: [], current_user_id: currentUserId });
         }
-        throw error;
+        if (isMissingRankingsStatsColumnError(statsErr)) {
+          const { data: fallbackRows, error: fallbackErr } = await supabaseAdmin
+            .from('rankings_leaderboard')
+            .select('user_id, puntos')
+            .eq('deporte', deporte)
+            .eq('nivel', nivel)
+            .order('puntos', { ascending: false })
+            .order('updated_at', { ascending: true })
+            .limit(500);
+          if (fallbackErr) {
+            if (isMissingRankingsLeaderboardTable(fallbackErr)) {
+              return res.json({ rankings: [], current_user_id: currentUserId });
+            }
+            throw fallbackErr;
+          }
+          rows = (fallbackRows ?? []).map((row) => ({
+            ...row,
+            ...normalizeRankingsStatsRow({}),
+          }));
+        } else {
+          throw statsErr;
+        }
+      } else {
+        rows = rowsWithStats ?? [];
       }
 
       if (!rows?.length) {
