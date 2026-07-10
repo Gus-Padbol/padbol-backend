@@ -72,3 +72,56 @@ export function getMatchAttendanceCronExpression() {
   }
   return `*/${minutes} * * * *`;
 }
+
+export const DEFAULT_MATCH_ATTENDANCE_FIRST_REMINDER_HOURS = 24;
+export const DEFAULT_MATCH_ATTENDANCE_SECOND_REMINDER_HOURS = 48;
+export const DEFAULT_MATCH_ATTENDANCE_REMINDER_BATCH_SIZE = 100;
+export const DEFAULT_MATCH_ATTENDANCE_REMINDER_CRON_INTERVAL_MINUTES = 30;
+
+export function isMatchAttendanceRemindersEnabled() {
+  return parseMatchAttendanceTruthyEnv(process.env.MATCH_ATTENDANCE_REMINDERS_ENABLED);
+}
+
+export function getMatchAttendanceFirstReminderHours() {
+  const raw = Number(process.env.MATCH_ATTENDANCE_FIRST_REMINDER_HOURS);
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MATCH_ATTENDANCE_FIRST_REMINDER_HOURS;
+}
+
+export function getMatchAttendanceSecondReminderHours() {
+  const raw = Number(process.env.MATCH_ATTENDANCE_SECOND_REMINDER_HOURS);
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MATCH_ATTENDANCE_SECOND_REMINDER_HOURS;
+}
+
+export function getMatchAttendanceReminderBatchSize() {
+  const raw = Number(process.env.MATCH_ATTENDANCE_REMINDER_BATCH_SIZE);
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MATCH_ATTENDANCE_REMINDER_BATCH_SIZE;
+}
+
+export function getMatchAttendanceReminderCronIntervalMinutes() {
+  const raw = Number(process.env.MATCH_ATTENDANCE_REMINDER_CRON_INTERVAL_MINUTES);
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MATCH_ATTENDANCE_REMINDER_CRON_INTERVAL_MINUTES;
+}
+
+export function getMatchAttendanceReminderCronExpression() {
+  const minutes = getMatchAttendanceReminderCronIntervalMinutes();
+  if (minutes >= 60 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return hours === 1 ? '0 * * * *' : `0 */${hours} * * *`;
+  }
+  if (minutes >= 60) {
+    return '0 * * * *';
+  }
+  return `*/${minutes} * * * *`;
+}

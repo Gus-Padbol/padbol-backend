@@ -31,6 +31,7 @@ import {
   getEligibleParticipantsForRewards,
   listMatchParticipants,
 } from './matchParticipantsService.js';
+import { notifyInitialAttendancePendingParticipants } from './matchAttendanceNotificationService.js';
 import { creditValidatedMatchPadcoins } from './matchRewardsService.js';
 import {
   processCasualMatchRankingAfterResultConfirmed,
@@ -710,7 +711,7 @@ async function upsertPendingParticipantForAttendance(supabaseAdmin, {
       source: candidate.source ?? existing.source ?? MATCH_PARTICIPANT_SOURCES.MANUAL,
       attendance_status: MATCH_ATTENDANCE_STATUS.PENDING,
       reward_status: MATCH_REWARD_STATUS.PENDING,
-      attendance_requested_at: requestedAt,
+      attendance_requested_at: existing.attendance_requested_at ?? null,
       attendance_responded_at: null,
       attendance_response_source: null,
       attendance_denial_reason: null,
@@ -739,7 +740,7 @@ async function upsertPendingParticipantForAttendance(supabaseAdmin, {
     source: candidate.source ?? MATCH_PARTICIPANT_SOURCES.MANUAL,
     attendance_status: MATCH_ATTENDANCE_STATUS.PENDING,
     reward_status: MATCH_REWARD_STATUS.PENDING,
-    attendance_requested_at: requestedAt,
+    attendance_requested_at: null,
     attendance_responded_at: null,
     attendance_response_source: null,
     attendance_denial_reason: null,
@@ -985,6 +986,26 @@ export async function openAttendanceWindowForMatch(supabaseAdmin, matchId, optio
     `[Attendance Fase 3.1] window opened partido=${partido.id} source=${source} participants=${syncResult.identified_count ?? 0} deadline=${deadlineAt}`,
   );
 
+  const notificationResult = await notifyInitialAttendancePendingParticipants(
+    supabaseAdmin,
+    partido.id,
+    {
+      deadlineAt,
+      partido: updatedPartido,
+      participants: syncResult.synced,
+      deps: {
+        ...(options.deps ?? {}),
+        ...(options.deps?.attendanceNotifications ?? {}),
+      },
+    },
+  ).catch((err) => {
+    console.warn(
+      `[Attendance Fase 3.5] initial notifications failed partido=${partido.id}:`,
+      err?.message ?? err,
+    );
+    return { ok: false, reason: 'notification_error', errors: 1 };
+  });
+
   return {
     ok: true,
     opened: true,
@@ -996,6 +1017,7 @@ export async function openAttendanceWindowForMatch(supabaseAdmin, matchId, optio
     deadline_at: deadlineAt,
     match_id: Number(partido.id),
     sync: syncResult,
+    notifications: notificationResult,
   };
 }
 

@@ -29,6 +29,52 @@ export async function createNotificacion(supabaseAdmin, payload) {
   }
 }
 
+export async function findNotificacionByDedupeKey(supabaseAdmin, userId, dedupeKey) {
+  if (!userId || !dedupeKey) return null;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from(NOTIFICACIONES_TABLE)
+      .select('id, user_id, tipo, data, created_at')
+      .eq('user_id', userId)
+      .contains('data', { dedupe_key: dedupeKey })
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      if (isNotificacionesTableMissing(error)) return null;
+      throw error;
+    }
+
+    return data ?? null;
+  } catch (err) {
+    console.warn('⚠️ findNotificacionByDedupeKey:', err.message);
+    return null;
+  }
+}
+
+export async function createNotificacionIfAbsent(supabaseAdmin, payload) {
+  const dedupeKey = payload?.data?.dedupe_key ?? null;
+  if (dedupeKey) {
+    const existing = await findNotificacionByDedupeKey(
+      supabaseAdmin,
+      payload.user_id,
+      dedupeKey,
+    );
+    if (existing) {
+      return { created: false, duplicate: true, notificacion: existing };
+    }
+  }
+
+  const notificacion = await createNotificacion(supabaseAdmin, payload);
+  if (!notificacion) {
+    return { created: false, duplicate: false, notificacion: null };
+  }
+
+  return { created: true, duplicate: false, notificacion };
+}
+
 export async function markNotificacionLeida(supabaseAdmin, notificacionId, userId) {
   const { data, error } = await supabaseAdmin
     .from(NOTIFICACIONES_TABLE)

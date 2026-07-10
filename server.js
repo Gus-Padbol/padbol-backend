@@ -152,6 +152,7 @@ import { initReservasCron } from './src/cron/reservasCron.js';
 import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
 import { initPadcoinsAlertasCron } from './src/cron/padcoinsAlertasCron.js';
 import { initMatchAttendanceCron } from './src/cron/matchAttendanceCron.js';
+import { initMatchAttendanceReminderCron } from './src/cron/matchAttendanceReminderCron.js';
 import {
   penalizarPadcoinsPorCancelacionTarde,
   penalizarPadcoinsPorNoShow,
@@ -3520,6 +3521,12 @@ initPadcoinsAlertasCron({
 });
 
 initMatchAttendanceCron({
+  supabaseAdmin,
+  cron,
+  timezone: 'America/Argentina/Buenos_Aires',
+});
+
+initMatchAttendanceReminderCron({
   supabaseAdmin,
   cron,
   timezone: 'America/Argentina/Buenos_Aires',

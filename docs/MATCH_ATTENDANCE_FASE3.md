@@ -271,6 +271,64 @@ El server monta el timer solo si `MATCH_ATTENDANCE_CRON_ENABLED=true`. Resumen p
 | Confirmación OFF | No expira ventanas; legacy intacto |
 | Cron OFF | No se inicia timer (default) |
 
+## Fase 3.5 (notificaciones y recordatorios)
+
+| Incluido | Excluido |
+|----------|----------|
+| Notificación inicial al abrir ventana | Endpoints admin |
+| Recordatorios 24h y 48h (cron apagado) | Activación en producción |
+| Dedupe vía `attendance_requested_at` + `notificaciones.data.dedupe_key` | Cambios SQL |
+| Push no bloqueante | UI |
+
+### Notificación inicial
+
+Al abrir ventana (Fase 3.1, flag confirmación ON):
+
+- Tipo: `asistencia_partido_pendiente`
+- Solo participantes `pending` con `user_id` válido
+- Título: **Confirmá si jugaste**
+- Mensaje: *El partido ya terminó. Confirmá tu asistencia antes del vencimiento para recibir tus recompensas.*
+- Payload: `partido_id`, `deadline_at`, `action: confirmar_asistencia`, `source: attendance_phase3`
+- Sin saldos ni RP estimados
+
+### Dedupe
+
+| Mecanismo | Uso |
+|-----------|-----|
+| `attendance_requested_at` | Puerta principal notificación inicial |
+| `notificaciones.data.dedupe_key` | Clave estable por etapa |
+
+Claves:
+
+```
+attendance|match|{matchId}|user|{userId}|initial
+attendance|match|{matchId}|user|{userId}|reminder_24h
+attendance|match|{matchId}|user|{userId}|reminder_48h
+```
+
+Tras crear notificación interna, se completa `attendance_requested_at`. Fallo de push no bloquea apertura ni duplica notificación interna.
+
+### Recordatorios (apagados por defecto)
+
+```bash
+# NO activar en producción
+MATCH_ATTENDANCE_REMINDERS_ENABLED=true
+MATCH_ATTENDANCE_FIRST_REMINDER_HOURS=24
+MATCH_ATTENDANCE_SECOND_REMINDER_HOURS=48
+MATCH_ATTENDANCE_REMINDER_BATCH_SIZE=100
+MATCH_ATTENDANCE_REMINDER_CRON_INTERVAL_MINUTES=30
+```
+
+Requiere `MATCH_ATTENDANCE_CONFIRMATION_ENABLED=true`. Solo envía mientras ventana `open`, participante `pending` y deadline vigente.
+
+### Flags por defecto
+
+| Flag | Default |
+|------|---------|
+| `MATCH_ATTENDANCE_CONFIRMATION_ENABLED` | false |
+| `MATCH_ATTENDANCE_CRON_ENABLED` | false |
+| `MATCH_ATTENDANCE_REMINDERS_ENABLED` | false |
+
 ## Columnas preparadas
 
 Ver [`docs/sql/match_attendance_phase3.sql`](./sql/match_attendance_phase3.sql).
@@ -295,5 +353,4 @@ Default: **apagado**.
 
 ## Próximas fases
 
-1. Notificaciones y recordatorios.
-2. Endpoints admin + overrides por sede.
+1. Endpoints admin + overrides por sede.
