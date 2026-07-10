@@ -1,5 +1,18 @@
 import { XP_VALORES } from './xpConfig.js';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * En producción `sumar_xp` puede tipar `p_referencia_id` como UUID.
+ * IDs numéricos (p. ej. partido #49) u otros slugs no UUID se omiten para no fallar el RPC.
+ */
+export function normalizeXpReferenciaId(referenciaId) {
+  if (referenciaId == null) return null;
+  const value = String(referenciaId).trim();
+  if (!value) return null;
+  return UUID_REGEX.test(value) ? value : null;
+}
+
 export async function sumarXP(supabaseAdmin, userId, tipo, descripcion, referenciaId = null) {
   const xp = XP_VALORES[tipo];
   if (xp == null) {
@@ -11,7 +24,7 @@ export async function sumarXP(supabaseAdmin, userId, tipo, descripcion, referenc
     p_tipo: tipo,
     p_xp: xp,
     p_descripcion: descripcion ?? null,
-    p_referencia_id: referenciaId != null ? String(referenciaId) : null,
+    p_referencia_id: normalizeXpReferenciaId(referenciaId),
   });
 
   if (error) throw error;

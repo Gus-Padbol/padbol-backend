@@ -105,50 +105,54 @@ async function otorgarXpPartidoConfirmado(supabaseAdmin, partido, capitanes, gan
   const xpResults = [];
 
   for (const capitanId of capitanes.capitanes) {
-    const xpConfirmado = await sumarXP(
-      supabaseAdmin,
-      capitanId,
-      'PARTIDO_CASUAL_CONFIRMADO',
-      `Partido casual confirmado #${partido.id}`,
-      String(partido.id),
-    );
-    xpResults.push({ userId: capitanId, tipo: 'PARTIDO_CASUAL_CONFIRMADO', ...xpConfirmado });
-
-    const capitanGanador =
-      (ganador === 'equipo1' && capitanId === capitanes.capitan1)
-      || (ganador === 'equipo2' && capitanId === capitanes.capitan2);
-
-    if (capitanGanador) {
-      const xpVictoria = await sumarXP(
+    try {
+      const xpConfirmado = await sumarXP(
         supabaseAdmin,
         capitanId,
-        'VICTORIA_CASUAL',
-        `Victoria en partido casual #${partido.id}`,
+        'PARTIDO_CASUAL_CONFIRMADO',
+        `Partido casual confirmado #${partido.id}`,
         String(partido.id),
       );
-      xpResults.push({ userId: capitanId, tipo: 'VICTORIA_CASUAL', ...xpVictoria });
-    }
+      xpResults.push({ userId: capitanId, tipo: 'PARTIDO_CASUAL_CONFIRMADO', ...xpConfirmado });
 
-    if (cargas[capitanId]) {
-      const xpCarga = await sumarXP(
-        supabaseAdmin,
-        capitanId,
-        'CARGAR_RESULTADO',
-        `Resultado cargado partido #${partido.id}`,
-        String(partido.id),
+      const capitanGanador =
+        (ganador === 'equipo1' && capitanId === capitanes.capitan1)
+        || (ganador === 'equipo2' && capitanId === capitanes.capitan2);
+
+      if (capitanGanador) {
+        const xpVictoria = await sumarXP(
+          supabaseAdmin,
+          capitanId,
+          'VICTORIA_CASUAL',
+          `Victoria en partido casual #${partido.id}`,
+          String(partido.id),
+        );
+        xpResults.push({ userId: capitanId, tipo: 'VICTORIA_CASUAL', ...xpVictoria });
+      }
+
+      if (cargas[capitanId]) {
+        const xpCarga = await sumarXP(
+          supabaseAdmin,
+          capitanId,
+          'CARGAR_RESULTADO',
+          `Resultado cargado partido #${partido.id}`,
+          String(partido.id),
+        );
+        xpResults.push({ userId: capitanId, tipo: 'CARGAR_RESULTADO', ...xpCarga });
+      }
+
+      await verificarLogrosArena(supabaseAdmin, capitanId, {
+        evento: 'partido_resultado_confirmado',
+        partido_id: partido.id,
+        ganador: capitanGanador,
+      });
+
+      await actualizarRango(supabaseAdmin, capitanId).catch((err) =>
+        console.warn('⚠️ actualizarRango partido:', err.message),
       );
-      xpResults.push({ userId: capitanId, tipo: 'CARGAR_RESULTADO', ...xpCarga });
+    } catch (err) {
+      console.warn(`⚠️ XP/logros partido casual ${partido.id} capitan ${capitanId}:`, err.message);
     }
-
-    await verificarLogrosArena(supabaseAdmin, capitanId, {
-      evento: 'partido_resultado_confirmado',
-      partido_id: partido.id,
-      ganador: capitanGanador,
-    });
-
-    await actualizarRango(supabaseAdmin, capitanId).catch((err) =>
-      console.warn('⚠️ actualizarRango partido:', err.message),
-    );
   }
 
   return xpResults;
@@ -185,7 +189,10 @@ export async function procesarResultadoPartidoCasual({
   partidoId,
   user,
   body,
+  deps = {},
 }) {
+  const processPadcoinsFn = deps.processCasualMatchPadcoinsAfterResultConfirmed
+    ?? processCasualMatchPadcoinsAfterResultConfirmed;
   const validation = parseResultadoBody(body);
   if (!validation.valid) {
     return { status: 400, body: { error: validation.error } };
@@ -319,9 +326,12 @@ export async function procesarResultadoPartidoCasual({
     capitanes,
     ganador,
     cargas,
-  );
+  ).catch((err) => {
+    console.warn(`⚠️ XP partido casual ${partidoId}:`, err.message);
+    return [];
+  });
 
-  const padcoinsResult = await processCasualMatchPadcoinsAfterResultConfirmed(
+  const padcoinsResult = await processPadcoinsFn(
     supabaseAdmin,
     partidoId,
   ).catch((err) => {
