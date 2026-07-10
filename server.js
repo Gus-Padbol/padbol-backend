@@ -2619,6 +2619,8 @@ const partidosRouter = createPartidosRouter({
   computePartidoDeadlineCancel,
   triggerPartidoCreatorPayment,
   pgPool,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 app.use('/api/partidos', partidosRouter);
 /** Alias legacy (SedePublica fallback): misma respuesta que GET /api/partidos/abiertos */

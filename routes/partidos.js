@@ -9,6 +9,11 @@ import {
 import { procesarResultadoPartidoCasual } from '../src/partidos/resultadoService.js';
 import { processCasualMatchPadcoinsAfterResultConfirmed } from '../src/matches/matchRewardsService.js';
 import {
+  getMatchAttendanceState,
+  getPlayerAttendanceState,
+  userCanViewAttendanceSummary,
+} from '../src/matches/matchAttendanceService.js';
+import {
   EquiposPartidoError,
   procesarActualizarNombresEquiposPartido,
   procesarDefinirEquiposPartido,
@@ -1613,6 +1618,8 @@ export function createPartidosRouter({
   triggerPartidoCreatorPayment,
   pgPool = null,
   generateMatchSummary = generateMatchSummaryForPartido,
+  fetchUserRoleRowForAuthUser = null,
+  legacySuperAdminEmails = [],
 }) {
   const resolveDeadline = computePartidoDeadlineCancel ?? computeDeadlineCancel;
 
@@ -3266,6 +3273,102 @@ export function createPartidosRouter({
       res.status(result.status).json(result.body);
     } catch (err) {
       console.error('❌ Error POST /api/partidos/:id/resultado:', err.message);
+      return sendHttpError(res, err);
+    }
+  });
+
+  router.get('/:id/asistencia/resumen', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const state = await getMatchAttendanceState(supabaseAdmin, partidoId);
+      if (!state.ok) {
+        return res.status(404).json({ error: 'Partido no encontrado' });
+      }
+
+      const canView = await userCanViewAttendanceSummary(user, state.partido, {
+        fetchUserRoleRowForAuthUser,
+        legacySuperAdminEmails,
+      });
+
+      if (!canView) {
+        return res.status(403).json({ error: 'No tenés permiso para ver el resumen de asistencia' });
+      }
+
+      if (state.partidoFields?.schema_attendance_columns_available === false) {
+        console.warn(
+          `[Attendance Fase 3.0] schema columns missing for partido ${partidoId}; serving legacy summary`,
+        );
+      }
+
+      res.json({ summary: state.summary });
+    } catch (err) {
+      console.error('❌ Error GET /api/partidos/:id/asistencia/resumen:', err.message);
+      return sendHttpError(res, err);
+    }
+  });
+
+  router.get('/:id/asistencia', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const partidoId = parsePartidoId(req.params.id);
+      if (partidoId == null) {
+        return res.status(400).json({ error: 'ID de partido inválido' });
+      }
+
+      const playerState = await getPlayerAttendanceState(supabaseAdmin, partidoId, user.id);
+      if (!playerState.ok && playerState.reason === 'partido_no_encontrado') {
+        return res.status(404).json({ error: 'Partido no encontrado' });
+      }
+      if (!playerState.ok) {
+        return res.status(400).json({ error: playerState.reason ?? 'invalid_request' });
+      }
+
+      if (!playerState.player?.is_member) {
+        return res.status(403).json({ error: 'No formás parte de este partido' });
+      }
+
+      if (playerState.match?.schema_attendance_columns_available === false) {
+        console.warn(
+          `[Attendance Fase 3.0] schema columns missing for partido ${partidoId}; serving legacy player state`,
+        );
+      }
+
+      res.json({
+        match_id: partidoId,
+        feature_enabled: playerState.match.feature_enabled === true,
+        can_respond: playerState.player.can_respond === true,
+        match: {
+          collection_status: playerState.match.collection_status,
+          opened_at: playerState.match.opened_at,
+          deadline_at: playerState.match.deadline_at,
+          resolved_at: playerState.match.resolved_at,
+          resolution_reason: playerState.match.resolution_reason,
+          rewards_processed_at: playerState.match.rewards_processed_at,
+        },
+        player: {
+          attendance_status: playerState.player.attendance_status,
+          attendance_confirmed_at: playerState.player.attendance_confirmed_at,
+          attendance_requested_at: playerState.player.attendance_requested_at,
+          attendance_responded_at: playerState.player.attendance_responded_at,
+          attendance_response_source: playerState.player.attendance_response_source,
+          is_captain: playerState.player.is_captain === true,
+        },
+      });
+    } catch (err) {
+      console.error('❌ Error GET /api/partidos/:id/asistencia:', err.message);
       return sendHttpError(res, err);
     }
   });

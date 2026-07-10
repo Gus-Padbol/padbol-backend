@@ -23,6 +23,82 @@ export const MATCH_ATTENDANCE_STATUS = Object.freeze({
   EXCLUDED: 'excluded',
 });
 
+export const MATCH_ATTENDANCE_COLLECTION_STATUS = Object.freeze({
+  NONE: 'none',
+  OPEN: 'open',
+  EXPIRED: 'expired',
+  READY: 'ready',
+  CREDITED: 'credited',
+  BLOCKED: 'blocked',
+});
+
+export const MATCH_ATTENDANCE_RESPONSE_SOURCE = Object.freeze({
+  PLAYER: 'player',
+  ADMIN: 'admin',
+  SYSTEM_TIMEOUT: 'system_timeout',
+  SYSTEM_LEGACY: 'system_legacy',
+});
+
+const ATTENDANCE_COLLECTION_STATUS_VALUES = new Set(
+  Object.values(MATCH_ATTENDANCE_COLLECTION_STATUS),
+);
+
+const ATTENDANCE_RESPONSE_SOURCE_VALUES = new Set(
+  Object.values(MATCH_ATTENDANCE_RESPONSE_SOURCE),
+);
+
+const ATTENDANCE_STATUS_VALUES = new Set(Object.values(MATCH_ATTENDANCE_STATUS));
+
+export const NON_ELIGIBLE_ATTENDANCE_STATUSES = new Set([
+  MATCH_ATTENDANCE_STATUS.PENDING,
+  MATCH_ATTENDANCE_STATUS.DENIED,
+  MATCH_ATTENDANCE_STATUS.EXCLUDED,
+]);
+
+export const ELIGIBLE_ATTENDANCE_STATUSES = new Set([
+  MATCH_ATTENDANCE_STATUS.CONFIRMED,
+  MATCH_ATTENDANCE_STATUS.ADMIN_VALIDATED,
+]);
+
+export function normalizeAttendanceStatus(value, fallback = MATCH_ATTENDANCE_STATUS.PENDING) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (ATTENDANCE_STATUS_VALUES.has(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+export function normalizeAttendanceCollectionStatus(
+  value,
+  fallback = MATCH_ATTENDANCE_COLLECTION_STATUS.NONE,
+) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (ATTENDANCE_COLLECTION_STATUS_VALUES.has(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+export function normalizeAttendanceResponseSource(value) {
+  if (value == null || String(value).trim() === '') {
+    return null;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (ATTENDANCE_RESPONSE_SOURCE_VALUES.has(normalized)) {
+    return normalized;
+  }
+  return null;
+}
+
+export function isEligibleAttendanceStatus(status) {
+  return ELIGIBLE_ATTENDANCE_STATUSES.has(normalizeAttendanceStatus(status, ''));
+}
+
+export function isNonEligibleAttendanceStatus(status) {
+  const normalized = normalizeAttendanceStatus(status, '');
+  return normalized !== '' && NON_ELIGIBLE_ATTENDANCE_STATUSES.has(normalized);
+}
+
 export const MATCH_REWARD_STATUS = Object.freeze({
   PENDING: 'pending',
   ELIGIBLE: 'eligible',
