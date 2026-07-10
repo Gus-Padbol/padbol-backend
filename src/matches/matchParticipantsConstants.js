@@ -41,6 +41,7 @@ export const MATCH_ATTENDANCE_RESPONSE_SOURCE = Object.freeze({
 
 export const MATCH_ATTENDANCE_RESOLUTION_REASON = Object.freeze({
   ALL_RESPONDED: 'all_responded',
+  TIMEOUT_PARTIAL: 'timeout_partial',
   NO_ELIGIBLE_PARTICIPANTS: 'no_eligible_participants',
 });
 

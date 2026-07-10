@@ -34,3 +34,41 @@ export function getMatchAttendanceWindowHours() {
   }
   return DEFAULT_MATCH_ATTENDANCE_WINDOW_HOURS;
 }
+
+export const DEFAULT_MATCH_ATTENDANCE_CRON_INTERVAL_MINUTES = 15;
+export const DEFAULT_MATCH_ATTENDANCE_CRON_BATCH_SIZE = 50;
+
+export function isMatchAttendanceCronEnabled() {
+  return parseMatchAttendanceTruthyEnv(process.env.MATCH_ATTENDANCE_CRON_ENABLED);
+}
+
+export function getMatchAttendanceCronIntervalMinutes() {
+  const raw = Number(process.env.MATCH_ATTENDANCE_CRON_INTERVAL_MINUTES);
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MATCH_ATTENDANCE_CRON_INTERVAL_MINUTES;
+}
+
+export function getMatchAttendanceCronBatchSize() {
+  const raw = Number(process.env.MATCH_ATTENDANCE_CRON_BATCH_SIZE);
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MATCH_ATTENDANCE_CRON_BATCH_SIZE;
+}
+
+/**
+ * Expresión cron según intervalo en minutos (default cada 15 min).
+ */
+export function getMatchAttendanceCronExpression() {
+  const minutes = getMatchAttendanceCronIntervalMinutes();
+  if (minutes >= 60 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return hours === 1 ? '0 * * * *' : `0 */${hours} * * *`;
+  }
+  if (minutes >= 60) {
+    return '0 * * * *';
+  }
+  return `*/${minutes} * * * *`;
+}

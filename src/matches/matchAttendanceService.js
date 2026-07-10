@@ -1,4 +1,9 @@
-import { getMatchAttendanceWindowHours, isAttendanceConfirmationEnabledForMatch } from './matchAttendanceConfig.js';
+import {
+  getMatchAttendanceCronBatchSize,
+  getMatchAttendanceWindowHours,
+  isAttendanceConfirmationEnabledForMatch,
+  isMatchAttendanceConfirmationEnabled,
+} from './matchAttendanceConfig.js';
 import { resolveAuthRoleForUser } from '../../lib/authAccess.js';
 import {
   isEquiposAsignacionValida,
@@ -1166,7 +1171,9 @@ export function buildPlayerAttendanceUpdatePayload(targetStatus, {
   };
 }
 
-export function computeNextAttendanceCollectionTransition(participants = []) {
+export function computeNextAttendanceCollectionTransition(participants = [], {
+  readyResolutionReason = MATCH_ATTENDANCE_RESOLUTION_REASON.ALL_RESPONDED,
+} = {}) {
   const counts = countParticipantsByAttendanceStatus(participants);
 
   if (counts.pending > 0) {
@@ -1181,7 +1188,7 @@ export function computeNextAttendanceCollectionTransition(participants = []) {
     return {
       shouldTransition: true,
       collection_status: MATCH_ATTENDANCE_COLLECTION_STATUS.READY,
-      resolution_reason: MATCH_ATTENDANCE_RESOLUTION_REASON.ALL_RESPONDED,
+      resolution_reason: readyResolutionReason,
     };
   }
 
@@ -1190,6 +1197,402 @@ export function computeNextAttendanceCollectionTransition(participants = []) {
     collection_status: MATCH_ATTENDANCE_COLLECTION_STATUS.BLOCKED,
     resolution_reason: MATCH_ATTENDANCE_RESOLUTION_REASON.NO_ELIGIBLE_PARTICIPANTS,
   };
+}
+
+export function computeAttendanceCollectionTransitionAfterTimeout(participants = []) {
+  return computeNextAttendanceCollectionTransition(participants, {
+    readyResolutionReason: MATCH_ATTENDANCE_RESOLUTION_REASON.TIMEOUT_PARTIAL,
+  });
+}
+
+function buildPendingTimeoutExclusionPayload(now = new Date()) {
+  const respondedAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  return {
+    attendance_status: MATCH_ATTENDANCE_STATUS.EXCLUDED,
+    attendance_confirmed_at: null,
+    attendance_responded_at: respondedAt,
+    attendance_response_source: MATCH_ATTENDANCE_RESPONSE_SOURCE.SYSTEM_TIMEOUT,
+    attendance_denial_reason: null,
+    updated_at: respondedAt,
+  };
+}
+
+function shouldSkipExpiredAttendancePartido(partido = {}) {
+  if (!partido) {
+    return { skip: true, reason: 'partido_no_encontrado' };
+  }
+
+  if (partido.partido_torneo_id != null || partido.torneo_id != null) {
+    return { skip: true, reason: 'torneo_out_of_scope' };
+  }
+
+  if (String(partido.estado ?? '').trim().toLowerCase() === 'cancelado') {
+    return { skip: true, reason: 'partido_cancelado' };
+  }
+
+  return { skip: false };
+}
+
+async function excludePendingParticipantsForTimeout(supabaseAdmin, matchId, {
+  now = new Date(),
+} = {}) {
+  const normalizedMatchId = normalizeMatchId(matchId);
+  if (!normalizedMatchId) {
+    return { ok: false, reason: 'invalid_match_id', excluded_count: 0, participants: [] };
+  }
+
+  const updatePayload = buildPendingTimeoutExclusionPayload(now);
+  const { data, error } = await supabaseAdmin
+    .from('match_participants')
+    .update(updatePayload)
+    .eq('match_type', MATCH_TYPES.CASUAL)
+    .eq('match_id', normalizedMatchId)
+    .eq('attendance_status', MATCH_ATTENDANCE_STATUS.PENDING)
+    .select(PARTICIPANTS_ATTENDANCE_SELECT);
+
+  if (error) {
+    if (isMissingMatchAttendanceColumnError(error)) {
+      return { ok: false, reason: 'schema_missing', excluded_count: 0, participants: [] };
+    }
+    throw error;
+  }
+
+  return {
+    ok: true,
+    excluded_count: (data ?? []).length,
+    participants: data ?? [],
+  };
+}
+
+async function transitionOpenAttendanceWindowAfterTimeout(supabaseAdmin, matchId, participants, {
+  now = new Date(),
+} = {}) {
+  const transition = computeAttendanceCollectionTransitionAfterTimeout(participants);
+  if (!transition.shouldTransition) {
+    return {
+      ok: true,
+      changed: false,
+      collection_status: MATCH_ATTENDANCE_COLLECTION_STATUS.OPEN,
+      resolution_reason: null,
+    };
+  }
+
+  const resolvedAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const { data: updatedPartido, error } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .update({
+      attendance_collection_status: transition.collection_status,
+      attendance_resolved_at: resolvedAt,
+      attendance_resolution_reason: transition.resolution_reason,
+    })
+    .eq('id', Number(matchId))
+    .eq('attendance_collection_status', MATCH_ATTENDANCE_COLLECTION_STATUS.OPEN)
+    .select(PARTIDOS_ATTENDANCE_SELECT)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (!updatedPartido) {
+    const refreshed = await getMatchAttendanceState(supabaseAdmin, matchId);
+    return {
+      ok: true,
+      changed: false,
+      idempotent: true,
+      collection_status: refreshed.partidoFields?.collection_status ?? null,
+      resolution_reason: refreshed.partidoFields?.resolution_reason ?? null,
+      partidoFields: refreshed.partidoFields ?? null,
+      summary: refreshed.summary ?? null,
+    };
+  }
+
+  const partidoFields = normalizePartidoAttendanceFields(updatedPartido, {
+    schemaAttendanceColumnsAvailable: true,
+  });
+  const { participants: refreshedParticipants } = await fetchParticipantsForAttendance(
+    supabaseAdmin,
+    matchId,
+  );
+
+  return {
+    ok: true,
+    changed: true,
+    collection_status: transition.collection_status,
+    resolution_reason: transition.resolution_reason,
+    partidoFields,
+    summary: buildMatchAttendanceSummary(partidoFields, refreshedParticipants),
+  };
+}
+
+const EXPIRED_ATTENDANCE_WINDOWS_SELECT =
+  `${PARTIDOS_ATTENDANCE_SELECT}, estado, partido_torneo_id, torneo_id`;
+
+export async function fetchExpiredOpenAttendanceWindows(supabaseAdmin, {
+  now = new Date(),
+  limit = getMatchAttendanceCronBatchSize(),
+} = {}) {
+  if (!isMatchAttendanceConfirmationEnabled()) {
+    return [];
+  }
+
+  const nowIso = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const effectiveLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.floor(Number(limit))
+    : getMatchAttendanceCronBatchSize();
+
+  const { data, error } = await supabaseAdmin
+    .from('partidos_abiertos')
+    .select(EXPIRED_ATTENDANCE_WINDOWS_SELECT)
+    .eq('attendance_collection_status', MATCH_ATTENDANCE_COLLECTION_STATUS.OPEN)
+    .lte('attendance_deadline_at', nowIso)
+    .is('partido_torneo_id', null)
+    .is('torneo_id', null)
+    .order('attendance_deadline_at', { ascending: true })
+    .limit(effectiveLimit);
+
+  if (error) {
+    if (isMissingMatchAttendanceColumnError(error)) {
+      return [];
+    }
+    throw error;
+  }
+
+  return (data ?? []).filter((partido) => {
+    const skip = shouldSkipExpiredAttendancePartido(partido);
+    return !skip.skip;
+  });
+}
+
+/**
+ * Expira una ventana open vencida: pending → excluded, resuelve ready/blocked y acredita si aplica.
+ */
+export async function expireAttendanceWindow(supabaseAdmin, matchId, options = {}) {
+  const {
+    now = new Date(),
+    partido: partidoInput = null,
+    deps = {},
+  } = options;
+
+  if (!isMatchAttendanceConfirmationEnabled()) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'feature_disabled',
+      match_id: Number(matchId) || null,
+    };
+  }
+
+  let partido = partidoInput;
+  let schemaAttendanceColumnsAvailable = true;
+
+  if (!partido) {
+    const fetched = await fetchPartidoForAttendanceRewards(supabaseAdmin, matchId);
+    partido = fetched.partido;
+    schemaAttendanceColumnsAvailable = fetched.schemaAttendanceColumnsAvailable;
+  } else if (partido.attendance_collection_status == null) {
+    const fetched = await fetchPartidoForAttendanceRewards(supabaseAdmin, matchId);
+    if (fetched.partido) {
+      partido = { ...fetched.partido, ...partido };
+    }
+    schemaAttendanceColumnsAvailable = fetched.schemaAttendanceColumnsAvailable;
+  }
+
+  if (!partido) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'partido_no_encontrado',
+      match_id: Number(matchId) || null,
+    };
+  }
+
+  if (!schemaAttendanceColumnsAvailable) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'schema_missing',
+      match_id: Number(partido.id),
+    };
+  }
+
+  const partidoSkip = shouldSkipExpiredAttendancePartido(partido);
+  if (partidoSkip.skip) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: partidoSkip.reason,
+      match_id: Number(partido.id),
+    };
+  }
+
+  const partidoFields = normalizePartidoAttendanceFields(partido, {
+    schemaAttendanceColumnsAvailable: true,
+  });
+
+  if (!partidoFields.feature_enabled) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'feature_disabled',
+      match_id: Number(partido.id),
+    };
+  }
+
+  const collectionStatus = partidoFields.collection_status;
+  if (collectionStatus !== MATCH_ATTENDANCE_COLLECTION_STATUS.OPEN) {
+    return {
+      ok: true,
+      skipped: true,
+      idempotent: true,
+      reason: 'not_open',
+      match_id: Number(partido.id),
+      collection_status: collectionStatus,
+    };
+  }
+
+  if (!isAttendanceDeadlineExpired(partidoFields.deadline_at, now)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'not_expired',
+      match_id: Number(partido.id),
+    };
+  }
+
+  const exclusion = await excludePendingParticipantsForTimeout(supabaseAdmin, partido.id, { now });
+  if (!exclusion.ok) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: exclusion.reason ?? 'exclusion_failed',
+      match_id: Number(partido.id),
+    };
+  }
+
+  const { participants } = await fetchParticipantsForAttendance(supabaseAdmin, partido.id);
+  const transitionResult = await transitionOpenAttendanceWindowAfterTimeout(
+    supabaseAdmin,
+    partido.id,
+    participants,
+    { now },
+  );
+
+  let partidoFieldsAfter = transitionResult.partidoFields
+    ?? normalizePartidoAttendanceFields(partido, { schemaAttendanceColumnsAvailable: true });
+  let summaryAfter = transitionResult.summary;
+  let rewards = null;
+  let credited = false;
+
+  if (partidoFieldsAfter.collection_status === MATCH_ATTENDANCE_COLLECTION_STATUS.READY) {
+    const finalizeFn = deps.tryFinalizeMatchAttendanceRewards ?? tryFinalizeMatchAttendanceRewards;
+    const finalizeResult = await finalizeFn(supabaseAdmin, partido.id, { now, deps });
+    rewards = finalizeResult.rewards ?? null;
+    credited = finalizeResult.credited === true;
+
+    const refreshed = await getMatchAttendanceState(supabaseAdmin, partido.id);
+    if (refreshed.ok) {
+      partidoFieldsAfter = refreshed.partidoFields;
+      summaryAfter = refreshed.summary;
+    } else if (finalizeResult.partidoFields) {
+      partidoFieldsAfter = finalizeResult.partidoFields;
+      summaryAfter = finalizeResult.summary ?? summaryAfter;
+    }
+  }
+
+  console.log(
+    `[Attendance Fase 3.4] expired partido=${partido.id} excluded=${exclusion.excluded_count} status=${partidoFieldsAfter.collection_status} credited=${credited}`,
+  );
+
+  return {
+    ok: true,
+    expired: true,
+    match_id: Number(partido.id),
+    pending_excluded: exclusion.excluded_count,
+    changed: transitionResult.changed === true,
+    idempotent: transitionResult.idempotent === true,
+    collection_status: partidoFieldsAfter.collection_status,
+    resolution_reason: partidoFieldsAfter.resolution_reason,
+    partidoFields: partidoFieldsAfter,
+    summary: summaryAfter,
+    credited,
+    rewards,
+  };
+}
+
+export async function processExpiredAttendanceWindows(supabaseAdmin, options = {}) {
+  const {
+    now = new Date(),
+    batchSize = getMatchAttendanceCronBatchSize(),
+    deps = {},
+  } = options;
+
+  const summary = {
+    ok: true,
+    examined: 0,
+    expired: 0,
+    ready: 0,
+    credited: 0,
+    blocked: 0,
+    errors: 0,
+    skipped: 0,
+  };
+
+  if (!isMatchAttendanceConfirmationEnabled()) {
+    return {
+      ...summary,
+      cron_skipped: true,
+      reason: 'feature_disabled',
+    };
+  }
+
+  const matches = await fetchExpiredOpenAttendanceWindows(supabaseAdmin, {
+    now,
+    limit: batchSize,
+  });
+  summary.examined = matches.length;
+
+  for (const match of matches) {
+    try {
+      const result = await expireAttendanceWindow(supabaseAdmin, match.id, {
+        now,
+        partido: match,
+        deps,
+      });
+
+      if (result.skipped) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      if (!result.expired) {
+        continue;
+      }
+
+      summary.expired += 1;
+      const finalStatus = result.partidoFields?.collection_status ?? result.collection_status;
+
+      if (finalStatus === MATCH_ATTENDANCE_COLLECTION_STATUS.CREDITED || result.credited) {
+        summary.credited += 1;
+      } else if (finalStatus === MATCH_ATTENDANCE_COLLECTION_STATUS.READY) {
+        summary.ready += 1;
+      } else if (finalStatus === MATCH_ATTENDANCE_COLLECTION_STATUS.BLOCKED) {
+        summary.blocked += 1;
+      }
+    } catch (err) {
+      summary.errors += 1;
+      console.error(
+        `[Attendance Fase 3.4] batch error partido=${match.id}:`,
+        err?.message ?? err,
+      );
+    }
+  }
+
+  if (summary.expired > 0 || summary.errors > 0) {
+    console.log(
+      `[Attendance Fase 3.4] batch examined=${summary.examined} expired=${summary.expired} ready=${summary.ready} credited=${summary.credited} blocked=${summary.blocked} errors=${summary.errors}`,
+    );
+  }
+
+  return summary;
 }
 
 export async function evaluateAttendanceCollectionState(supabaseAdmin, matchId, {

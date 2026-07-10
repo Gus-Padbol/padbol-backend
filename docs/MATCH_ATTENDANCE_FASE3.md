@@ -216,6 +216,61 @@ Tras `evaluateAttendanceCollectionState`, si el partido queda `ready` se invoca 
 
 El `match.collection_status` refleja el estado final (`ready` o `credited`).
 
+## Fase 3.4 (cron de vencimiento)
+
+| Incluido | Excluido |
+|----------|----------|
+| `expireAttendanceWindow` | Notificaciones |
+| `processExpiredAttendanceWindows` | Endpoints admin |
+| Cron `matchAttendanceCron.js` (apagado por defecto) | Activación en producción |
+| `pending → excluded` por timeout | Recordatorios |
+| `timeout_partial` / `system_timeout` | Cambios SQL |
+
+### Política de timeout
+
+Cuando `attendance_collection_status = open`, `attendance_deadline_at <= now` y flag de confirmación ON:
+
+| Campo participante | Valor |
+|--------------------|-------|
+| `attendance_status` | `excluded` (solo si era `pending`) |
+| `attendance_responded_at` | `now` |
+| `attendance_response_source` | `system_timeout` |
+| `attendance_denial_reason` | `null` |
+| `reward_status` | sin cambios (`pending`) |
+
+No se modifican `confirmed`, `denied`, `admin_validated` ni `excluded` ya resueltos.
+
+### Resolución del partido
+
+Tras excluir pendientes vencidos:
+
+| Situación | Estado | `attendance_resolution_reason` |
+|-----------|--------|--------------------------------|
+| Hay `confirmed` o `admin_validated` | `ready` | `timeout_partial` |
+| Sin elegibles | `blocked` | `no_eligible_participants` |
+
+No se usa `expired` como estado final estable. Si queda `ready`, se invoca `tryFinalizeMatchAttendanceRewards` (igual que Fase 3.3).
+
+### Cron (apagado por defecto)
+
+```bash
+# NO activar en producción
+MATCH_ATTENDANCE_CRON_ENABLED=true
+MATCH_ATTENDANCE_CRON_INTERVAL_MINUTES=15   # default 15
+MATCH_ATTENDANCE_CRON_BATCH_SIZE=50         # default 50
+```
+
+Requiere además `MATCH_ATTENDANCE_CONFIRMATION_ENABLED=true` para procesar ventanas.
+
+El server monta el timer solo si `MATCH_ATTENDANCE_CRON_ENABLED=true`. Resumen por ejecución: examinadas, expiradas, ready, credited, blocked, errores. Idempotente; continúa ante fallo individual.
+
+### Flag OFF vs cron OFF
+
+| Config | Efecto |
+|--------|--------|
+| Confirmación OFF | No expira ventanas; legacy intacto |
+| Cron OFF | No se inicia timer (default) |
+
 ## Columnas preparadas
 
 Ver [`docs/sql/match_attendance_phase3.sql`](./sql/match_attendance_phase3.sql).
@@ -240,5 +295,5 @@ Default: **apagado**.
 
 ## Próximas fases
 
-1. Notificaciones + cron de vencimiento.
+1. Notificaciones y recordatorios.
 2. Endpoints admin + overrides por sede.
