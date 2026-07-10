@@ -1,4 +1,81 @@
+import {
+  buildDedupeLinkPrefix,
+  encodeNotificationLinkPayload,
+  hasNotificationMetadata,
+  isMissingNotificacionesDataColumnError,
+  resolveNotificationData,
+  resolveNotificationPayload,
+  sanitizeNotificationMetadata,
+} from './notificacionesMetadata.js';
+
 const NOTIFICACIONES_TABLE = 'notificaciones';
+
+const SELECT_WITH_DATA = 'id, user_id, tipo, titulo, mensaje, data, link, leida, created_at';
+const SELECT_LINK_ONLY = 'id, user_id, tipo, titulo, mensaje, link, leida, created_at';
+
+/** @type {'auto' | 'data' | 'link'} */
+let metadataStorageMode = 'auto';
+
+export function resetNotificacionesMetadataModeForTests() {
+  metadataStorageMode = 'auto';
+}
+
+export function getNotificacionesMetadataStorageMode() {
+  return metadataStorageMode;
+}
+
+function resolveTitulo(payload = {}) {
+  const titulo = String(payload.titulo ?? payload.mensaje ?? payload.tipo ?? 'Notificación').trim();
+  return titulo || 'Notificación';
+}
+
+function buildInsertRow(payload = {}, mode = 'data') {
+  const metadata = sanitizeNotificationMetadata(payload.data ?? {});
+  const originalLink = payload.link != null && String(payload.link).trim()
+    ? String(payload.link).trim()
+    : null;
+
+  const row = {
+    user_id: payload.user_id,
+    tipo: payload.tipo,
+    titulo: resolveTitulo(payload),
+    mensaje: payload.mensaje,
+    leida: false,
+  };
+
+  if (mode === 'data') {
+    if (hasNotificationMetadata(metadata)) {
+      row.data = metadata;
+    }
+    if (originalLink) {
+      row.link = originalLink;
+    }
+    return row;
+  }
+
+  if (hasNotificationMetadata(metadata)) {
+    const enriched = { ...metadata };
+    if (originalLink) {
+      enriched.original_link = originalLink;
+    }
+    row.link = encodeNotificationLinkPayload(enriched);
+    return row;
+  }
+
+  if (originalLink) {
+    row.link = originalLink;
+  }
+
+  return row;
+}
+
+async function insertNotificacionRow(supabaseAdmin, row) {
+  return supabaseAdmin
+    .from(NOTIFICACIONES_TABLE)
+    .insert(row)
+    .select('*')
+    .single();
+}
 
 export async function createNotificacion(supabaseAdmin, payload) {
   const userId = payload?.user_id;
@@ -7,48 +84,93 @@ export async function createNotificacion(supabaseAdmin, payload) {
 
   if (!userId || !tipo || !mensaje) return null;
 
-  try {
-    const { data, error } = await supabaseAdmin
-      .from(NOTIFICACIONES_TABLE)
-      .insert({
-        user_id: userId,
-        tipo,
-        titulo: payload.titulo ?? null,
-        mensaje,
-        data: payload.data ?? {},
-        leida: false,
-      })
-      .select('*')
-      .single();
+  const modesToTry = metadataStorageMode === 'auto'
+    ? ['data', 'link']
+    : [metadataStorageMode];
 
-    if (error) throw error;
-    return data;
-  } catch (err) {
-    console.warn('⚠️ createNotificacion:', err.message);
-    return null;
+  for (const mode of modesToTry) {
+    try {
+      const { data, error } = await insertNotificacionRow(
+        supabaseAdmin,
+        buildInsertRow(payload, mode),
+      );
+      if (error) throw error;
+      if (metadataStorageMode === 'auto') {
+        metadataStorageMode = mode;
+      }
+      return data;
+    } catch (err) {
+      if (mode === 'data' && isMissingNotificacionesDataColumnError(err)) {
+        metadataStorageMode = 'link';
+        continue;
+      }
+      if (err?.code === 'NOTIFICATION_LINK_TOO_LARGE') {
+        console.warn('⚠️ createNotificacion: encoded link too large');
+        return null;
+      }
+      console.warn('⚠️ createNotificacion:', err.message);
+      return null;
+    }
   }
+
+  return null;
+}
+
+async function queryNotificacionByDedupeKeyData(supabaseAdmin, userId, dedupeKey) {
+  const { data, error } = await supabaseAdmin
+    .from(NOTIFICACIONES_TABLE)
+    .select(SELECT_WITH_DATA)
+    .eq('user_id', userId)
+    .contains('data', { dedupe_key: dedupeKey })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingNotificacionesDataColumnError(error)) {
+      return { row: null, useLinkMode: true };
+    }
+    throw error;
+  }
+
+  return { row: data ?? null, useLinkMode: false };
+}
+
+async function queryNotificacionByDedupeKeyLink(supabaseAdmin, userId, dedupeKey) {
+  const { data, error } = await supabaseAdmin
+    .from(NOTIFICACIONES_TABLE)
+    .select(SELECT_LINK_ONLY)
+    .eq('user_id', userId)
+    .like('link', `${buildDedupeLinkPrefix(dedupeKey)}%`)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data ?? null;
 }
 
 export async function findNotificacionByDedupeKey(supabaseAdmin, userId, dedupeKey) {
   if (!userId || !dedupeKey) return null;
 
   try {
-    const { data, error } = await supabaseAdmin
-      .from(NOTIFICACIONES_TABLE)
-      .select('id, user_id, tipo, data, created_at')
-      .eq('user_id', userId)
-      .contains('data', { dedupe_key: dedupeKey })
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      if (isNotificacionesTableMissing(error)) return null;
-      throw error;
+    if (metadataStorageMode !== 'link') {
+      const dataResult = await queryNotificacionByDedupeKeyData(supabaseAdmin, userId, dedupeKey);
+      if (dataResult.useLinkMode) {
+        metadataStorageMode = 'link';
+      } else if (dataResult.row) {
+        if (metadataStorageMode === 'auto') {
+          metadataStorageMode = 'data';
+        }
+        return dataResult.row;
+      } else if (metadataStorageMode === 'data') {
+        return null;
+      }
     }
 
-    return data ?? null;
+    return await queryNotificacionByDedupeKeyLink(supabaseAdmin, userId, dedupeKey);
   } catch (err) {
+    if (isNotificacionesTableMissing(err)) return null;
     console.warn('⚠️ findNotificacionByDedupeKey:', err.message);
     return null;
   }
@@ -106,3 +228,5 @@ export function isNotificacionesTableMissing(error) {
     || msg.includes('notificaciones')
   );
 }
+
+export { resolveNotificationData, resolveNotificationPayload };

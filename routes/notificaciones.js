@@ -3,6 +3,7 @@ import {
   isNotificacionesTableMissing,
   markAllNotificacionesLeidas,
   markNotificacionLeida,
+  resolveNotificationPayload,
 } from '../utils/notificaciones.js';
 import {
   isSolicitudPendienteActiva,
@@ -42,12 +43,14 @@ function displayNameFromPerfil(perfil) {
 }
 
 function mapNotificationRow(row) {
+  const { data, link } = resolveNotificationPayload(row);
   return {
     id: row.id,
     tipo: row.tipo,
     titulo: row.titulo ?? null,
     mensaje: row.mensaje,
-    data: row.data ?? {},
+    data,
+    link,
     leida: Boolean(row.leida),
     created_at: row.created_at,
   };
