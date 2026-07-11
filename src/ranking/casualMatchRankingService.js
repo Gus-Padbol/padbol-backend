@@ -19,11 +19,10 @@ import {
   normalizeMatchId,
 } from '../matches/matchParticipantsConstants.js';
 
-/** Ranking points (RP) — Fase 1 casual. */
+/** Ranking points (RP) — Fase 1 casual. Padbol no admite empates. */
 export const CASUAL_RANKING_RP = Object.freeze({
   WIN: 3,
   LOSS: 1,
-  DRAW: 2,
 });
 
 export const CASUAL_RANKING_DEFAULT_NIVEL = 'club';
@@ -90,6 +89,26 @@ function normalizeScoreboardGanador(ganador) {
   return null;
 }
 
+function rejectTiedManualScores(resultado = {}) {
+  if (
+    Number.isFinite(Number(resultado.equipo1))
+    && Number.isFinite(Number(resultado.equipo2))
+    && Number(resultado.equipo1) === Number(resultado.equipo2)
+  ) {
+    return { ok: false, reason: 'empate_no_permitido' };
+  }
+
+  if (
+    Number.isFinite(Number(resultado.equipo1_sets))
+    && Number.isFinite(Number(resultado.equipo2_sets))
+    && Number(resultado.equipo1_sets) === Number(resultado.equipo2_sets)
+  ) {
+    return { ok: false, reason: 'empate_no_permitido' };
+  }
+
+  return null;
+}
+
 function hasManualResult(partido = {}) {
   const ganador = normalizeManualGanador(partido.ganador);
   if (!ganador) return false;
@@ -121,20 +140,25 @@ export function resolveCasualMatchRankingResult({
 
   const payload = scorePayload ?? (scoreboard ? buildScoreboardResultPayloadFromRow(scoreboard) : null);
 
+  if (
+    payload
+    && Number.isFinite(Number(payload.sets_a))
+    && Number.isFinite(Number(payload.sets_b))
+    && Number(payload.sets_a) === Number(payload.sets_b)
+  ) {
+    return { ok: false, reason: 'empate_no_permitido' };
+  }
+
   if (payload?.ganador) {
     const ganador = normalizeScoreboardGanador(payload.ganador);
     if (!ganador) {
       return { ok: false, reason: 'ganador_scoreboard_invalido' };
-    }
-    if (payload.sets_a === payload.sets_b) {
-      return { ok: false, reason: 'empate_scoreboard_no_soportado_fase1' };
     }
     return {
       ok: true,
       source: 'scoreboard',
       mode: 'scoreboard',
       ganadorSide: ganador,
-      isDraw: false,
       scorePayload: payload,
     };
   }
@@ -146,17 +170,12 @@ export function resolveCasualMatchRankingResult({
     }
 
     const resultado = partido.resultado ?? {};
-    if (
-      Number.isFinite(Number(resultado.equipo1))
-      && Number.isFinite(Number(resultado.equipo2))
-      && Number(resultado.equipo1) === Number(resultado.equipo2)
-    ) {
+    const tiedManual = rejectTiedManualScores(resultado);
+    if (tiedManual) {
       return {
-        ok: true,
+        ...tiedManual,
         source: 'manual',
         mode: 'manual',
-        ganadorSide: null,
-        isDraw: true,
         scorePayload: resultado,
       };
     }
@@ -166,7 +185,6 @@ export function resolveCasualMatchRankingResult({
       source: 'manual',
       mode: 'manual',
       ganadorSide: ganador,
-      isDraw: false,
       scorePayload: resultado,
     };
   }
@@ -265,14 +283,9 @@ export function resolveParticipantRankingPoints({
   userSideMap,
   mode,
   ganadorSide,
-  isDraw,
 } = {}) {
   if (!participant || !isValidUserId(participant.user_id)) {
     return null;
-  }
-
-  if (isDraw) {
-    return CASUAL_RANKING_RP.DRAW;
   }
 
   const side = userSideMap.get(participant.user_id)
@@ -323,14 +336,6 @@ export function computeStatsDeltaForOutcome(outcome) {
         ganados: 0,
         perdidos: 1,
         empatados: 0,
-        reset_racha: true,
-      };
-    case 'draw':
-      return {
-        partidos_jugados: 1,
-        ganados: 0,
-        perdidos: 0,
-        empatados: 1,
         reset_racha: true,
       };
     default:
@@ -884,7 +889,6 @@ export async function creditCasualMatchRanking(supabaseAdmin, {
       userSideMap,
       mode: resolved.mode,
       ganadorSide: resolved.ganadorSide,
-      isDraw: resolved.isDraw,
     });
 
     if (!Number.isFinite(rp) || rp <= 0) {
@@ -896,9 +900,7 @@ export async function creditCasualMatchRanking(supabaseAdmin, {
       continue;
     }
 
-    const outcome = resolved.isDraw
-      ? 'draw'
-      : (rp === CASUAL_RANKING_RP.WIN ? 'win' : 'loss');
+    const outcome = rp === CASUAL_RANKING_RP.WIN ? 'win' : 'loss';
 
     credits.push(await creditSingleUserRanking(supabaseAdmin, {
       matchId: normalizedMatchId,
@@ -921,7 +923,7 @@ export async function creditCasualMatchRanking(supabaseAdmin, {
   const totalRp = acreditados.reduce((sum, c) => sum + (c.rp ?? 0), 0);
 
   console.log(
-    `[Ranking Casual] match=${normalizedMatchId} mode=${resolved.mode} ganador=${resolved.ganadorSide ?? 'draw'} eligible=${eligible.length} credited=${acreditados.length} total_rp=${totalRp}`,
+    `[Ranking Casual] match=${normalizedMatchId} mode=${resolved.mode} ganador=${resolved.ganadorSide ?? 'none'} eligible=${eligible.length} credited=${acreditados.length} total_rp=${totalRp}`,
   );
 
   return {
