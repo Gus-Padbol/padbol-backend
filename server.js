@@ -46,6 +46,14 @@ import {
 import { mountNotificacionesRoutes } from './routes/notificaciones.js';
 import { mountJugadorReputacionRoutes } from './routes/jugadorReputacion.js';
 import { mountJugadorIdentidadRoutes } from './routes/jugadorIdentidad.js';
+import { upsertIdentidadPropia } from './src/jugador/jugadorIdentidadService.js';
+import {
+  buildIdentidadUpsertPayloadFromPerfilBody,
+  fetchIdentidadForPerfil,
+  perfilBodyHasIdentidadFields,
+  resolvePaisDocumentoFallback,
+  validateCiudad,
+} from './src/jugador/jugadorPerfilFichaService.js';
 import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
 import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js';
@@ -4064,9 +4072,10 @@ async function countVictoriasForUser({ email, supabaseUserId }) {
   return 0;
 }
 
-async function buildAuthenticatedPerfilPayload(perfil, user, deportes) {
+async function buildAuthenticatedPerfilPayload(perfil, user, deportes, identidadFicha = null) {
   const userId = perfil.user_id ?? user.id;
   const companero = await fetchCompaneroHabitualById(perfil.companero_habitual_id ?? null);
+  const fichaIdentidad = identidadFicha ?? await fetchIdentidadForPerfil(supabaseAdmin, userId);
 
   return {
     nombre: perfil.nombre ?? '',
@@ -4077,10 +4086,16 @@ async function buildAuthenticatedPerfilPayload(perfil, user, deportes) {
     lateralidad: perfil.lateralidad ?? '',
     posicion_cancha: perfil.posicion_cancha ?? null,
     pais: perfil.pais ?? '',
+    ciudad: perfil.ciudad ?? null,
     email: perfil.email ?? user.email ?? '',
     foto_url: perfil.foto_url ?? null,
     username: perfil.username ?? null,
     apodo: perfil.apodo ?? null,
+    tipo_documento: fichaIdentidad.tipo_documento ?? null,
+    numero_documento: fichaIdentidad.numero_documento ?? null,
+    fecha_nacimiento: fichaIdentidad.fecha_nacimiento ?? null,
+    nacionalidad: fichaIdentidad.nacionalidad ?? null,
+    genero: fichaIdentidad.genero ?? null,
     companero_habitual_id: perfil.companero_habitual_id ?? null,
     companero_habitual: companero,
     deporte_principal: deportes[0] ?? null,
@@ -4112,7 +4127,7 @@ async function handleGetAuthenticatedPerfil(req, res) {
       .from('jugadores_perfil')
       .select(`
         user_id, nombre, nombre_saludo, apellido, telefono, nivel, lateralidad, posicion_cancha,
-        pais, email, foto_url, username, apodo, companero_habitual_id, xp, liga
+        pais, ciudad, email, foto_url, username, apodo, companero_habitual_id, xp, liga
       `)
       .or(filters.join(','))
       .maybeSingle();
@@ -4123,7 +4138,8 @@ async function handleGetAuthenticatedPerfil(req, res) {
     }
 
     const deportes = await resolvePerfilDeportes(data, data.user_id ?? user.id);
-    res.json(await buildAuthenticatedPerfilPayload(data, user, deportes));
+    const identidadFicha = await fetchIdentidadForPerfil(supabaseAdmin, data.user_id ?? user.id);
+    res.json(await buildAuthenticatedPerfilPayload(data, user, deportes, identidadFicha));
   } catch (err) {
     console.error('❌ Error GET jugador perfil:', err.message);
     sendHttpError(res, err);
@@ -4142,6 +4158,7 @@ async function handlePutAuthenticatedPerfil(req, res) {
       return res.status(400).json({ error: 'Usuario sin email' });
     }
 
+    const body = req.body ?? {};
     const {
       nombre,
       apellido,
@@ -4154,7 +4171,7 @@ async function handlePutAuthenticatedPerfil(req, res) {
       apodo,
       deportes,
       companero_habitual_id: companeroHabitualId,
-    } = req.body;
+    } = body;
 
     const rawUsername = username ?? null;
     const normalizedUsername =
@@ -4172,6 +4189,9 @@ async function handlePutAuthenticatedPerfil(req, res) {
       updatePayload.posicion_cancha = trimmed || null;
     }
     if (pais != null) updatePayload.pais = pais;
+    if (Object.prototype.hasOwnProperty.call(body, 'ciudad')) {
+      updatePayload.ciudad = validateCiudad(body.ciudad);
+    }
     if (apodo !== undefined && apodo !== '') {
       const trimmedApodo = String(apodo).trim();
       if (trimmedApodo) {
@@ -4194,30 +4214,87 @@ async function handlePutAuthenticatedPerfil(req, res) {
       }
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('jugadores_perfil')
-      .update(updatePayload)
-      .eq('email', email)
-      .select(`
-        user_id, nombre, nombre_saludo, apellido, telefono, nivel, lateralidad, posicion_cancha,
-        pais, email, foto_url, username, apodo, companero_habitual_id, xp, liga
-      `);
+    let identidadFicha = null;
+    if (perfilBodyHasIdentidadFields(body)) {
+      const { data: existingPerfil, error: existingPerfilErr } = await supabaseAdmin
+        .from('jugadores_perfil')
+        .select('pais')
+        .eq('email', email)
+        .maybeSingle();
 
-    if (error) throw error;
-    if (!data?.length) {
-      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+      if (existingPerfilErr) throw existingPerfilErr;
+
+      const identidadPayload = buildIdentidadUpsertPayloadFromPerfilBody(body);
+      if (
+        Object.prototype.hasOwnProperty.call(identidadPayload, 'numero_documento')
+        && !Object.prototype.hasOwnProperty.call(identidadPayload, 'pais_documento')
+      ) {
+        const paisDocumentoFallback = resolvePaisDocumentoFallback(body, existingPerfil?.pais ?? null);
+        if (paisDocumentoFallback != null && paisDocumentoFallback !== '') {
+          identidadPayload.pais_documento = paisDocumentoFallback;
+        }
+      }
+
+      try {
+        await upsertIdentidadPropia(supabaseAdmin, user.id, identidadPayload);
+      } catch (identidadErr) {
+        if (identidadErr.status) {
+          return res.status(identidadErr.status).json({
+            error: identidadErr.message,
+            code: identidadErr.code ?? undefined,
+          });
+        }
+        throw identidadErr;
+      }
+
+      identidadFicha = await fetchIdentidadForPerfil(supabaseAdmin, user.id);
     }
 
-    const perfil = data[0];
+    let perfil = null;
+
+    if (Object.keys(updatePayload).length > 0) {
+      const { data, error } = await supabaseAdmin
+        .from('jugadores_perfil')
+        .update(updatePayload)
+        .eq('email', email)
+        .select(`
+          user_id, nombre, nombre_saludo, apellido, telefono, nivel, lateralidad, posicion_cancha,
+          pais, ciudad, email, foto_url, username, apodo, companero_habitual_id, xp, liga
+        `);
+
+      if (error) throw error;
+      if (!data?.length) {
+        return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+      }
+      perfil = data[0];
+    } else {
+      const { data, error } = await supabaseAdmin
+        .from('jugadores_perfil')
+        .select(`
+          user_id, nombre, nombre_saludo, apellido, telefono, nivel, lateralidad, posicion_cancha,
+          pais, ciudad, email, foto_url, username, apodo, companero_habitual_id, xp, liga
+        `)
+        .eq('email', email)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!data) {
+        return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+      }
+      perfil = data;
+    }
 
     if (Array.isArray(deportes) && perfil.user_id) {
       await syncJugadorDeportesForUser(perfil.user_id, deportes);
     }
 
     const resolvedDeportes = await resolvePerfilDeportes(perfil, perfil.user_id ?? user.id);
+    if (!identidadFicha) {
+      identidadFicha = await fetchIdentidadForPerfil(supabaseAdmin, perfil.user_id ?? user.id);
+    }
 
     console.log(`✓ PUT jugador perfil — user ${user.id}`);
-    res.json(await buildAuthenticatedPerfilPayload(perfil, user, resolvedDeportes));
+    res.json(await buildAuthenticatedPerfilPayload(perfil, user, resolvedDeportes, identidadFicha));
   } catch (err) {
     console.error('❌ Error PUT jugador perfil:', err.message);
     sendHttpError(res, err);
