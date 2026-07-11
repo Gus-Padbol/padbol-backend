@@ -17,6 +17,9 @@ import { buildEarningMovementOptions } from './padcoinsEarningSourcesService.js'
 
 export const PADCOINS_RESERVA_REFERENCIA_TIPO = 'reserva';
 
+/** Motivo estándar cuando se omite acreditación directa al pagador/reserva. */
+export const PARTICIPATION_PADCOINS_SKIP_REASON = 'participation_requires_confirmed_attendance';
+
 const RESERVA_PADCOINS_SELECT = [
   'id',
   'user_id',
@@ -264,6 +267,17 @@ export async function acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reser
 
   if (!isReservaEstadoAcreditable(reserva.estado)) {
     return { ok: true, acreditado: false, reason: 'estado_no_acreditable', estado: reserva.estado };
+  }
+
+  if (options.allowDirectOrganizerCredit !== true) {
+    return {
+      ok: true,
+      acreditado: false,
+      reason: PARTICIPATION_PADCOINS_SKIP_REASON,
+      omission_reason: 'direct_payer_credit_disabled',
+      reserva_id: id,
+      payer_user_id: reserva.user_id ?? null,
+    };
   }
 
   const sedeActiva = await isPadcoinsActiveForSede(supabaseAdmin, sedeId);

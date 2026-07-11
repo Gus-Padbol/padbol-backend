@@ -141,8 +141,11 @@ export const MATCH_REWARD_EVENT_STATUS = Object.freeze({
 });
 
 export const RESERVATION_REWARD_MODES = Object.freeze({
+  /** @deprecated Solo tests/legacy explícito; producción usa attendance_only. */
   ORGANIZER_ONLY: 'organizer_only',
   MATCH_DEFERRED: 'match_deferred',
+  /** PadCoins de participación solo tras asistencia confirmada en partido. */
+  ATTENDANCE_ONLY: 'attendance_only',
 });
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

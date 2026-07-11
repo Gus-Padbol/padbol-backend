@@ -158,6 +158,7 @@ import {
   penalizarPadcoinsPorCancelacionTarde,
   penalizarPadcoinsPorNoShow,
 } from './src/padcoins/padcoinsPenaltiesService.js';
+import { revertirPadcoinsParticipacionPorReserva } from './src/padcoins/matchParticipationPadcoinsReversalService.js';
 import { isReservaNoShow } from './src/padcoins/padcoinsReservasService.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
 import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
@@ -2902,6 +2903,22 @@ app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {
       .update({ estado: 'cancelada' })
       .eq('id', reservaId);
     if (updateErr) throw updateErr;
+
+    let padcoinsParticipacionReversal = null;
+    try {
+      padcoinsParticipacionReversal = await revertirPadcoinsParticipacionPorReserva(
+        supabaseAdmin,
+        reservaId,
+        { reserva },
+      );
+      if (padcoinsParticipacionReversal?.revertido) {
+        console.log(
+          `✓ PadCoins participación revertidos reserva ${reservaId} — eventos=${padcoinsParticipacionReversal.events_considered ?? 0}`,
+        );
+      }
+    } catch (revErr) {
+      console.warn(`⚠️ PadCoins reversa participación reserva ${reservaId}:`, revErr.message);
+    }
 
     let reputacionCancel = null;
     let userIdReputacion = reserva.user_id ? String(reserva.user_id) : null;

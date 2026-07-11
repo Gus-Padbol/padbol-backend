@@ -111,15 +111,15 @@ export function buildMatchPadcoinsReferenciaId(matchId, userId, kind = 'particip
 }
 
 /**
- * Reserva sin partido → acreditar organizador (compat legacy).
- * Reserva con partido vinculado → diferir hasta validación de resultado.
+ * Reserva sin partido → diferir hasta asistencia confirmada en partido.
+ * Reserva con partido vinculado → diferir hasta validación/asistencia.
  */
 export function evaluateReservationRewardMode(reserva, partido = null) {
   const linkedPartidoId = partido?.id ?? reserva?.partido_id ?? null;
   if (linkedPartidoId != null && String(linkedPartidoId).trim() !== '') {
     return RESERVATION_REWARD_MODES.MATCH_DEFERRED;
   }
-  return RESERVATION_REWARD_MODES.ORGANIZER_ONLY;
+  return RESERVATION_REWARD_MODES.ATTENDANCE_ONLY;
 }
 
 export async function preventDuplicateRewardBySourceKey(supabaseAdmin, sourceKey) {
@@ -295,10 +295,13 @@ async function computePadcoinsPoolForReserva(supabaseAdmin, reserva, options = {
 }
 
 /**
- * Mantiene acreditación legacy al organizador cuando no hay partido vinculado.
+ * Mantiene acreditación legacy al organizador solo con opt-in explícito (tests).
  */
 export async function creditOrganizerOnlyReservationReward(supabaseAdmin, reservaId, options = {}) {
-  const result = await acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reservaId, options);
+  const result = await acreditarPadcoinsPorReservaCompletada(supabaseAdmin, reservaId, {
+    ...options,
+    allowDirectOrganizerCredit: options.allowDirectOrganizerCredit === true,
+  });
 
   if (result.acreditado) {
     await createMatchRewardEvent(supabaseAdmin, {
@@ -641,6 +644,22 @@ export async function creditIndividualAttendancePadcoins(supabaseAdmin, {
     matchId: normalizedMatchId,
   });
 
+  const isIdentifiedParticipant = (allParticipants ?? []).some(
+    (row) => String(row.user_id) === normalizedUserId,
+  );
+  if (!isIdentifiedParticipant) {
+    const isPayer = String(reserva.user_id ?? '') === normalizedUserId;
+    return {
+      ok: true,
+      processed: true,
+      acreditado: false,
+      reason: isPayer ? 'pagador_no_participa' : 'not_in_match',
+      omission_reason: isPayer ? 'payer_not_identified_as_player' : 'user_not_in_match',
+      padcoins: 0,
+      amount: 0,
+    };
+  }
+
   const participantRow = (allParticipants ?? []).find(
     (row) => String(row.user_id) === normalizedUserId,
   );
@@ -873,11 +892,20 @@ export async function processReservationPadcoinsOnComplete(supabaseAdmin, reserv
       mode,
       acreditado: false,
       reason: 'match_linked_padcoins_deferred',
+      omission_reason: 'awaiting_confirmed_attendance',
+      payer_user_id: reserva?.user_id ?? null,
       organizer_participant: organizerResult,
     };
   }
 
-  return creditOrganizerOnlyReservationReward(supabaseAdmin, reserva.id, { reserva });
+  return {
+    ok: true,
+    mode: RESERVATION_REWARD_MODES.ATTENDANCE_ONLY,
+    acreditado: false,
+    reason: 'participation_requires_confirmed_attendance',
+    omission_reason: 'no_direct_payer_credit',
+    payer_user_id: reserva?.user_id ?? null,
+  };
 }
 
 async function resolveReservaForPartido(supabaseAdmin, partido) {
@@ -975,15 +1003,6 @@ export async function processCasualMatchPadcoinsAfterResultConfirmed(supabaseAdm
     await markAttendance(supabaseAdmin, {
       matchId: normalizedPartidoId,
       userId: partido.capitan_user_id,
-      attendanceStatus: MATCH_ATTENDANCE_STATUS.ADMIN_VALIDATED,
-      rewardStatus: MATCH_REWARD_STATUS.ELIGIBLE,
-    });
-  }
-
-  if (isValidUserId(reserva.user_id)) {
-    await markAttendance(supabaseAdmin, {
-      matchId: normalizedPartidoId,
-      userId: reserva.user_id,
       attendanceStatus: MATCH_ATTENDANCE_STATUS.ADMIN_VALIDATED,
       rewardStatus: MATCH_REWARD_STATUS.ELIGIBLE,
     });

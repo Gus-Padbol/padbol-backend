@@ -15,6 +15,7 @@ import { getPadcoinsSaldo, reversePadcoins } from './padcoinsService.js';
 export const PADCOINS_RESERVA_REVERSAL_ACTIONS = Object.freeze({
   CANCELACION_TARDIA: 'reversal_cancelacion_tardia',
   NO_SHOW: 'reversal_no_show',
+  CANCELACION_RESERVA: 'reversal_cancelacion_reserva',
 });
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -24,6 +25,8 @@ const REVERSAL_REASONS = Object.freeze({
     'Reversa PadCoins por cancelación tardía de reserva previamente acreditada',
   [PADCOINS_RESERVA_REVERSAL_ACTIONS.NO_SHOW]:
     'Reversa PadCoins por no show en reserva previamente acreditada',
+  [PADCOINS_RESERVA_REVERSAL_ACTIONS.CANCELACION_RESERVA]:
+    'Reversa PadCoins de participación por cancelación de reserva',
 });
 
 function isMissingTable(error) {
@@ -114,9 +117,14 @@ function resolveEarnAmount(movimiento) {
 function buildReversalDescripcion(reserva, reversalAction, amount, partial = false) {
   const sede = reserva?.sede ?? 'sede';
   const reservaId = reserva?.id ?? '?';
-  const base = reversalAction === PADCOINS_RESERVA_REVERSAL_ACTIONS.NO_SHOW
-    ? `Reversa PadCoins por no show — reserva #${reservaId} en ${sede} (-${amount} PC)`
-    : `Reversa PadCoins por cancelación tardía — reserva #${reservaId} en ${sede} (-${amount} PC)`;
+  let base;
+  if (reversalAction === PADCOINS_RESERVA_REVERSAL_ACTIONS.NO_SHOW) {
+    base = `Reversa PadCoins por no show — reserva #${reservaId} en ${sede} (-${amount} PC)`;
+  } else if (reversalAction === PADCOINS_RESERVA_REVERSAL_ACTIONS.CANCELACION_RESERVA) {
+    base = `Reversa PadCoins por cancelación — reserva #${reservaId} en ${sede} (-${amount} PC)`;
+  } else {
+    base = `Reversa PadCoins por cancelación tardía — reserva #${reservaId} en ${sede} (-${amount} PC)`;
+  }
 
   if (!partial) return base;
   return `${base} (reversa parcial por saldo insuficiente)`.slice(0, 500);
@@ -350,5 +358,12 @@ export async function revertirPadcoinsPorNoShowReserva(supabaseAdmin, reservaId,
   return revertirPadcoinsPorReservaIncumplimiento(supabaseAdmin, reservaId, {
     ...options,
     reversalAction: PADCOINS_RESERVA_REVERSAL_ACTIONS.NO_SHOW,
+  });
+}
+
+export async function revertirPadcoinsPorCancelacionReserva(supabaseAdmin, reservaId, options = {}) {
+  return revertirPadcoinsPorReservaIncumplimiento(supabaseAdmin, reservaId, {
+    ...options,
+    reversalAction: PADCOINS_RESERVA_REVERSAL_ACTIONS.CANCELACION_RESERVA,
   });
 }
