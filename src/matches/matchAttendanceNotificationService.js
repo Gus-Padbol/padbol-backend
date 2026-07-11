@@ -35,10 +35,17 @@ export const ATTENDANCE_REMINDER_48H_TITLE = 'Último recordatorio de asistencia
 export const ATTENDANCE_REMINDER_48H_MESSAGE =
   'Queda poco tiempo para confirmar si jugaste este partido y recibir tus recompensas.';
 
+export const ATTENDANCE_WINDOW_CLOSED_TITLE = 'Ventana de asistencia cerrada';
+export const ATTENDANCE_WINDOW_CLOSED_MESSAGE =
+  'El plazo para confirmar asistencia en este partido venció.';
+export const ATTENDANCE_WINDOW_CLOSED_CONFIRMED_MESSAGE =
+  'El plazo de confirmación cerró. Tus recompensas se procesaron según tu asistencia confirmada.';
+
 export const ATTENDANCE_NOTIFICATION_STAGES = Object.freeze({
   INITIAL: 'initial',
   REMINDER_24H: 'reminder_24h',
   REMINDER_48H: 'reminder_48h',
+  WINDOW_CLOSED: 'window_closed',
 });
 
 const PARTICIPANTS_REMINDER_SELECT =
@@ -138,6 +145,27 @@ export function resolveAttendanceReminderStage(openedAt, now = new Date(), {
   return null;
 }
 
+export function resolveAttendanceReminderStages(openedAt, now = new Date(), {
+  firstReminderHours = getMatchAttendanceFirstReminderHours(),
+  secondReminderHours = getMatchAttendanceSecondReminderHours(),
+} = {}) {
+  const openedMs = new Date(openedAt).getTime();
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  if (!Number.isFinite(openedMs)) return [];
+
+  const elapsedHours = (nowMs - openedMs) / (60 * 60 * 1000);
+  const stages = [];
+
+  if (elapsedHours >= firstReminderHours) {
+    stages.push(ATTENDANCE_NOTIFICATION_STAGES.REMINDER_24H);
+  }
+  if (elapsedHours >= secondReminderHours) {
+    stages.push(ATTENDANCE_NOTIFICATION_STAGES.REMINDER_48H);
+  }
+
+  return stages;
+}
+
 function reminderCopyForStage(stage) {
   if (stage === ATTENDANCE_NOTIFICATION_STAGES.REMINDER_48H) {
     return {
@@ -145,10 +173,41 @@ function reminderCopyForStage(stage) {
       message: ATTENDANCE_REMINDER_48H_MESSAGE,
     };
   }
+  if (stage === ATTENDANCE_NOTIFICATION_STAGES.WINDOW_CLOSED) {
+    return {
+      title: ATTENDANCE_WINDOW_CLOSED_TITLE,
+      message: ATTENDANCE_WINDOW_CLOSED_MESSAGE,
+    };
+  }
   return {
     title: ATTENDANCE_REMINDER_24H_TITLE,
     message: ATTENDANCE_REMINDER_24H_MESSAGE,
   };
+}
+
+function windowClosedCopyForParticipant(participant) {
+  const status = normalizeAttendanceStatus(participant?.attendance_status);
+  if (
+    status === MATCH_ATTENDANCE_STATUS.CONFIRMED
+    || status === MATCH_ATTENDANCE_STATUS.ADMIN_VALIDATED
+  ) {
+    return {
+      title: ATTENDANCE_WINDOW_CLOSED_TITLE,
+      message: ATTENDANCE_WINDOW_CLOSED_CONFIRMED_MESSAGE,
+    };
+  }
+  return {
+    title: ATTENDANCE_WINDOW_CLOSED_TITLE,
+    message: ATTENDANCE_WINDOW_CLOSED_MESSAGE,
+  };
+}
+
+function shouldNotifyParticipantOnWindowClose(participant) {
+  const status = normalizeAttendanceStatus(participant?.attendance_status);
+  if (!isValidUserId(participant?.user_id)) {
+    return false;
+  }
+  return status !== MATCH_ATTENDANCE_STATUS.DENIED;
 }
 
 async function markParticipantAttendanceRequestedAt(supabaseAdmin, participantId, {
@@ -503,8 +562,8 @@ export async function processAttendanceReminders(supabaseAdmin, options = {}) {
       continue;
     }
 
-    const stage = resolveAttendanceReminderStage(partido.attendance_opened_at, now);
-    if (!stage) {
+    const stages = resolveAttendanceReminderStages(partido.attendance_opened_at, now);
+    if (stages.length === 0) {
       continue;
     }
 
@@ -514,39 +573,45 @@ export async function processAttendanceReminders(supabaseAdmin, options = {}) {
     );
 
     for (const participant of participants) {
-      summary.examined += 1;
+      for (const stage of stages) {
+        summary.examined += 1;
 
-      try {
-        const result = await sendAttendanceNotificationToParticipant(supabaseAdmin, {
-          matchId: partido.id,
-          participant,
-          deadlineAt: partido.attendance_deadline_at ?? null,
-          stage,
-          deps: { ...deps, now },
-        });
+        try {
+          const result = await sendAttendanceNotificationToParticipant(supabaseAdmin, {
+            matchId: partido.id,
+            participant,
+            deadlineAt: partido.attendance_deadline_at ?? null,
+            stage,
+            deps: { ...deps, now },
+          });
 
-        if (result.skipped && result.duplicate) {
-          summary.duplicates += 1;
-          summary.skipped += 1;
-          continue;
-        }
-        if (result.skipped) {
-          summary.skipped += 1;
-          continue;
-        }
-        if (result.ok === false) {
+          if (result.skipped && result.duplicate) {
+            summary.duplicates += 1;
+            summary.skipped += 1;
+            continue;
+          }
+          if (result.skipped) {
+            summary.skipped += 1;
+            continue;
+          }
+          if (result.ok === false) {
+            summary.errors += 1;
+            continue;
+          }
+          if (result.sent) {
+            summary.sent += 1;
+          }
+        } catch (err) {
           summary.errors += 1;
-          continue;
+          console.warn(
+            `[Attendance Fase 3.5] reminder error partido=${partido.id} user=${participant.user_id} stage=${stage}:`,
+            err?.message ?? err,
+          );
         }
-        if (result.sent) {
-          summary.sent += 1;
+
+        if (summary.examined >= batchSize) {
+          break;
         }
-      } catch (err) {
-        summary.errors += 1;
-        console.warn(
-          `[Attendance Fase 3.5] reminder error partido=${partido.id} user=${participant.user_id}:`,
-          err?.message ?? err,
-        );
       }
 
       if (summary.examined >= batchSize) {
@@ -566,4 +631,111 @@ export async function processAttendanceReminders(supabaseAdmin, options = {}) {
   }
 
   return summary;
+}
+
+export async function notifyAttendanceWindowClosed(supabaseAdmin, matchId, {
+  partido = null,
+  participants = null,
+  deadlineAt = null,
+  deps = {},
+} = {}) {
+  if (partido) {
+    const { featureEnabled } = await resolveAttendanceFeatureForPartido(supabaseAdmin, partido);
+    if (!featureEnabled) {
+      return { ok: true, skipped: true, reason: 'feature_disabled', notified: 0 };
+    }
+  } else if (!isMatchAttendanceConfirmationEnabled()) {
+    return { ok: true, skipped: true, reason: 'feature_disabled', notified: 0 };
+  }
+
+  const partidoSkip = shouldSkipAttendanceNotificationPartido(partido ?? {});
+  if (partidoSkip.skip) {
+    return { ok: true, skipped: true, reason: partidoSkip.reason, notified: 0 };
+  }
+
+  const normalizedMatchId = normalizeMatchId(matchId);
+  if (!normalizedMatchId) {
+    return { ok: false, reason: 'invalid_match_id', notified: 0 };
+  }
+
+  const rows = participants ?? await listMatchParticipants(supabaseAdmin, {
+    matchType: MATCH_TYPES.CASUAL,
+    matchId: normalizedMatchId,
+  });
+
+  const results = {
+    ok: true,
+    match_id: Number(matchId),
+    notified: 0,
+    skipped: 0,
+    duplicates: 0,
+    errors: 0,
+  };
+
+  const createFn = deps.createNotificacionIfAbsent ?? createNotificacionIfAbsent;
+  const pushFn = deps.sendPushToUser ?? sendPushToUser;
+  const effectiveDeadlineAt = deadlineAt ?? partido?.attendance_deadline_at ?? null;
+
+  for (const participant of rows ?? []) {
+    if (!shouldNotifyParticipantOnWindowClose(participant)) {
+      results.skipped += 1;
+      continue;
+    }
+
+    const copy = windowClosedCopyForParticipant(participant);
+    const payload = buildAttendanceNotificationPayload(matchId, participant.user_id, {
+      deadlineAt: effectiveDeadlineAt,
+      stage: ATTENDANCE_NOTIFICATION_STAGES.WINDOW_CLOSED,
+      ...copy,
+    });
+
+    try {
+      const notificationResult = await createFn(supabaseAdmin, payload);
+      if (notificationResult.duplicate) {
+        results.duplicates += 1;
+        results.skipped += 1;
+        continue;
+      }
+      if (!notificationResult.created) {
+        results.errors += 1;
+        continue;
+      }
+
+      results.notified += 1;
+
+      try {
+        await pushFn(supabaseAdmin, participant.user_id, {
+          title: copy.title,
+          body: copy.message,
+          data: {
+            tipo: ATTENDANCE_NOTIFICATION_TYPE,
+            partido_id: String(matchId),
+            deadline_at: effectiveDeadlineAt,
+            action: ATTENDANCE_NOTIFICATION_ACTION,
+            source: ATTENDANCE_NOTIFICATION_SOURCE,
+            reminder_stage: ATTENDANCE_NOTIFICATION_STAGES.WINDOW_CLOSED,
+          },
+        });
+      } catch (err) {
+        console.warn(
+          `[Attendance Fase 3.5] window closed push error partido=${matchId} user=${participant.user_id}:`,
+          err?.message ?? err,
+        );
+      }
+    } catch (err) {
+      results.errors += 1;
+      console.warn(
+        `[Attendance Fase 3.5] window closed notify error partido=${matchId} user=${participant.user_id}:`,
+        err?.message ?? err,
+      );
+    }
+  }
+
+  if (results.notified > 0 || results.errors > 0) {
+    console.log(
+      `[Attendance Fase 3.5] window closed notifications partido=${matchId} notified=${results.notified} skipped=${results.skipped} duplicates=${results.duplicates} errors=${results.errors}`,
+    );
+  }
+
+  return results;
 }

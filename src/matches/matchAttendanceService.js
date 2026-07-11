@@ -36,7 +36,10 @@ import {
   listMatchParticipants,
   markAttendance,
 } from './matchParticipantsService.js';
-import { notifyInitialAttendancePendingParticipants } from './matchAttendanceNotificationService.js';
+import {
+  notifyInitialAttendancePendingParticipants,
+  notifyAttendanceWindowClosed,
+} from './matchAttendanceNotificationService.js';
 import {
   creditIndividualAttendancePadcoins,
   creditValidatedMatchPadcoins,
@@ -265,6 +268,69 @@ export function computeCanRespondToAttendance({
   return true;
 }
 
+export function computeAttendanceWindowExpired({
+  collectionStatus,
+  deadlineAt,
+  now = new Date(),
+} = {}) {
+  const normalizedCollection = normalizeAttendanceCollectionStatus(collectionStatus);
+  if (
+    normalizedCollection !== MATCH_ATTENDANCE_COLLECTION_STATUS.NONE
+    && normalizedCollection !== MATCH_ATTENDANCE_COLLECTION_STATUS.OPEN
+  ) {
+    return true;
+  }
+  return isAttendanceDeadlineExpired(deadlineAt, now);
+}
+
+export function buildPlayerAttendanceCannotRespondReason({
+  featureEnabled,
+  collectionStatus,
+  deadlineAt,
+  attendanceStatus,
+  isParticipant,
+  now = new Date(),
+} = {}) {
+  if (!isParticipant) {
+    return 'not_a_participant';
+  }
+  if (!featureEnabled) {
+    return 'feature_disabled';
+  }
+
+  const normalizedStatus = normalizeAttendanceStatus(attendanceStatus);
+  if (normalizedStatus !== MATCH_ATTENDANCE_STATUS.PENDING) {
+    if (
+      normalizedStatus === MATCH_ATTENDANCE_STATUS.CONFIRMED
+      || normalizedStatus === MATCH_ATTENDANCE_STATUS.DENIED
+    ) {
+      return 'already_responded';
+    }
+    return 'status_locked';
+  }
+
+  const normalizedCollection = normalizeAttendanceCollectionStatus(collectionStatus);
+  if (normalizedCollection !== MATCH_ATTENDANCE_COLLECTION_STATUS.OPEN) {
+    if (normalizedCollection === MATCH_ATTENDANCE_COLLECTION_STATUS.EXPIRED) {
+      return 'window_expired';
+    }
+    if (
+      normalizedCollection === MATCH_ATTENDANCE_COLLECTION_STATUS.READY
+      || normalizedCollection === MATCH_ATTENDANCE_COLLECTION_STATUS.CREDITED
+      || normalizedCollection === MATCH_ATTENDANCE_COLLECTION_STATUS.BLOCKED
+    ) {
+      return 'window_closed';
+    }
+    return 'window_not_open';
+  }
+
+  if (isAttendanceDeadlineExpired(deadlineAt, now)) {
+    return 'deadline_expired';
+  }
+
+  return null;
+}
+
 async function fetchPartidoAttendanceRow(supabaseAdmin, matchId) {
   const normalizedMatchId = Number(matchId);
   if (!Number.isFinite(normalizedMatchId) || normalizedMatchId <= 0) {
@@ -332,7 +398,20 @@ async function fetchParticipantsForAttendance(supabaseAdmin, matchId) {
   };
 }
 
-export async function getMatchAttendanceState(supabaseAdmin, matchId) {
+export async function getMatchAttendanceState(supabaseAdmin, matchId, options = {}) {
+  const { skipLazyExpiry = false, ...lazyOptions } = options;
+
+  if (!skipLazyExpiry) {
+    try {
+      await ensureAttendanceWindowExpiredIfDue(supabaseAdmin, matchId, lazyOptions);
+    } catch (err) {
+      console.warn(
+        `[Attendance] lazy expiry error partido=${matchId}:`,
+        err?.message ?? err,
+      );
+    }
+  }
+
   const { partido, schemaAttendanceColumnsAvailable } = await fetchPartidoAttendanceRow(
     supabaseAdmin,
     matchId,
@@ -377,12 +456,12 @@ export async function getMatchAttendanceSummary(supabaseAdmin, matchId) {
   };
 }
 
-export async function getPlayerAttendanceState(supabaseAdmin, matchId, userId) {
+export async function getPlayerAttendanceState(supabaseAdmin, matchId, userId, options = {}) {
   if (!isValidUserId(userId)) {
     return { ok: false, reason: 'invalid_user_id' };
   }
 
-  const state = await getMatchAttendanceState(supabaseAdmin, matchId);
+  const state = await getMatchAttendanceState(supabaseAdmin, matchId, options);
   if (!state.ok) {
     return state;
   }
@@ -404,6 +483,21 @@ export async function getPlayerAttendanceState(supabaseAdmin, matchId, userId) {
     isParticipant: membership.is_member,
   });
 
+  const expired = computeAttendanceWindowExpired({
+    collectionStatus: state.partidoFields.collection_status,
+    deadlineAt: state.partidoFields.deadline_at,
+  });
+
+  const cannotRespondReason = canRespond
+    ? null
+    : buildPlayerAttendanceCannotRespondReason({
+      featureEnabled: state.partidoFields.feature_enabled,
+      collectionStatus: state.partidoFields.collection_status,
+      deadlineAt: state.partidoFields.deadline_at,
+      attendanceStatus: playerFields.attendance_status,
+      isParticipant: membership.is_member,
+    });
+
   return {
     ok: true,
     match: state.partidoFields,
@@ -413,6 +507,8 @@ export async function getPlayerAttendanceState(supabaseAdmin, matchId, userId) {
       is_member: membership.is_member,
       is_captain: membership.is_captain,
       can_respond: canRespond,
+      expired,
+      cannot_respond_reason: cannotRespondReason,
     },
   };
 }
@@ -1419,6 +1515,86 @@ export async function fetchExpiredOpenAttendanceWindows(supabaseAdmin, {
 }
 
 /**
+ * Cierra la ventana open si el deadline ya venció (lazy expiry para GET/POST).
+ */
+export async function ensureAttendanceWindowExpiredIfDue(supabaseAdmin, matchId, options = {}) {
+  const {
+    now = new Date(),
+    partido: partidoInput = null,
+    deps = {},
+  } = options;
+
+  let partido = partidoInput;
+  let schemaAttendanceColumnsAvailable = true;
+
+  if (!partido) {
+    const fetched = await fetchPartidoForAttendanceRewards(supabaseAdmin, matchId);
+    partido = fetched.partido;
+    schemaAttendanceColumnsAvailable = fetched.schemaAttendanceColumnsAvailable;
+  }
+
+  if (!partido) {
+    return {
+      ensured: false,
+      skipped: true,
+      reason: 'partido_no_encontrado',
+      match_id: Number(matchId) || null,
+    };
+  }
+
+  if (!schemaAttendanceColumnsAvailable) {
+    return {
+      ensured: false,
+      skipped: true,
+      reason: 'schema_missing',
+      match_id: Number(partido.id),
+    };
+  }
+
+  const partidoSkip = shouldSkipExpiredAttendancePartido(partido);
+  if (partidoSkip.skip) {
+    return {
+      ensured: false,
+      skipped: true,
+      reason: partidoSkip.reason,
+      match_id: Number(partido.id),
+    };
+  }
+
+  const collectionStatus = normalizeAttendanceCollectionStatus(partido.attendance_collection_status);
+  if (collectionStatus !== MATCH_ATTENDANCE_COLLECTION_STATUS.OPEN) {
+    return {
+      ensured: false,
+      skipped: true,
+      idempotent: true,
+      reason: 'not_open',
+      match_id: Number(partido.id),
+      collection_status: collectionStatus,
+    };
+  }
+
+  if (!isAttendanceDeadlineExpired(partido.attendance_deadline_at, now)) {
+    return {
+      ensured: false,
+      skipped: true,
+      reason: 'not_expired',
+      match_id: Number(partido.id),
+    };
+  }
+
+  const result = await expireAttendanceWindow(supabaseAdmin, matchId, {
+    now,
+    partido,
+    deps,
+  });
+
+  return {
+    ensured: result.expired === true,
+    ...result,
+  };
+}
+
+/**
  * Expira una ventana open vencida: pending → excluded, resuelve ready/blocked y acredita si aplica.
  */
 export async function expireAttendanceWindow(supabaseAdmin, matchId, options = {}) {
@@ -1549,6 +1725,21 @@ export async function expireAttendanceWindow(supabaseAdmin, matchId, options = {
       partidoFieldsAfter = finalizeResult.partidoFields;
       summaryAfter = finalizeResult.summary ?? summaryAfter;
     }
+  }
+
+  const notifyFn = deps.notifyAttendanceWindowClosed ?? notifyAttendanceWindowClosed;
+  try {
+    await notifyFn(supabaseAdmin, partido.id, {
+      partido,
+      participants,
+      deadlineAt: partidoFields.deadline_at,
+      deps,
+    });
+  } catch (err) {
+    console.warn(
+      `[Attendance Fase 3.4] window closed notify error partido=${partido.id}:`,
+      err?.message ?? err,
+    );
   }
 
   console.log(
@@ -2525,6 +2716,15 @@ export async function submitPlayerAttendanceResponse(supabaseAdmin, matchId, use
   const parsed = parsePlayerAttendanceResponseBody(body);
   if (!parsed.ok) {
     return { ok: false, httpStatus: 400, reason: parsed.reason };
+  }
+
+  try {
+    await ensureAttendanceWindowExpiredIfDue(supabaseAdmin, matchId, { now, deps });
+  } catch (err) {
+    console.warn(
+      `[Attendance] lazy expiry before POST partido=${matchId}:`,
+      err?.message ?? err,
+    );
   }
 
   const { partido, schemaAttendanceColumnsAvailable } = await fetchPartidoAttendanceRow(

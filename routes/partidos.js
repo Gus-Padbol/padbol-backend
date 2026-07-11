@@ -3351,6 +3351,8 @@ export function createPartidosRouter({
         match_id: partidoId,
         feature_enabled: playerState.match.feature_enabled === true,
         can_respond: playerState.player.can_respond === true,
+        expired: playerState.player.expired === true,
+        cannot_respond_reason: playerState.player.cannot_respond_reason ?? null,
         match: {
           collection_status: playerState.match.collection_status,
           opened_at: playerState.match.opened_at,
@@ -3399,7 +3401,9 @@ export function createPartidosRouter({
           feature_disabled: 'La confirmación de asistencia no está habilitada',
           window_not_open: 'La ventana de confirmación no está abierta',
           window_expired: 'La ventana de confirmación expiró',
+          window_closed: 'La ventana de confirmación ya cerró',
           deadline_expired: 'El plazo para confirmar asistencia venció',
+          already_responded: 'Ya registraste tu respuesta de asistencia',
           status_locked: 'Tu asistencia ya fue validada y no puede modificarse',
           participant_not_found: 'No tenés registro de participación para confirmar asistencia',
           not_a_participant: 'No formás parte de este partido',
