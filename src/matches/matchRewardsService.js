@@ -83,6 +83,14 @@ export function buildMatchOrganizerBonusSourceKey(matchType, matchId, userId) {
   return `user|match|${matchType}|${matchId}|padcoins|organizer_bonus|${userId}`;
 }
 
+/** Shares de cierre batch que no deben acreditarse hasta tener recompensa explícita de organizador. */
+export function isDeprecatedOrganizerBatchShare(share) {
+  const kind = String(share?.kind ?? '').trim();
+  return kind === 'organizer_bonus'
+    || kind === 'organizer_only'
+    || kind === 'participant_with_organizer_bonus';
+}
+
 /** Idempotencia PadCoins inmediatos al confirmar asistencia (Fase 3.7). */
 export function buildAttendanceParticipantPadcoinsSourceKey(matchId, userId) {
   const mid = normalizeMatchId(matchId);
@@ -327,7 +335,12 @@ export async function creditOrganizerOnlyReservationReward(supabaseAdmin, reserv
   };
 }
 
-export function splitMatchPadcoinsPool(totalPadcoins, eligibleParticipants, organizerUserId) {
+export function splitMatchPadcoinsPool(
+  totalPadcoins,
+  eligibleParticipants,
+  organizerUserId,
+  options = {},
+) {
   const total = Number(totalPadcoins);
   if (!Number.isInteger(total) || total <= 0) {
     return [];
@@ -336,6 +349,26 @@ export function splitMatchPadcoinsPool(totalPadcoins, eligibleParticipants, orga
   const eligible = (eligibleParticipants ?? []).filter((p) => isValidUserId(p?.user_id));
   if (!eligible.length) {
     return [];
+  }
+
+  const includeOrganizerBonus = options.includeOrganizerBonus === true;
+
+  const perHeadBase = Math.floor(total / eligible.length);
+  let remainder = total - (perHeadBase * eligible.length);
+
+  const equalParticipantShares = eligible.map((participant) => {
+    const extra = remainder > 0 ? 1 : 0;
+    if (remainder > 0) remainder -= 1;
+    return {
+      userId: participant.user_id,
+      amount: perHeadBase + extra,
+      kind: 'participant',
+      participant,
+    };
+  }).filter((share) => share.amount > 0);
+
+  if (!includeOrganizerBonus) {
+    return equalParticipantShares;
   }
 
   const nonOrganizer = eligible.filter(
@@ -361,7 +394,7 @@ export function splitMatchPadcoinsPool(totalPadcoins, eligibleParticipants, orga
   const organizerBonus = Math.max(0, Math.floor((total * bonusPct) / 100));
   const participantPool = total - organizerBonus;
   const perHead = Math.floor(participantPool / eligible.length);
-  let remainder = participantPool - (perHead * eligible.length);
+  remainder = participantPool - (perHead * eligible.length);
 
   const shares = eligible.map((participant) => {
     const extra = remainder > 0 ? 1 : 0;
@@ -823,6 +856,7 @@ export async function creditValidatedMatchPadcoins(supabaseAdmin, {
   }
 
   const organizerId = organizerUserId ?? reserva.user_id;
+  const eligibleUserIds = new Set(eligible.map((row) => String(row.user_id)));
   const shares = splitMatchPadcoinsPool(pool.padcoins, eligible, organizerId);
   if (!shares.length) {
     return { ok: true, acreditado: false, reason: 'sin_shares' };
@@ -832,10 +866,31 @@ export async function creditValidatedMatchPadcoins(supabaseAdmin, {
     total: pool.padcoins,
     method: pool.amountResult?.method ?? null,
     eligible_count: eligible.length,
+    batch_closure: true,
   };
 
   const credits = [];
   for (const share of shares) {
+    if (!eligibleUserIds.has(String(share.userId))) {
+      credits.push({
+        acreditado: false,
+        reason: 'pagador_no_participa',
+        omission_reason: 'payer_not_identified_as_player',
+        userId: share.userId,
+      });
+      continue;
+    }
+
+    if (isDeprecatedOrganizerBatchShare(share)) {
+      credits.push({
+        acreditado: false,
+        reason: 'organizer_batch_reward_disabled',
+        omission_reason: 'organizer_bonus_not_enabled',
+        userId: share.userId,
+      });
+      continue;
+    }
+
     const attendanceSourceKey = buildAttendanceParticipantPadcoinsSourceKey(
       normalizedMatchId,
       share.userId,
@@ -860,6 +915,7 @@ export async function creditValidatedMatchPadcoins(supabaseAdmin, {
       reserva,
       sedeId,
       poolMeta,
+      sourceKeyOverride: attendanceSourceKey,
     });
     credits.push(creditResult);
   }
