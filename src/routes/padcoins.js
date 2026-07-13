@@ -42,6 +42,12 @@ import {
   buildPadcoinsEarningSourcesAdminResponse,
   canReadPadcoinsEarningSources,
 } from '../padcoins/padcoinsEarningSourcesService.js';
+import {
+  buildPlayerPadcoinsLoyaltyPayload,
+  getPadcoinsLoyaltyLevelThresholds,
+  listPadcoinsLoyaltyLevelsConfig,
+  updatePadcoinsLoyaltyLevelsConfig,
+} from '../padcoins/padcoinsLoyaltyLevelsService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -149,7 +155,15 @@ export function createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }) {
         return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
       }
 
-      const saldo = await getPadcoinsSaldo(supabaseAdmin, user.id);
+      const [saldo, thresholds] = await Promise.all([
+        getPadcoinsSaldo(supabaseAdmin, user.id),
+        getPadcoinsLoyaltyLevelThresholds(supabaseAdmin),
+      ]);
+
+      const loyaltyPayload = buildPlayerPadcoinsLoyaltyPayload(
+        saldo.historico_total,
+        thresholds,
+      );
 
       res.json({
         ok: true,
@@ -157,6 +171,7 @@ export function createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }) {
           disponible: saldo.disponible,
           historico_total: saldo.historico_total,
         },
+        ...loyaltyPayload,
       });
     } catch (err) {
       console.error('❌ Error GET /api/padcoins/mi-saldo:', err.message);
@@ -682,6 +697,48 @@ export function mountPadcoinsAdminRoutes(app, {
     } catch (err) {
       console.error('❌ GET /api/admin/padcoins-movimientos:', err.message);
       return sendRouteError(res, err, 'Error al listar movimientos PadCoins');
+    }
+  });
+
+  app.get('/api/admin/padcoins-loyalty-levels', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const config = await listPadcoinsLoyaltyLevelsConfig(supabaseAdmin);
+
+      return res.json({
+        ok: true,
+        levels: config.levels,
+        thresholds: config.thresholds,
+      });
+    } catch (err) {
+      console.error('❌ GET /api/admin/padcoins-loyalty-levels:', err.message);
+      return sendRouteError(res, err, 'Error al consultar niveles de fidelización PadCoins');
+    }
+  });
+
+  app.put('/api/admin/padcoins-loyalty-levels', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, adminDeps);
+      if (!auth) return;
+
+      const updates = req.body?.updates ?? req.body?.levels;
+      const config = await updatePadcoinsLoyaltyLevelsConfig(
+        supabaseAdmin,
+        updates,
+        auth.user.id,
+      );
+
+      console.log(`✓ PUT /api/admin/padcoins-loyalty-levels — ${config.levels.length} nivel(es) actualizado(s)`);
+      return res.json({
+        ok: true,
+        levels: config.levels,
+        thresholds: config.thresholds,
+      });
+    } catch (err) {
+      console.error('❌ PUT /api/admin/padcoins-loyalty-levels:', err.message);
+      return sendRouteError(res, err, 'Error al actualizar niveles de fidelización PadCoins');
     }
   });
 
