@@ -14,37 +14,35 @@ import {
 } from './premiosCanjeablesService.js';
 import { buildPaginatedPayload } from './padcoinsPagination.js';
 import {
+  notifyPadcoinsCanjeAprobadoPlayer,
   notifyPadcoinsCanjeCanceladoPlayer,
   notifyPadcoinsCanjeCreated,
   notifyPadcoinsCanjeEntregadoPlayer,
 } from './padcoinsCanjesNotificationService.js';
+import { assertCanjeLimitsAllowRedemption } from './padcoinsCanjeLimitsService.js';
+import {
+  isCanjeExpired,
+  resolveCanjeExpiresAt,
+  vencerCanjePadcoins,
+} from './padcoinsCanjeExpiryService.js';
+import { buildCanjeQrResponse } from './padcoinsCanjeQrService.js';
+import {
+  PADCOINS_CANJE_CANCELABLE_ESTADOS,
+  PADCOINS_CANJE_ENTREGABLE_ESTADOS,
+  PADCOINS_CANJE_ESTADOS_FINALES,
+} from './padcoinsCanjesConfig.js';
+import {
+  CANJE_SELECT,
+  CANJE_WITH_PREMIO_SELECT,
+  buildHttpError,
+  decrementPremioStockIfTracked,
+  mapCanjeRow,
+  restorePremioStockIfTracked,
+  resolvePremioNombreFromCanjeRow,
+} from './padcoinsCanjesInternal.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const CANJE_SELECT = [
-  'id',
-  'user_id',
-  'sede_id',
-  'premio_id',
-  'monto_padcoins',
-  'estado',
-  'codigo',
-  'created_at',
-  'updated_at',
-  'entregado_at',
-  'entregado_por',
-].join(', ');
-
-const CANJE_WITH_PREMIO_SELECT = `${CANJE_SELECT}, premios_canjeables ( nombre, descripcion )`;
-
-const ENTREGABLE_ESTADOS = new Set(['pendiente', 'aprobado']);
-const CANCELABLE_ESTADOS = new Set(['pendiente', 'aprobado']);
-
-function buildHttpError(message, status = 400) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
-}
+const CANJE_CODIGO_REGEX = /^PC-[0-9A-F]{12}$/;
 
 function assertUserId(userId) {
   if (!userId || typeof userId !== 'string') {
@@ -55,6 +53,15 @@ function assertUserId(userId) {
 function parseCanjeId(raw) {
   const id = String(raw ?? '').trim();
   return id || null;
+}
+
+function parseCanjeCodigo(raw) {
+  const codigo = String(raw ?? '').trim().toUpperCase();
+  if (!codigo) return null;
+  if (!CANJE_CODIGO_REGEX.test(codigo)) {
+    throw buildHttpError('codigo inválido');
+  }
+  return codigo;
 }
 
 function parseSedeId(raw) {
@@ -71,79 +78,8 @@ function parseOptionalUserId(raw) {
   return userId;
 }
 
-function resolvePremioNombreFromCanjeRow(canje) {
-  return canje?.premios_canjeables?.nombre ?? canje?.premio_nombre ?? null;
-}
-
 function generateCanjeCodigo() {
   return `PC-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-}
-
-function mapCanjeRow(row) {
-  if (!row) return null;
-
-  const premio = row.premios_canjeables ?? null;
-
-  return {
-    id: row.id,
-    user_id: row.user_id,
-    sede_id: row.sede_id,
-    premio_id: row.premio_id,
-    premio_nombre: premio?.nombre ?? null,
-    premio_descripcion: premio?.descripcion ?? null,
-    monto_padcoins: row.monto_padcoins,
-    estado: row.estado,
-    codigo: row.codigo,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    entregado_at: row.entregado_at ?? null,
-    entregado_por: row.entregado_por ?? null,
-  };
-}
-
-async function decrementPremioStockIfTracked(supabaseAdmin, premio) {
-  if (premio.stock_disponible == null) {
-    return false;
-  }
-
-  const stockActual = Number(premio.stock_disponible);
-  if (!Number.isInteger(stockActual) || stockActual <= 0) {
-    throw buildHttpError('Stock del premio agotado', 409);
-  }
-
-  const { data, error } = await supabaseAdmin
-    .from('premios_canjeables')
-    .update({
-      stock_disponible: stockActual - 1,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', premio.id)
-    .eq('stock_disponible', stockActual)
-    .select('id, stock_disponible')
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!data) {
-    throw buildHttpError('Stock del premio agotado', 409);
-  }
-
-  return true;
-}
-
-async function restorePremioStockIfTracked(supabaseAdmin, premioId) {
-  const premio = await getPremioCanjeableById(supabaseAdmin, premioId);
-  if (!premio || premio.stock_disponible == null) return;
-
-  const stockActual = Number(premio.stock_disponible);
-  const { error } = await supabaseAdmin
-    .from('premios_canjeables')
-    .update({
-      stock_disponible: stockActual + 1,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', premioId);
-
-  if (error) throw error;
 }
 
 async function findPendingCanjeForPremio(supabaseAdmin, userId, premioId) {
@@ -185,20 +121,71 @@ async function rollbackFailedCanje(supabaseAdmin, {
   }
 }
 
-export async function getCanjePadcoinsById(supabaseAdmin, canjeId) {
+async function fetchCanjeRow(supabaseAdmin, filters) {
+  let query = supabaseAdmin
+    .from('padcoins_canjes')
+    .select(CANJE_WITH_PREMIO_SELECT);
+
+  if (filters.id) query = query.eq('id', filters.id);
+  if (filters.codigo) query = query.eq('codigo', filters.codigo);
+
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+export async function ensureCanjeFreshOrExpire(supabaseAdmin, canjeRow, deps = {}) {
+  if (!canjeRow) return null;
+  if (PADCOINS_CANJE_ESTADOS_FINALES.has(canjeRow.estado)) {
+    return canjeRow;
+  }
+  if (!isCanjeExpired(canjeRow)) {
+    return canjeRow;
+  }
+
+  const premioNombre = resolvePremioNombreFromCanjeRow(canjeRow);
+  const result = await vencerCanjePadcoins(supabaseAdmin, canjeRow, {
+    ...deps,
+    premioNombre,
+  });
+
+  if (result.updated) {
+    return fetchCanjeRow(supabaseAdmin, { id: canjeRow.id });
+  }
+
+  return fetchCanjeRow(supabaseAdmin, { id: canjeRow.id });
+}
+
+export async function getCanjePadcoinsById(supabaseAdmin, canjeId, deps = {}) {
   const id = parseCanjeId(canjeId);
   if (!id) {
     throw buildHttpError('id de canje inválido');
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('padcoins_canjes')
-    .select(CANJE_WITH_PREMIO_SELECT)
-    .eq('id', id)
-    .maybeSingle();
+  const row = await fetchCanjeRow(supabaseAdmin, { id });
+  return ensureCanjeFreshOrExpire(supabaseAdmin, row, deps);
+}
 
-  if (error) throw error;
-  return data ?? null;
+export async function getCanjePadcoinsByCodigo(supabaseAdmin, codigo, deps = {}) {
+  const normalized = parseCanjeCodigo(codigo);
+  if (!normalized) {
+    throw buildHttpError('codigo inválido');
+  }
+
+  const row = await fetchCanjeRow(supabaseAdmin, { codigo: normalized });
+  return ensureCanjeFreshOrExpire(supabaseAdmin, row, deps);
+}
+
+export async function getCanjePadcoinsForPlayer(supabaseAdmin, canjeId, userId, deps = {}) {
+  assertUserId(userId);
+  const canje = await getCanjePadcoinsById(supabaseAdmin, canjeId, deps);
+  if (!canje) {
+    throw buildHttpError('Canje no encontrado', 404);
+  }
+  if (canje.user_id !== userId) {
+    throw buildHttpError('No autorizado', 403);
+  }
+  return canje;
 }
 
 export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, deps = {}) {
@@ -225,23 +212,27 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, dep
 
   const pendingCanje = await findPendingCanjeForPremio(supabaseAdmin, userId, premio.id);
   if (pendingCanje) {
-    const saldoActual = await getPadcoinsSaldo(supabaseAdmin, userId);
-    return {
-      canje: mapCanjeRow(pendingCanje),
-      codigo: pendingCanje.codigo,
-      saldo: {
-        disponible: saldoActual.disponible,
-        historico_total: saldoActual.historico_total,
-      },
-      movimiento_id: null,
-      idempotent: true,
-    };
+    const fresh = await ensureCanjeFreshOrExpire(supabaseAdmin, pendingCanje, deps);
+    if (fresh && ['pendiente', 'aprobado'].includes(fresh.estado)) {
+      const saldoActual = await getPadcoinsSaldo(supabaseAdmin, userId);
+      const mapped = mapCanjeRow(fresh, { includeQr: true });
+      return {
+        canje: mapped,
+        codigo: fresh.codigo,
+        saldo: {
+          disponible: saldoActual.disponible,
+          historico_total: saldoActual.historico_total,
+        },
+        movimiento_id: null,
+        idempotent: true,
+        ...buildCanjeQrResponse(mapped, { premioNombre: premio.nombre }),
+      };
+    }
   }
 
-  const canjeId = crypto.randomUUID();
+  await assertCanjeLimitsAllowRedemption(supabaseAdmin, premio, { userId });
 
-  // Decremento optimista: UPDATE condicionado por stock actual.
-  // Sin transacción DB/RPC queda una ventana de carrera; ver docs/PADCOINS_IDEMPOTENCIA.md.
+  const canjeId = crypto.randomUUID();
   const stockDecremented = await decrementPremioStockIfTracked(supabaseAdmin, premio);
 
   const spendMetadata = buildMovimientoMetadata({
@@ -266,9 +257,7 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, dep
     });
   } catch (err) {
     if (stockDecremented) {
-      await restorePremioStockIfTracked(supabaseAdmin, premio.id).catch((restoreErr) => {
-        console.error('[padcoinsCanjes] restore stock tras spend fallido:', restoreErr.message);
-      });
+      await restorePremioStockIfTracked(supabaseAdmin, premio.id).catch(() => null);
     }
     throw err;
   }
@@ -281,6 +270,11 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, dep
   }
 
   const codigo = generateCanjeCodigo();
+  const createdAt = new Date().toISOString();
+  const expiresAt = resolveCanjeExpiresAt({
+    createdAt,
+    validezDias: premio.canje_validez_dias,
+  });
 
   try {
     const { data: canje, error: canjeErr } = await supabaseAdmin
@@ -293,6 +287,9 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, dep
         monto_padcoins: costo,
         estado: 'pendiente',
         codigo,
+        expires_at: expiresAt,
+        created_at: createdAt,
+        updated_at: createdAt,
       })
       .select(CANJE_SELECT)
       .single();
@@ -301,8 +298,9 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, dep
       if (canjeErr.code === '23505') {
         const existing = await findPendingCanjeForPremio(supabaseAdmin, userId, premio.id);
         if (existing) {
+          const mappedExisting = mapCanjeRow(existing, { includeQr: true });
           return {
-            canje: mapCanjeRow(existing),
+            canje: mappedExisting,
             codigo: existing.codigo,
             saldo: {
               disponible: spendResult.saldo_despues,
@@ -310,13 +308,18 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, dep
             },
             movimiento_id: spendResult.movimiento?.id ?? null,
             idempotent: true,
+            ...buildCanjeQrResponse(mappedExisting, { premioNombre: premio.nombre }),
           };
         }
       }
       throw canjeErr;
     }
 
-    const mappedCanje = mapCanjeRow(canje);
+    const mappedCanje = mapCanjeRow({
+      ...canje,
+      premios_canjeables: { nombre: premio.nombre, descripcion: premio.descripcion, imagen_url: premio.imagen_url },
+    }, { includeQr: true });
+
     if (deps.skipNotifications !== true) {
       await notifyPadcoinsCanjeCreated(supabaseAdmin, {
         canje: mappedCanje,
@@ -326,6 +329,8 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, dep
       });
     }
 
+    const qr = buildCanjeQrResponse(mappedCanje, { premioNombre: premio.nombre });
+
     return {
       canje: mappedCanje,
       codigo,
@@ -334,6 +339,7 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, dep
         historico_total: spendResult.historico_total,
       },
       movimiento_id: spendResult.movimiento?.id ?? null,
+      ...qr,
     };
   } catch (err) {
     await rollbackFailedCanje(supabaseAdmin, {
@@ -413,15 +419,56 @@ export async function listCanjesAdminSede(supabaseAdmin, sedeId, options = {}) {
   return buildPaginatedPayload(canjes, { limit, offset, total }, 'canjes');
 }
 
-export async function entregarCanjePadcoins(supabaseAdmin, canjeId, adminUserId, deps = {}) {
+export async function aprobarCanjePadcoins(supabaseAdmin, canjeId, adminUserId, deps = {}) {
   assertUserId(adminUserId);
 
-  const canje = await getCanjePadcoinsById(supabaseAdmin, canjeId);
+  const canje = await getCanjePadcoinsById(supabaseAdmin, canjeId, deps);
   if (!canje) {
     throw buildHttpError('Canje no encontrado', 404);
   }
 
-  if (!ENTREGABLE_ESTADOS.has(canje.estado)) {
+  if (canje.estado !== 'pendiente') {
+    throw buildHttpError(`Canje no aprobable en estado ${canje.estado}`);
+  }
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from('padcoins_canjes')
+    .update({
+      estado: 'aprobado',
+      aprobado_at: now,
+      aprobado_por: adminUserId,
+      updated_at: now,
+    })
+    .eq('id', canje.id)
+    .eq('estado', 'pendiente')
+    .select(CANJE_WITH_PREMIO_SELECT)
+    .single();
+
+  if (error) throw error;
+
+  const mapped = mapCanjeRow(data, { includeQr: true });
+  const premioNombre = resolvePremioNombreFromCanjeRow(canje);
+
+  if (deps.skipNotifications !== true) {
+    await notifyPadcoinsCanjeAprobadoPlayer(supabaseAdmin, mapped, { premioNombre }, deps)
+      .catch((notifyErr) => {
+        console.warn('[padcoinsCanjes] notify aprobado:', notifyErr.message);
+      });
+  }
+
+  return mapped;
+}
+
+export async function entregarCanjePadcoins(supabaseAdmin, canjeId, adminUserId, deps = {}) {
+  assertUserId(adminUserId);
+
+  const canje = await getCanjePadcoinsById(supabaseAdmin, canjeId, deps);
+  if (!canje) {
+    throw buildHttpError('Canje no encontrado', 404);
+  }
+
+  if (!PADCOINS_CANJE_ENTREGABLE_ESTADOS.has(canje.estado)) {
     throw buildHttpError(`Canje no entregable en estado ${canje.estado}`);
   }
 
@@ -435,7 +482,8 @@ export async function entregarCanjePadcoins(supabaseAdmin, canjeId, adminUserId,
       updated_at: now,
     })
     .eq('id', canje.id)
-    .select(CANJE_SELECT)
+    .in('estado', Array.from(PADCOINS_CANJE_ENTREGABLE_ESTADOS))
+    .select(CANJE_WITH_PREMIO_SELECT)
     .single();
 
   if (error) throw error;
@@ -456,12 +504,12 @@ export async function entregarCanjePadcoins(supabaseAdmin, canjeId, adminUserId,
 export async function cancelarCanjePadcoins(supabaseAdmin, canjeId, adminUserId, reason = null, deps = {}) {
   assertUserId(adminUserId);
 
-  const canje = await getCanjePadcoinsById(supabaseAdmin, canjeId);
+  const canje = await getCanjePadcoinsById(supabaseAdmin, canjeId, deps);
   if (!canje) {
     throw buildHttpError('Canje no encontrado', 404);
   }
 
-  if (!CANCELABLE_ESTADOS.has(canje.estado)) {
+  if (!PADCOINS_CANJE_CANCELABLE_ESTADOS.has(canje.estado)) {
     throw buildHttpError(`Canje no cancelable en estado ${canje.estado}`);
   }
 
@@ -477,8 +525,8 @@ export async function cancelarCanjePadcoins(supabaseAdmin, canjeId, adminUserId,
       updated_at: now,
     })
     .eq('id', canje.id)
-    .in('estado', Array.from(CANCELABLE_ESTADOS))
-    .select(CANJE_SELECT)
+    .in('estado', Array.from(PADCOINS_CANJE_CANCELABLE_ESTADOS))
+    .select(CANJE_WITH_PREMIO_SELECT)
     .maybeSingle();
 
   if (updateErr) throw updateErr;
@@ -487,9 +535,6 @@ export async function cancelarCanjePadcoins(supabaseAdmin, canjeId, adminUserId,
   }
 
   try {
-    // V1: al cancelar un canje pendiente/aprobado se devuelven PadCoins al jugador
-    // mediante reversePadcoins (credit=true). historico_total no se modifica.
-    // Si el canje ya fue entregado, no se permite cancelar desde este flujo.
     await reversePadcoins(supabaseAdmin, canje.user_id, costo, {
       credit: true,
       referencia_tipo: PADCOINS_ORIGINS.CANJE_PREMIO,
@@ -499,20 +544,25 @@ export async function cancelarCanjePadcoins(supabaseAdmin, canjeId, adminUserId,
       descripcion: motivo
         ? `Cancelación canje ${canje.codigo}: ${motivo}`
         : `Cancelación canje ${canje.codigo}`,
+      metadata: {
+        action: 'refund_cancelado',
+        canje_id: canje.id,
+      },
     });
 
     await restorePremioStockIfTracked(supabaseAdmin, canje.premio_id);
   } catch (err) {
-    await supabaseAdmin
-      .from('padcoins_canjes')
-      .update({
-        estado: originalEstado,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', canje.id)
-      .catch((revertErr) => {
-        console.error('[padcoinsCanjes] revert estado tras fallo de devolución:', revertErr.message);
-      });
+    try {
+      await supabaseAdmin
+        .from('padcoins_canjes')
+        .update({
+          estado: originalEstado,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', canje.id);
+    } catch (revertErr) {
+      console.error('[padcoinsCanjes] revert estado tras fallo de devolución:', revertErr.message);
+    }
     throw err;
   }
 
@@ -530,3 +580,34 @@ export async function cancelarCanjePadcoins(supabaseAdmin, canjeId, adminUserId,
 
   return mapped;
 }
+
+export async function validarCanjePadcoinsAdmin(supabaseAdmin, {
+  canjeId = null,
+  codigo = null,
+} = {}, deps = {}) {
+  let canje = null;
+
+  if (canjeId) {
+    canje = await getCanjePadcoinsById(supabaseAdmin, canjeId, deps);
+  } else if (codigo) {
+    canje = await getCanjePadcoinsByCodigo(supabaseAdmin, codigo, deps);
+  } else {
+    throw buildHttpError('id o codigo es requerido');
+  }
+
+  if (!canje) {
+    throw buildHttpError('Canje no encontrado', 404);
+  }
+
+  const mapped = mapCanjeRow(canje, { includeQr: true });
+  return {
+    canje: mapped,
+    entregable: PADCOINS_CANJE_ENTREGABLE_ESTADOS.has(mapped.estado),
+    cancelable: PADCOINS_CANJE_CANCELABLE_ESTADOS.has(mapped.estado),
+    aprobable: mapped.estado === 'pendiente',
+    vencido: mapped.estado === 'vencido',
+    final: PADCOINS_CANJE_ESTADOS_FINALES.has(mapped.estado),
+  };
+}
+
+export { expireDuePadcoinsCanjes } from './padcoinsCanjeExpiryService.js';

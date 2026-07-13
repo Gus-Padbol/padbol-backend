@@ -48,6 +48,10 @@ import {
   listPadcoinsLoyaltyLevelsConfig,
   updatePadcoinsLoyaltyLevelsConfig,
 } from '../padcoins/padcoinsLoyaltyLevelsService.js';
+import {
+  getCanjePadcoinsForPlayer,
+} from '../padcoins/padcoinsCanjesService.js';
+import { mapCanjeRow } from '../padcoins/padcoinsCanjesInternal.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -222,6 +226,35 @@ export function createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }) {
     } catch (err) {
       console.error('❌ Error GET /api/padcoins/mis-canjes:', err.message);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/canjes/:id', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+      }
+
+      const canjeId = String(req.params.id ?? '').trim();
+      if (!canjeId) {
+        return res.status(400).json({ error: 'id inválido' });
+      }
+
+      const canje = await getCanjePadcoinsForPlayer(supabaseAdmin, canjeId, user.id);
+      const mapped = mapCanjeRow(canje, { includeQr: true });
+
+      return res.json({
+        ok: true,
+        canje: mapped,
+        qr_payload: mapped.qr_payload ?? null,
+        qr_data: mapped.qr_data ?? null,
+        verify_path: mapped.verify_path ?? null,
+      });
+    } catch (err) {
+      const statusCode = err.status || 500;
+      console.error('❌ GET /api/padcoins/canjes/:id:', err.message);
+      return res.status(statusCode).json({ error: err.message });
     }
   });
 

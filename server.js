@@ -160,6 +160,7 @@ import { mountPremiosCanjeablesRoutes } from './src/routes/premiosCanjeables.js'
 import { initReservasCron } from './src/cron/reservasCron.js';
 import { initReservasHoldCleanupCron } from './src/cron/reservasHoldCleanup.js';
 import { initPadcoinsAlertasCron } from './src/cron/padcoinsAlertasCron.js';
+import { initPadcoinsCanjesExpiryCron } from './src/cron/padcoinsCanjesExpiryCron.js';
 import { initMatchAttendanceCron } from './src/cron/matchAttendanceCron.js';
 import { initMatchAttendanceReminderCron } from './src/cron/matchAttendanceReminderCron.js';
 import {
@@ -3549,6 +3550,12 @@ initPadcoinsAlertasCron({
   twilioClient,
   twilioFrom: TWILIO_WHATSAPP_FROM,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+  timezone: 'America/Argentina/Buenos_Aires',
+});
+
+initPadcoinsCanjesExpiryCron({
+  supabaseAdmin,
+  cron,
   timezone: 'America/Argentina/Buenos_Aires',
 });
 

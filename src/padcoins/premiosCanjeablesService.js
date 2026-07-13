@@ -1,8 +1,12 @@
+import { PADCOINS_CANJE_LIMITE_PERIODOS, PADCOINS_PREMIO_IMAGEN_FALLBACK } from './padcoinsCanjesConfig.js';
+import { resolvePremioCanjeLimits } from './padcoinsCanjeLimitsService.js';
+
 const PREMIO_SELECT = [
   'id',
   'sede_id',
   'nombre',
   'descripcion',
+  'imagen_url',
   'costo_padcoins',
   'stock_total',
   'stock_disponible',
@@ -10,6 +14,11 @@ const PREMIO_SELECT = [
   'fecha_inicio',
   'fecha_fin',
   'condiciones',
+  'limite_usuario_cantidad',
+  'limite_usuario_periodo',
+  'limite_global_cantidad',
+  'limite_global_periodo',
+  'canje_validez_dias',
   'created_at',
   'updated_at',
 ].join(', ');
@@ -18,6 +27,7 @@ const ALLOWED_PAYLOAD_KEYS = new Set([
   'sede_id',
   'nombre',
   'descripcion',
+  'imagen_url',
   'costo_padcoins',
   'stock_total',
   'stock_disponible',
@@ -25,6 +35,11 @@ const ALLOWED_PAYLOAD_KEYS = new Set([
   'fecha_inicio',
   'fecha_fin',
   'condiciones',
+  'limite_usuario_cantidad',
+  'limite_usuario_periodo',
+  'limite_global_cantidad',
+  'limite_global_periodo',
+  'canje_validez_dias',
 ]);
 
 function parseSedeId(raw) {
@@ -102,17 +117,39 @@ export function isPremioCanjeablePublico(row, nowMs = Date.now()) {
   return true;
 }
 
+export function resolvePremioImagenUrl(row) {
+  const raw = row?.imagen_url;
+  const trimmed = raw != null ? String(raw).trim() : '';
+  return trimmed || PADCOINS_PREMIO_IMAGEN_FALLBACK;
+}
+
 export function mapPremioCanjeablePublico(row) {
   return {
     id: row.id,
     sede_id: row.sede_id,
     nombre: row.nombre,
     descripcion: row.descripcion ?? null,
+    imagen_url: resolvePremioImagenUrl(row),
     costo_padcoins: row.costo_padcoins,
     stock_disponible: row.stock_disponible ?? null,
     fecha_inicio: row.fecha_inicio ?? null,
     fecha_fin: row.fecha_fin ?? null,
     condiciones: row.condiciones ?? null,
+  };
+}
+
+export function mapPremioCanjeableAdmin(row) {
+  return {
+    ...mapPremioCanjeablePublico(row),
+    stock_total: row.stock_total ?? null,
+    activo: row.activo !== false,
+    limite_usuario_cantidad: row.limite_usuario_cantidad ?? null,
+    limite_usuario_periodo: row.limite_usuario_periodo ?? null,
+    limite_global_cantidad: row.limite_global_cantidad ?? null,
+    limite_global_periodo: row.limite_global_periodo ?? null,
+    canje_validez_dias: row.canje_validez_dias ?? null,
+    created_at: row.created_at ?? null,
+    updated_at: row.updated_at ?? null,
   };
 }
 
@@ -197,6 +234,52 @@ export function validatePremioCanjeablePayload(payload, { partial = false } = {}
     result.fecha_fin = fechaFin;
   }
 
+  if (Object.prototype.hasOwnProperty.call(normalized, 'imagen_url')) {
+    const imagen = normalized.imagen_url == null
+      ? null
+      : String(normalized.imagen_url).trim();
+    result.imagen_url = imagen ? imagen.slice(0, 2000) : null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(normalized, 'limite_usuario_cantidad')) {
+    const limite = parseOptionalInteger(normalized.limite_usuario_cantidad);
+    if (limite === undefined) throw buildHttpError('limite_usuario_cantidad inválido');
+    result.limite_usuario_cantidad = limite;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(normalized, 'limite_usuario_periodo')) {
+    const periodo = normalized.limite_usuario_periodo == null
+      ? null
+      : String(normalized.limite_usuario_periodo).trim().toLowerCase();
+    if (periodo && !PADCOINS_CANJE_LIMITE_PERIODOS.includes(periodo)) {
+      throw buildHttpError('limite_usuario_periodo inválido');
+    }
+    result.limite_usuario_periodo = periodo || null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(normalized, 'limite_global_cantidad')) {
+    const limite = parseOptionalInteger(normalized.limite_global_cantidad);
+    if (limite === undefined) throw buildHttpError('limite_global_cantidad inválido');
+    result.limite_global_cantidad = limite;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(normalized, 'limite_global_periodo')) {
+    const periodo = normalized.limite_global_periodo == null
+      ? null
+      : String(normalized.limite_global_periodo).trim().toLowerCase();
+    if (periodo && !PADCOINS_CANJE_LIMITE_PERIODOS.includes(periodo)) {
+      throw buildHttpError('limite_global_periodo inválido');
+    }
+    result.limite_global_periodo = periodo || null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(normalized, 'canje_validez_dias')) {
+    const dias = parseOptionalInteger(normalized.canje_validez_dias);
+    if (dias === undefined) throw buildHttpError('canje_validez_dias inválido');
+    if (dias != null && dias <= 0) throw buildHttpError('canje_validez_dias debe ser > 0');
+    result.canje_validez_dias = dias;
+  }
+
   if (Object.prototype.hasOwnProperty.call(normalized, 'condiciones')) {
     const condiciones = normalized.condiciones == null
       ? null
@@ -216,6 +299,15 @@ export function validatePremioCanjeablePayload(payload, { partial = false } = {}
   }
 
   return result;
+}
+
+function validatePremioLimitsMerged(row) {
+  resolvePremioCanjeLimits({
+    limite_usuario_cantidad: row.limite_usuario_cantidad ?? null,
+    limite_usuario_periodo: row.limite_usuario_periodo ?? null,
+    limite_global_cantidad: row.limite_global_cantidad ?? null,
+    limite_global_periodo: row.limite_global_periodo ?? null,
+  });
 }
 
 function assertStockRelation(stockTotal, stockDisponible) {
@@ -307,6 +399,7 @@ export async function createPremioCanjeable(supabaseAdmin, payload) {
   }
 
   assertStockRelation(validated.stock_total, validated.stock_disponible);
+  validatePremioLimitsMerged(validated);
 
   const insertRow = {
     ...validated,
@@ -342,6 +435,12 @@ export async function updatePremioCanjeable(supabaseAdmin, premioId, payload) {
     : existing.stock_disponible;
 
   assertStockRelation(nextStockTotal, nextStockDisponible);
+  validatePremioLimitsMerged({
+    ...existing,
+    ...validated,
+    stock_total: nextStockTotal,
+    stock_disponible: nextStockDisponible,
+  });
 
   const updateRow = {
     ...validated,

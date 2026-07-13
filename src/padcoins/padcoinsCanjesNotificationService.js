@@ -8,15 +8,19 @@ export const PADCOINS_CANJE_NOTIFICATION_SOURCE = 'padcoins_canje_v1';
 export const PADCOINS_CANJE_NOTIFICATION_TYPES = Object.freeze({
   JUGADOR_PENDIENTE: 'padcoins_canje_pendiente',
   ADMIN_NUEVO_PENDIENTE: 'padcoins_canje_admin_pendiente',
+  JUGADOR_APROBADO: 'padcoins_canje_aprobado',
   JUGADOR_ENTREGADO: 'padcoins_canje_entregado',
   JUGADOR_CANCELADO: 'padcoins_canje_cancelado',
+  JUGADOR_VENCIDO: 'padcoins_canje_vencido',
 });
 
 export const PADCOINS_CANJE_NOTIFICATION_TRANSITIONS = Object.freeze({
   PLAYER_PENDIENTE: 'player_pendiente',
   ADMIN_NUEVO_PENDIENTE: 'admin_nuevo_pendiente',
+  PLAYER_APROBADO: 'player_aprobado',
   PLAYER_ENTREGADO: 'player_entregado',
   PLAYER_CANCELADO: 'player_cancelado',
+  PLAYER_VENCIDO: 'player_vencido',
 });
 
 export const PADCOINS_CANJE_PLAYER_ACTION = 'ver_canje_padcoins';
@@ -172,6 +176,46 @@ export async function notifyPadcoinsNuevoCanjeAdminSede(supabaseAdmin, canje, {
   }
 
   return { notified: results.length, results };
+}
+
+export async function notifyPadcoinsCanjeAprobadoPlayer(supabaseAdmin, canje, {
+  premioNombre = null,
+} = {}, deps = {}) {
+  const normalized = normalizeCanje(canje);
+  if (!normalized.id || !normalized.user_id) return { skipped: true, reason: 'invalid_canje' };
+
+  const nombre = premioNombre ?? normalized.premio_nombre ?? 'beneficio';
+
+  return sendPadcoinsCanjeNotification(supabaseAdmin, {
+    userId: normalized.user_id,
+    tipo: PADCOINS_CANJE_NOTIFICATION_TYPES.JUGADOR_APROBADO,
+    titulo: 'Canje aprobado',
+    mensaje: `Tu canje de "${nombre}" fue aprobado. Presentá el código ${normalized.codigo ?? '—'} para retirarlo.`,
+    canje: { ...normalized, estado: 'aprobado' },
+    transition: PADCOINS_CANJE_NOTIFICATION_TRANSITIONS.PLAYER_APROBADO,
+    premioNombre: nombre,
+    link: buildPadcoinsCanjePlayerLink(normalized.id),
+  }, deps);
+}
+
+export async function notifyPadcoinsCanjeVencidoPlayer(supabaseAdmin, canje, {
+  premioNombre = null,
+} = {}, deps = {}) {
+  const normalized = normalizeCanje(canje);
+  if (!normalized.id || !normalized.user_id) return { skipped: true, reason: 'invalid_canje' };
+
+  const nombre = premioNombre ?? normalized.premio_nombre ?? 'beneficio';
+
+  return sendPadcoinsCanjeNotification(supabaseAdmin, {
+    userId: normalized.user_id,
+    tipo: PADCOINS_CANJE_NOTIFICATION_TYPES.JUGADOR_VENCIDO,
+    titulo: 'Canje vencido',
+    mensaje: `Tu canje de "${nombre}" venció. Tus PadCoins fueron devueltas.`,
+    canje: { ...normalized, estado: 'vencido' },
+    transition: PADCOINS_CANJE_NOTIFICATION_TRANSITIONS.PLAYER_VENCIDO,
+    premioNombre: nombre,
+    link: buildPadcoinsCanjePlayerLink(normalized.id),
+  }, deps);
 }
 
 export async function notifyPadcoinsCanjeEntregadoPlayer(supabaseAdmin, canje, {
