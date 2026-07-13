@@ -503,6 +503,36 @@ export function isReservaSlotUniqueViolation(err) {
     || text.includes('idx_reservas_slot_blocking_unique');
 }
 
+/**
+ * Mapea errores conocidos de insert/update de reservas a HTTP 4xx descriptivos.
+ * Evita 500 genéricos por validación/constraint del motor.
+ * @returns {{ status: number, error: string } | null}
+ */
+export function classifyReservaWriteError(err) {
+  if (!err) return null;
+  if (Number(err?.status) === 409 || isReservaSlotUniqueViolation(err)) {
+    return { status: 409, error: 'Este horario ya está reservado' };
+  }
+
+  const code = String(err.code ?? '').toUpperCase();
+  if (code === '23502') {
+    return { status: 400, error: 'Faltan campos obligatorios para crear la reserva' };
+  }
+  if (code === '23503') {
+    return { status: 400, error: 'Referencia inválida (sede o cancha)' };
+  }
+  if (code === '22P02' || code === '22007' || code === '22008') {
+    return { status: 400, error: 'Formato de fecha u hora inválido' };
+  }
+
+  const text = [err.message, err.details, err.hint].filter(Boolean).join(' ').toLowerCase();
+  if (text.includes('invalid input syntax') || text.includes('date/time field value out of range')) {
+    return { status: 400, error: 'Formato de fecha u hora inválido' };
+  }
+
+  return null;
+}
+
 export function filterBlockingReservas(reservas, nowMs = Date.now()) {
   return (reservas ?? []).filter((reserva) => isBlockingReserva(reserva, nowMs));
 }

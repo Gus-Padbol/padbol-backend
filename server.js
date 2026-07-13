@@ -23,7 +23,7 @@ import {
   fetchDisponibilidadOccupancy,
   filterBlockingReservas,
   isCourtBlocked,
-  isReservaSlotUniqueViolation,
+  classifyReservaWriteError,
   logPartidoCanchaBody,
   parsePositiveInt,
   resolvePartidoCanchaNombre,
@@ -1348,8 +1348,9 @@ app.post('/api/reservas', reservasWriteRateLimit, async (req, res) => {
       .select(RESERVA_OWNER_SELECT);
 
     if (insertErr) {
-      if (isReservaSlotUniqueViolation(insertErr)) {
-        return res.status(409).json({ error: 'Este horario ya está reservado' });
+      const classified = classifyReservaWriteError(insertErr);
+      if (classified) {
+        return res.status(classified.status).json({ error: classified.error });
       }
       throw insertErr;
     }
@@ -1423,10 +1424,12 @@ app.post('/api/reservas', reservasWriteRateLimit, async (req, res) => {
       });
     }
 
-    res.json([mappedReserva]);
+    // Mismo shape histórico (array con 1 reserva); 201 al crear.
+    return res.status(201).json([mappedReserva]);
   } catch (err) {
-    if (Number(err?.status) === 409 || isReservaSlotUniqueViolation(err)) {
-      return res.status(409).json({ error: 'Este horario ya está reservado' });
+    const classified = classifyReservaWriteError(err);
+    if (classified) {
+      return res.status(classified.status).json({ error: classified.error });
     }
     console.error('❌ Error POST reserva:', err.message);
     sendHttpError(res, err);
