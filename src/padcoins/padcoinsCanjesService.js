@@ -12,6 +12,14 @@ import {
   getPremioCanjeableById,
   isPremioCanjeablePublico,
 } from './premiosCanjeablesService.js';
+import { buildPaginatedPayload } from './padcoinsPagination.js';
+import {
+  notifyPadcoinsCanjeCanceladoPlayer,
+  notifyPadcoinsCanjeCreated,
+  notifyPadcoinsCanjeEntregadoPlayer,
+} from './padcoinsCanjesNotificationService.js';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const CANJE_SELECT = [
   'id',
@@ -52,6 +60,19 @@ function parseCanjeId(raw) {
 function parseSedeId(raw) {
   const sid = Number.parseInt(String(raw ?? '').trim(), 10);
   return Number.isFinite(sid) && sid > 0 ? sid : null;
+}
+
+function parseOptionalUserId(raw) {
+  const userId = String(raw ?? '').trim();
+  if (!userId) return null;
+  if (!UUID_REGEX.test(userId)) {
+    throw buildHttpError('user_id inválido');
+  }
+  return userId;
+}
+
+function resolvePremioNombreFromCanjeRow(canje) {
+  return canje?.premios_canjeables?.nombre ?? canje?.premio_nombre ?? null;
 }
 
 function generateCanjeCodigo() {
@@ -180,7 +201,7 @@ export async function getCanjePadcoinsById(supabaseAdmin, canjeId) {
   return data ?? null;
 }
 
-export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId) {
+export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId, deps = {}) {
   assertUserId(userId);
 
   const premio = await getPremioCanjeableById(supabaseAdmin, premioId);
@@ -295,8 +316,18 @@ export async function canjearPremioPadcoins(supabaseAdmin, userId, premioId) {
       throw canjeErr;
     }
 
+    const mappedCanje = mapCanjeRow(canje);
+    if (deps.skipNotifications !== true) {
+      await notifyPadcoinsCanjeCreated(supabaseAdmin, {
+        canje: mappedCanje,
+        premioNombre: premio.nombre,
+      }, deps).catch((notifyErr) => {
+        console.warn('[padcoinsCanjes] notify created:', notifyErr.message);
+      });
+    }
+
     return {
-      canje: mapCanjeRow(canje),
+      canje: mappedCanje,
       codigo,
       saldo: {
         disponible: spendResult.saldo_despues,
@@ -330,24 +361,19 @@ export async function listMisCanjesPadcoins(supabaseAdmin, userId, options = {})
     .from('padcoins_canjes')
     .select(CANJE_WITH_PREMIO_SELECT, { count: 'exact' })
     .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1);
+    .order('created_at', { ascending: false });
 
   if (options.estado) {
     query = query.eq('estado', String(options.estado).trim());
   }
 
-  const { data, error, count } = await query;
+  const { data, error, count } = await query.range(offset, offset + limit - 1);
   if (error) throw error;
 
-  return {
-    canjes: (data ?? []).map((row) => mapCanjeRow(row)),
-    paginacion: {
-      limit,
-      offset,
-      total: count ?? (data?.length ?? 0),
-    },
-  };
+  const canjes = (data ?? []).map((row) => mapCanjeRow(row));
+  const total = count ?? canjes.length;
+
+  return buildPaginatedPayload(canjes, { limit, offset, total }, 'canjes');
 }
 
 export async function listCanjesAdminSede(supabaseAdmin, sedeId, options = {}) {
@@ -367,27 +393,27 @@ export async function listCanjesAdminSede(supabaseAdmin, sedeId, options = {}) {
     .from('padcoins_canjes')
     .select(CANJE_WITH_PREMIO_SELECT, { count: 'exact' })
     .eq('sede_id', parsedSedeId)
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1);
+    .order('created_at', { ascending: false });
 
   if (options.estado) {
     query = query.eq('estado', String(options.estado).trim());
   }
 
-  const { data, error, count } = await query;
+  const userId = parseOptionalUserId(options.user_id ?? options.usuario_id ?? options.jugador_id);
+  if (userId) {
+    query = query.eq('user_id', userId);
+  }
+
+  const { data, error, count } = await query.range(offset, offset + limit - 1);
   if (error) throw error;
 
-  return {
-    canjes: (data ?? []).map((row) => mapCanjeRow(row)),
-    paginacion: {
-      limit,
-      offset,
-      total: count ?? (data?.length ?? 0),
-    },
-  };
+  const canjes = (data ?? []).map((row) => mapCanjeRow(row));
+  const total = count ?? canjes.length;
+
+  return buildPaginatedPayload(canjes, { limit, offset, total }, 'canjes');
 }
 
-export async function entregarCanjePadcoins(supabaseAdmin, canjeId, adminUserId) {
+export async function entregarCanjePadcoins(supabaseAdmin, canjeId, adminUserId, deps = {}) {
   assertUserId(adminUserId);
 
   const canje = await getCanjePadcoinsById(supabaseAdmin, canjeId);
@@ -413,10 +439,21 @@ export async function entregarCanjePadcoins(supabaseAdmin, canjeId, adminUserId)
     .single();
 
   if (error) throw error;
-  return mapCanjeRow(data);
+
+  const mapped = mapCanjeRow(data);
+  const premioNombre = resolvePremioNombreFromCanjeRow(canje);
+
+  if (deps.skipNotifications !== true) {
+    await notifyPadcoinsCanjeEntregadoPlayer(supabaseAdmin, mapped, { premioNombre }, deps)
+      .catch((notifyErr) => {
+        console.warn('[padcoinsCanjes] notify entregado:', notifyErr.message);
+      });
+  }
+
+  return mapped;
 }
 
-export async function cancelarCanjePadcoins(supabaseAdmin, canjeId, adminUserId, reason = null) {
+export async function cancelarCanjePadcoins(supabaseAdmin, canjeId, adminUserId, reason = null, deps = {}) {
   assertUserId(adminUserId);
 
   const canje = await getCanjePadcoinsById(supabaseAdmin, canjeId);
@@ -479,5 +516,17 @@ export async function cancelarCanjePadcoins(supabaseAdmin, canjeId, adminUserId,
     throw err;
   }
 
-  return mapCanjeRow(updated);
+  const mapped = mapCanjeRow(updated);
+  const premioNombre = resolvePremioNombreFromCanjeRow(canje);
+
+  if (deps.skipNotifications !== true) {
+    await notifyPadcoinsCanjeCanceladoPlayer(supabaseAdmin, mapped, {
+      premioNombre,
+      reason: motivo,
+    }, deps).catch((notifyErr) => {
+      console.warn('[padcoinsCanjes] notify cancelado:', notifyErr.message);
+    });
+  }
+
+  return mapped;
 }

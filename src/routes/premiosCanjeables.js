@@ -67,6 +67,13 @@ function parseOptionalLimit(rawLimit) {
   return parsed;
 }
 
+function parseOptionalOffset(rawOffset) {
+  if (rawOffset == null || rawOffset === '') return undefined;
+  const parsed = Number.parseInt(String(rawOffset), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) return undefined;
+  return parsed;
+}
+
 function sendRouteError(res, err, fallbackMessage) {
   const status = err.status || 500;
   return res.status(status).json({ error: err.message || fallbackMessage });
@@ -302,11 +309,18 @@ export function mountPremiosCanjeablesRoutes(app, {
 
       const sedeId = resolveAdminListSedeId(auth.role, req.query ?? {});
       const limit = parseOptionalLimit(req.query.limit);
+      const offset = parseOptionalOffset(req.query.offset);
       const estado = req.query.estado ? String(req.query.estado).trim() : undefined;
+      const user_id = req.query.user_id ?? req.query.usuario_id ?? req.query.jugador_id ?? undefined;
       const padcoinsActivo = await isPadcoinsActiveForSede(supabaseAdmin, sedeId);
-      const { canjes } = await listCanjesAdminSede(supabaseAdmin, sedeId, { limit, estado });
+      const result = await listCanjesAdminSede(supabaseAdmin, sedeId, {
+        limit,
+        offset,
+        estado,
+        user_id,
+      });
 
-      return res.json({ ok: true, canjes, padcoins_activo: padcoinsActivo });
+      return res.json({ ok: true, ...result, padcoins_activo: padcoinsActivo });
     } catch (err) {
       console.error('❌ GET /api/admin/padcoins-canjes:', err.message);
       return sendRouteError(res, err, 'Error al listar canjes admin');

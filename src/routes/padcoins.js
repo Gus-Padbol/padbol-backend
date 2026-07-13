@@ -7,10 +7,10 @@ import {
 import {
   adjustPadcoins,
   getPadcoinsSaldo,
-  listPadcoinsMovimientos,
 } from '../padcoins/padcoinsService.js';
 import { PADCOINS_ORIGINS } from '../padcoins/padcoinsConfig.js';
 import { listMisCanjesPadcoins } from '../padcoins/padcoinsCanjesService.js';
+import { listPadcoinsMovimientosForPlayer } from '../padcoins/padcoinsMovimientosPlayerService.js';
 import {
   listPadcoinsGlobalConfig,
   updatePadcoinsGlobalConfig,
@@ -115,6 +115,13 @@ function parseOptionalLimit(rawLimit) {
   return parsed;
 }
 
+function parseOptionalOffset(rawOffset) {
+  if (rawOffset == null || rawOffset === '') return undefined;
+  const parsed = Number.parseInt(String(rawOffset), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) return undefined;
+  return parsed;
+}
+
 function parseCampaignId(raw) {
   const id = String(raw ?? '').trim();
   return UUID_REGEX.test(id) ? id : null;
@@ -164,16 +171,20 @@ export function createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }) {
         return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
       }
 
-      const limit = parseOptionalLimit(req.query.limit);
-      const { movimientos } = await listPadcoinsMovimientos(supabaseAdmin, user.id, { limit });
+      const result = await listPadcoinsMovimientosForPlayer(supabaseAdmin, user.id, {
+        query: req.query,
+        limit: parseOptionalLimit(req.query.limit),
+        offset: parseOptionalOffset(req.query.offset),
+      });
 
       res.json({
         ok: true,
-        movimientos,
+        ...result,
       });
     } catch (err) {
+      const statusCode = err.status || 500;
       console.error('❌ Error GET /api/padcoins/historial:', err.message);
-      res.status(500).json({ error: err.message });
+      res.status(statusCode).json({ error: err.message });
     }
   });
 
@@ -185,12 +196,13 @@ export function createPadcoinsRouter({ supabaseAdmin, getAuthenticatedUser }) {
       }
 
       const limit = parseOptionalLimit(req.query.limit);
+      const offset = parseOptionalOffset(req.query.offset);
       const estado = req.query.estado ? String(req.query.estado).trim() : undefined;
-      const { canjes } = await listMisCanjesPadcoins(supabaseAdmin, user.id, { limit, estado });
+      const result = await listMisCanjesPadcoins(supabaseAdmin, user.id, { limit, offset, estado });
 
       res.json({
         ok: true,
-        canjes,
+        ...result,
       });
     } catch (err) {
       console.error('❌ Error GET /api/padcoins/mis-canjes:', err.message);
