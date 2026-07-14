@@ -114,8 +114,11 @@ async function fetchCanchasForDeporte(supabaseAdmin, sedeId, deporte) {
       if (!data?.length) continue;
 
       const matches = data.filter((row) => {
-        const dep = String(row.deporte ?? row.sport ?? row.tipo_deporte ?? 'padbol').trim().toLowerCase();
-        return dep === normalized;
+        const raw = row.deporte ?? row.sport ?? row.tipo_deporte;
+        const dep = String(raw ?? '').trim().toLowerCase();
+        // custom: solo match exacto (nunca tratar vacío como padbol).
+        if (normalized === 'custom') return dep === 'custom';
+        return (dep || 'padbol') === normalized;
       });
       if (matches.length) return matches;
     } catch {

@@ -2,6 +2,9 @@ const DEFAULT_TZ = 'America/Argentina/Buenos_Aires';
 
 export const VALID_SURGE_DEPORTES = new Set(['padbol', 'padel', 'pickleball', 'tenis']);
 
+/** MEJ-07: custom usa precio específico o base de sede; nunca se remapea a padbol. */
+export const DEPORTE_CUSTOM_PRICING = 'custom';
+
 export const PRICE_SOURCES = {
   FRANJA_PRECIO: 'franjas_precio',
   SEDES_DURACIONES_DEPORTE: 'sedes_duraciones_deporte',
@@ -24,6 +27,7 @@ const FRANJA_PRECIO_COL = {
 
 export function normalizeSurgeDeporte(value) {
   const key = String(value ?? 'padbol').trim().toLowerCase();
+  if (key === DEPORTE_CUSTOM_PRICING) return DEPORTE_CUSTOM_PRICING;
   if (!VALID_SURGE_DEPORTES.has(key)) {
     throw Object.assign(new Error('deporte inválido'), { status: 400 });
   }
