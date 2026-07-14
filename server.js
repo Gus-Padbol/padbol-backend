@@ -936,7 +936,12 @@ mountSedesProfileRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
-mountCanchasRoutes(app, { supabaseAdmin });
+mountCanchasRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 mountSurgeRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
