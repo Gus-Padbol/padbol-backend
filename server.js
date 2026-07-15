@@ -144,6 +144,7 @@ import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountPushRoutes } from './routes/push.js';
 import { mountArenaRoutes } from './routes/arena.js';
+import { mountComunidadRoutes } from './routes/comunidad.js';
 import {
   notifyReservaConfirmada,
   notifyTorneoInscripcionConfirmada,
@@ -1045,6 +1046,12 @@ mountStripeWebhookRoutes(app, {
 });
 mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountArenaRoutes(app, { supabaseAdmin, getAuthenticatedUser });
+mountComunidadRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 
 // GET /api/sedes/:id — datos públicos de la sede (reserva, horarios, precios; sin JWT)
 app.get('/api/sedes/:id', async (req, res) => {
