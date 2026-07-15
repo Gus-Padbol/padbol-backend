@@ -10,7 +10,7 @@ import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
 import Stripe from 'stripe';
 import cron from 'node-cron';
-import { createEquiposUsuarioRouter } from './routes/equipos.js';
+import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
 import { createMembresiasRouter } from './routes/membresias.js';
 import {
@@ -2692,6 +2692,7 @@ mountMatchAttendanceAdminRoutes(app, {
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser }));
+mountJugadorInvitacionesEquipoRoute(app, { supabaseAdmin, getAuthenticatedUser });
 
 // ===== HUB (action card images — public GET /api/hub/imagenes) =====
 app.use('/api/hub', createHubRouter({ supabaseAdmin }));
