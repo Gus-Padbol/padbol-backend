@@ -12,7 +12,7 @@ import Stripe from 'stripe';
 import cron from 'node-cron';
 import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
-import { createMembresiasRouter } from './routes/membresias.js';
+import { createMembresiasRouter, mountMembresiasSedeRoutes } from './routes/membresias.js';
 import {
   buildPartidoAbiertoInsertRow,
   buildCapitanFields,
@@ -85,6 +85,7 @@ import {
   resolveReservasListScope,
 } from './lib/authAccess.js';
 import { quoteReservaPrice, assertClientPrecioMatchesQuote } from './lib/pricing/quoteReservaPrice.js';
+import { createMembresiasSedeService } from './src/membresias/membresiasService.js';
 import { envConfigured, maskEmail, maskPhone, safeQueryLog, summarizeError } from './lib/safeLog.js';
 import { applySecurityHeaders } from './lib/httpSecurity.js';
 import { buildClientErrorPayload, logServerError, sanitizeClientErrorMessage, sendHttpError } from './lib/httpErrors.js';
@@ -2698,6 +2699,12 @@ mountMatchAttendanceAdminRoutes(app, {
 });
 app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
+mountMembresiasSedeRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 app.use('/api/equipos', createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser }));
 mountJugadorInvitacionesEquipoRoute(app, { supabaseAdmin, getAuthenticatedUser });
 
@@ -3152,6 +3159,23 @@ function supabaseClientLabelForLog(client) {
   return 'unknown';
 }
 
+async function registerMembresiaUsoIncluidaIfNeeded({ quote, user, reservaId, sedeId }) {
+  const applied = quote?.membresia || quote?.pricing_snapshot?.membresia;
+  if (!applied?.reserva_incluida || !applied?.membresia_id || !reservaId || !supabaseAdmin) return;
+  try {
+    const svc = createMembresiasSedeService({ supabaseAdmin });
+    await svc.registerUsoReservaIncluida({
+      membresiaId: applied.membresia_id,
+      userId: user?.id,
+      sedeId: sedeId ?? applied.sede_id,
+      reservaId,
+      detalle: { beneficio: applied.beneficio, total: quote?.total },
+    });
+  } catch (err) {
+    console.warn('⚠️ registro uso membresía:', err.message);
+  }
+}
+
 function logCrearPreferenciaSupabaseQuery(client, table, operation, params = {}) {
   if (!crearPreferenciaSupabaseLogActive) return;
   crearPreferenciaSupabaseLogSeq += 1;
@@ -3222,6 +3246,8 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
         hora: quoteInput.hora ?? quoteInput.hora_inicio ?? reservaData?.hora,
         extras: extras ?? reservaData?.extras ?? [],
         moneda,
+        userId: user.id,
+        email: user.email,
       });
     } catch (quoteErr) {
       logCrearPreferenciaError('quote', quoteErr, ctx);
@@ -3270,6 +3296,12 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
       });
       reservaIdParaMp = pending.reserva_id;
       console.log(`[POST /api/crear-preferencia] reserva pendiente id=${reservaIdParaMp} (created=${pending.created})`);
+      await registerMembresiaUsoIncluidaIfNeeded({
+        quote,
+        user,
+        reservaId: reservaIdParaMp,
+        sedeId: resolvedSedeId,
+      });
     } catch (pendingErr) {
       logCrearPreferenciaError('reserva_pendiente', pendingErr, ctx);
       return res.status(pendingErr.status || 500).json({ error: pendingErr.message || 'No se pudo crear la reserva pendiente' });
@@ -3398,6 +3430,8 @@ app.post('/api/crear-pago-stripe', paymentsRateLimit, async (req, res) => {
         hora: quoteInput.hora ?? quoteInput.hora_inicio ?? reservaData?.hora,
         extras: extras ?? reservaData?.extras ?? [],
         moneda,
+        userId: user.id,
+        email: user.email,
       });
     } catch (quoteErr) {
       return res.status(quoteErr.status || 500).json({ error: quoteErr.message || 'No se pudo calcular el precio' });
@@ -3424,6 +3458,12 @@ app.post('/api/crear-pago-stripe', paymentsRateLimit, async (req, res) => {
         paymentProvider: 'stripe',
       });
       reservaIdParaStripe = pending.reserva_id;
+      await registerMembresiaUsoIncluidaIfNeeded({
+        quote,
+        user,
+        reservaId: reservaIdParaStripe,
+        sedeId: resolvedSedeId,
+      });
     } catch (pendingErr) {
       return res.status(pendingErr.status || 500).json({
         error: pendingErr.message || 'No se pudo crear la reserva pendiente',

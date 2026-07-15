@@ -1,6 +1,9 @@
 import express from 'express';
+import { sendHttpError } from '../lib/httpErrors.js';
+import { resolveAuthRoleForUser } from '../lib/authAccess.js';
+import { createMembresiasSedeService } from '../src/membresias/membresiasService.js';
 
-const PLANES = [
+const PLANES_LEGACY = [
   {
     id: 'gratuito',
     nombre: 'Gratuito',
@@ -38,7 +41,7 @@ const PLANES = [
   },
 ];
 
-const VALID_PLAN_IDS = new Set(PLANES.map((plan) => plan.id));
+const VALID_PLAN_IDS = new Set(PLANES_LEGACY.map((plan) => plan.id));
 
 async function getUserPlanId(user, supabaseAdmin) {
   const { data, error } = await supabaseAdmin
@@ -56,6 +59,7 @@ async function getUserPlanId(user, supabaseAdmin) {
   return VALID_PLAN_IDS.has(data.plan_id) ? data.plan_id : 'gratuito';
 }
 
+/** Legacy nativa: GET/POST /api/membresias/* (catálogo global mock). */
 export function createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }) {
   const router = express.Router();
 
@@ -70,7 +74,7 @@ export function createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }) 
 
       res.json({
         plan_actual: planActual,
-        planes: PLANES.map((plan) => ({
+        planes: PLANES_LEGACY.map((plan) => ({
           ...plan,
           es_actual: plan.id === planActual,
         })),
@@ -122,6 +126,162 @@ export function createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }) 
   });
 
   return router;
+}
+
+/** Endpoints sede / admin / jugador (nuevo módulo). */
+export function mountMembresiasSedeRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails = [],
+}) {
+  const svc = createMembresiasSedeService({ supabaseAdmin });
+
+  async function requireUser(req, res) {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(status).json({ error: authError });
+      return null;
+    }
+    return user;
+  }
+
+  async function requireAdmin(req, res) {
+    const user = await requireUser(req, res);
+    if (!user) return null;
+    const role = await resolveAuthRoleForUser(user, {
+      fetchUserRoleRowForAuthUser,
+      legacySuperAdminEmails,
+    });
+    if (role.rol !== 'super_admin' && role.rol !== 'admin_club') {
+      res.status(403).json({ error: 'No tenés permiso de administración' });
+      return null;
+    }
+    return { user, role };
+  }
+
+  app.get('/api/admin/membresias/planes', async (req, res) => {
+    try {
+      const auth = await requireAdmin(req, res);
+      if (!auth) return;
+      const sedeId = req.query.sede_id ?? auth.role.sede_id;
+      const result = await svc.listPlanesAdmin(auth.role, {
+        sedeId,
+        includeInactive: String(req.query.include_inactive || '1') !== '0',
+      });
+      res.json(result);
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  app.post('/api/admin/membresias/planes', async (req, res) => {
+    try {
+      const auth = await requireAdmin(req, res);
+      if (!auth) return;
+      const body = { ...(req.body || {}) };
+      if (auth.role.rol === 'admin_club') body.sede_id = auth.role.sede_id;
+      const plan = await svc.createPlan(auth.role, body, auth.user);
+      res.status(201).json(plan);
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  app.patch('/api/admin/membresias/planes/:id', async (req, res) => {
+    try {
+      const auth = await requireAdmin(req, res);
+      if (!auth) return;
+      const plan = await svc.updatePlan(auth.role, req.params.id, req.body || {});
+      res.json(plan);
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  app.get('/api/admin/membresias', async (req, res) => {
+    try {
+      const auth = await requireAdmin(req, res);
+      if (!auth) return;
+      const sedeId = req.query.sede_id ?? auth.role.sede_id;
+      const result = await svc.listMembresiasAdmin(auth.role, {
+        sedeId,
+        estado: req.query.estado,
+        limit: req.query.limit,
+      });
+      res.json(result);
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  app.post('/api/admin/membresias/asignar', async (req, res) => {
+    try {
+      const auth = await requireAdmin(req, res);
+      if (!auth) return;
+      const body = { ...(req.body || {}) };
+      if (auth.role.rol === 'admin_club') body.sede_id = auth.role.sede_id;
+      const membresia = await svc.asignar(auth.role, body, auth.user);
+      res.status(201).json({ membresia });
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  app.post('/api/admin/membresias/:id/renovar', async (req, res) => {
+    try {
+      const auth = await requireAdmin(req, res);
+      if (!auth) return;
+      const membresia = await svc.renovar(auth.role, req.params.id, req.body || {});
+      res.json({ membresia });
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  app.post('/api/admin/membresias/:id/suspender', async (req, res) => {
+    try {
+      const auth = await requireAdmin(req, res);
+      if (!auth) return;
+      const membresia = await svc.suspender(auth.role, req.params.id);
+      res.json({ membresia });
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  app.post('/api/admin/membresias/:id/cancelar', async (req, res) => {
+    try {
+      const auth = await requireAdmin(req, res);
+      if (!auth) return;
+      const membresia = await svc.cancelar(auth.role, req.params.id);
+      res.json({ membresia });
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  app.get('/api/jugador/membresias', async (req, res) => {
+    try {
+      const user = await requireUser(req, res);
+      if (!user) return;
+      const result = await svc.listJugador(user);
+      res.json(result);
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  app.get('/api/sedes/:sedeId/membresias/planes', async (req, res) => {
+    try {
+      const result = await svc.listPlanesPublicos(req.params.sedeId);
+      res.json(result);
+    } catch (err) {
+      return sendHttpError(res, err);
+    }
+  });
+
+  console.log('Membresías sede routes registered (/api/admin/membresias, /api/jugador/membresias)');
 }
 
 export default createMembresiasRouter;
