@@ -155,6 +155,7 @@ import { createAiRouter } from './src/routes/ai.js';
 import { createArenaRouter } from './src/routes/arena.js';
 import { createRangosRouter } from './src/routes/rangos.js';
 import { createPadcoinsRouter, mountPadcoinsAdminRoutes } from './src/routes/padcoins.js';
+import { mountPadcoinsReportesRoutes } from './src/routes/padcoinsReportes.js';
 import { mountPadbolMatchSetupRoutes } from './src/routes/padbolMatchSetup.js';
 import { mountMatchAttendanceAdminRoutes } from './src/routes/matchAttendanceAdmin.js';
 import { mountPremiosCanjeablesRoutes } from './src/routes/premiosCanjeables.js';
@@ -2670,6 +2671,12 @@ mountPadcoinsAdminRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
+mountPadcoinsReportesRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
 mountPadbolMatchSetupRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
@@ -4912,6 +4919,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Rangos ARENA: GET /api/rangos/mi-rango');
     console.log('✅ PadCoins V1: GET /api/padcoins/mi-saldo, GET /api/padcoins/historial, GET /api/padcoins/mis-canjes');
     console.log('✅ PadCoins admin: POST /api/admin/padcoins/ajuste');
+    console.log('✅ PadCoins reportes: GET /api/admin/padcoins-reportes/{resumen,movimientos,canjes,jugadores}(+.csv)');
     console.log('✅ PadCoins super admin: GET/PUT /api/admin/padcoins-config');
     console.log('✅ PadCoins sedes: GET/PUT /api/admin/padcoins-sedes-config');
     console.log('✅ Premios canjeables: GET /api/premios-canjeables, POST /api/premios-canjeables/:id/canjear, admin CRUD /api/admin/premios-canjeables');
