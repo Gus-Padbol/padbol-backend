@@ -145,6 +145,7 @@ import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountPushRoutes } from './routes/push.js';
 import { mountArenaRoutes } from './routes/arena.js';
+import { mountComunidadRoutes } from './routes/comunidad.js';
 import { mountJugadorBuscarRoutes, handleLegacyUsuariosBuscar } from './routes/jugadorBuscar.js';
 import {
   notifyReservaConfirmada,
