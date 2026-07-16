@@ -145,7 +145,7 @@ import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountPushRoutes } from './routes/push.js';
 import { mountArenaRoutes } from './routes/arena.js';
-import { mountComunidadRoutes } from './routes/comunidad.js';
+import { mountJugadorBuscarRoutes, handleLegacyUsuariosBuscar } from './routes/jugadorBuscar.js';
 import {
   notifyReservaConfirmada,
   notifyTorneoInscripcionConfirmada,
@@ -1052,6 +1052,11 @@ mountComunidadRoutes(app, {
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountJugadorBuscarRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  isSolicitudPendienteActiva,
 });
 
 // GET /api/sedes/:id — datos públicos de la sede (reserva, horarios, precios; sin JWT)
@@ -4527,87 +4532,13 @@ usuariosRouter.get('/check-username', async (req, res) => {
   }
 });
 
-// GET /api/usuarios/buscar?q=&partido_id= — Search players to invite to a partido
-usuariosRouter.get('/buscar', async (req, res) => {
-  try {
-    const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status).json({ error: authError });
-    }
-
-    const q = String(req.query.q ?? '').replace(/^@+/, '').trim();
-    if (q.length < 2) {
-      return res.json([]);
-    }
-
-    const partidoId = parseInt(req.query.partido_id, 10);
-    const escaped = q.replace(/"/g, '\\"');
-
-    let excludeUserIds = new Set([user.id]);
-
-    if (!Number.isNaN(partidoId)) {
-      const { data: partido, error: partidoErr } = await supabaseAdmin
-        .from('partidos_abiertos')
-        .select('id, capitan_user_id, fecha, hora, duracion_minutos, reserva_id')
-        .eq('id', partidoId)
-        .maybeSingle();
-
-      if (partidoErr) throw partidoErr;
-
-      if (partido?.capitan_user_id) {
-        excludeUserIds.add(partido.capitan_user_id);
-      }
-
-      const { data: jugadores, error: jugadoresErr } = await supabaseAdmin
-        .from('partidos_abiertos_jugadores')
-        .select('user_id')
-        .eq('partido_id', partidoId);
-
-      if (jugadoresErr) throw jugadoresErr;
-      (jugadores ?? []).forEach((row) => {
-        if (row.user_id) excludeUserIds.add(row.user_id);
-      });
-
-      const { data: solicitudes, error: solErr } = await supabaseAdmin
-        .from('solicitudes_partido')
-        .select('solicitante_id, estado, created_at, expires_at')
-        .eq('partido_id', partidoId)
-        .in('estado', ['pendiente', 'invitado']);
-
-      if (solErr) throw solErr;
-      (solicitudes ?? []).forEach((row) => {
-        if (!row.solicitante_id) return;
-        if (!isSolicitudPendienteActiva(row, partido)) return;
-        excludeUserIds.add(row.solicitante_id);
-      });
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('jugadores_perfil')
-      .select('user_id, nombre, nombre_saludo, apodo, username, foto_url, nivel')
-      .or(
-        `nombre.ilike."%${escaped}%",apodo.ilike."%${escaped}%",nombre_saludo.ilike."%${escaped}%",username.ilike."%${escaped}%"`,
-      )
-      .limit(10);
-
-    if (error) throw error;
-
-    const results = (data ?? [])
-      .filter((row) => row.user_id && !excludeUserIds.has(row.user_id))
-      .map((row) => ({
-        user_id: row.user_id,
-        nombre: row.nombre_saludo ?? row.nombre ?? 'Jugador',
-        username: row.username ?? row.apodo ?? row.nombre_saludo ?? null,
-        foto_url: row.foto_url ?? null,
-        nivel: row.nivel ?? 'Intermedio',
-      }));
-
-    res.json(results);
-  } catch (err) {
-    console.error('❌ Error GET /api/usuarios/buscar:', err.message);
-    sendHttpError(res, err);
-  }
-});
+// GET /api/usuarios/buscar?q=&partido_id= — legacy wrapper (shape array)
+usuariosRouter.get('/buscar', (req, res) =>
+  handleLegacyUsuariosBuscar(req, res, {
+    supabaseAdmin,
+    getAuthenticatedUser,
+    isSolicitudPendienteActiva,
+  }));
 
 // GET /api/usuarios/perfil — Current user profile from jugadores_perfil
 usuariosRouter.get('/perfil', handleGetAuthenticatedPerfil);

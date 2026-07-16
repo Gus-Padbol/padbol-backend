@@ -11,6 +11,7 @@ import {
 } from '../lib/dto/equiposDto.js';
 import { sendHttpError } from '../lib/httpErrors.js';
 import { createNotificacionIfAbsent } from '../utils/notificaciones.js';
+import { handleLegacyEquiposBuscarJugador } from './jugadorBuscar.js';
 import {
   DEPORTE_LIMITS,
   assertCanInviteSelf,
@@ -27,7 +28,6 @@ import {
   findMembership,
   isMemberExpired,
   isTorneoOpenForTeams,
-  mapBuscarJugadorPublico,
   normalizeEmail,
   normalizeVisibilidad,
   parseEquipoId,
@@ -438,34 +438,8 @@ async function insertOrReopenMember(supabaseAdmin, payload, existing) {
 export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser }) {
   const router = express.Router();
 
-  router.get('/buscar-jugador', async (req, res) => {
-    try {
-      const { user, status, error: authError } = await getAuthenticatedUser(req);
-      if (!user) return res.status(status).json({ error: authError });
-
-      const query = String(req.query.query ?? req.query.q ?? '').trim();
-      if (query.length < 2) return res.json([]);
-
-      const escaped = query.replace(/"/g, '\\"');
-      const { data, error } = await supabaseAdmin
-        .from('jugadores_perfil')
-        .select('nombre, apellido, apodo, user_id, foto_url, nivel, email')
-        .or(`nombre.ilike."%${escaped}%",apellido.ilike."%${escaped}%",apodo.ilike."%${escaped}%"`)
-        .limit(10);
-
-      if (error) throw error;
-
-      res.json(
-        (data ?? [])
-          .filter((row) => row.user_id !== user.id)
-          .map((row) => mapBuscarJugadorPublico(row))
-          .filter(Boolean),
-      );
-    } catch (err) {
-      console.error('❌ Error GET /api/equipos/buscar-jugador:', err.message);
-      return sendHttpError(res, err);
-    }
-  });
+  router.get('/buscar-jugador', (req, res) =>
+    handleLegacyEquiposBuscarJugador(req, res, { supabaseAdmin, getAuthenticatedUser }));
 
   router.get('/mis-equipos', async (req, res) => {
     try {
