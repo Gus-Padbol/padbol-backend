@@ -147,6 +147,7 @@ import { mountPushRoutes } from './routes/push.js';
 import { mountArenaRoutes } from './routes/arena.js';
 import { mountComunidadRoutes } from './routes/comunidad.js';
 import { mountJugadorBuscarRoutes, handleLegacyUsuariosBuscar } from './routes/jugadorBuscar.js';
+import { mountJugadorHistorialRoutes } from './routes/jugadorHistorial.js';
 import {
   notifyReservaConfirmada,
   notifyTorneoInscripcionConfirmada,
@@ -4447,6 +4448,7 @@ jugadorRouter.get('/rankings', async (req, res) => {
 
 mountJugadorReputacionRoutes(jugadorRouter, { supabaseAdmin, getAuthenticatedUser });
 mountJugadorIdentidadRoutes(jugadorRouter, { supabaseAdmin, getAuthenticatedUser });
+mountJugadorHistorialRoutes(jugadorRouter, { supabaseAdmin, getAuthenticatedUser });
 
 const usuariosRouter = express.Router();
 
@@ -4890,6 +4892,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Retorno MP JSON: GET/POST /api/pago-exitoso');
     console.log('✅ QR reserva: POST /api/reservas/:id/generar-qr');
     console.log('✅ Perfil público: GET /api/jugador/perfil-publico/:userId');
+    console.log('✅ Historial unificado: GET /api/jugador/historial');
     console.log('✅ Torneos: GET /api/torneos/finalizados');
     console.log('✅ Push: POST /api/push-tokens, POST /api/push/send');
     console.log('✅ XP ARENA: GET /api/xp/mi-xp, GET /api/xp/historial');
