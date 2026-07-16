@@ -644,13 +644,14 @@ async function authUserFromBearer(req) {
 async function fetchUserRoleRow(email) {
   const em = String(email || '').trim().toLowerCase();
   if (!em) return null;
-  let q = await supabase
+  // supabaseAdmin: bypass RLS (el client anon puede no ver user_roles).
+  let q = await supabaseAdmin
     .from('user_roles')
     .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
     .eq('email', em)
     .maybeSingle();
   if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
-    q = await supabase
+    q = await supabaseAdmin
       .from('user_roles')
       .select('role, sede_id, nombre, pais, email')
       .eq('email', em)
@@ -665,13 +666,13 @@ async function fetchUserRoleRowForAuthUser(user) {
   if (!user?.email) return null;
   const uid = user.id ? String(user.id).trim() : '';
   if (uid) {
-    let q = await supabase
+    let q = await supabaseAdmin
       .from('user_roles')
       .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
       .eq('user_id', uid)
       .maybeSingle();
     if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
-      q = await supabase
+      q = await supabaseAdmin
         .from('user_roles')
         .select('role, sede_id, nombre, pais, email')
         .eq('user_id', uid)
