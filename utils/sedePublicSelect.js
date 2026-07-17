@@ -52,6 +52,30 @@ export const SEDE_APP_SELECT = SEDE_PUBLIC_COLUMNS.join(', ');
 
 export const SEDE_PERFIL_SELECT = SEDE_APP_SELECT;
 
+/**
+ * Patrón de nombres de campos que NUNCA deben salir en una respuesta de sede
+ * (tokens, secretos y credenciales de pago). Se usa como red de seguridad en
+ * tests además del whitelist de SEDE_PUBLIC_COLUMNS.
+ */
+export const SEDE_SECRET_FIELD_PATTERN = /(token|secret|api_key|apikey|private|credencial|credential|password|client_id)/i;
+
+/**
+ * Indicadores booleanos no sensibles de configuración de pagos.
+ * Nunca devuelve el valor del secreto ni una parte/máscara de él.
+ */
+export function buildSedePagosIndicadores(row) {
+  const hasText = (v) => typeof v === 'string' && v.trim().length > 0;
+  return {
+    mercadopago_configurado: hasText(row?.mp_access_token),
+    stripe_configurado: hasText(row?.stripe_account_id),
+  };
+}
+
+/**
+ * Sanitizador central de sede para respuestas HTTP: whitelist de columnas
+ * públicas. Cualquier campo sensible (mp_access_token, stripe_*, secretos)
+ * queda excluido por no estar en SEDE_PUBLIC_COLUMNS.
+ */
 export function pickPublicSedeRow(row) {
   if (!row || typeof row !== 'object') return row ?? null;
   const out = {};

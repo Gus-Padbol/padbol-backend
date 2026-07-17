@@ -8,7 +8,7 @@ import {
   resolveSedeHeroFotoUrl,
 } from '../utils/sedeHero.js';
 import { fetchSedeUpcomingPartidos } from './partidos.js';
-import { SEDE_PERFIL_SELECT, pickPublicSedeRow } from '../utils/sedePublicSelect.js';
+import { SEDE_PERFIL_SELECT, buildSedePagosIndicadores, pickPublicSedeRow } from '../utils/sedePublicSelect.js';
 import { filterSedePatchForRole, requireSedeAdminForId } from '../lib/authAccess.js';
 import { mapTorneoPublicRow, TORNEO_PUBLIC_SELECT } from '../lib/dto/legacyPublic.js';
 
@@ -18,13 +18,20 @@ function parseSedeId(raw) {
   return sedeId;
 }
 
-/** Update sede by PK; avoid .single() when PostgREST may return multiple rows. */
+/**
+ * Update sede by PK; avoid .single() when PostgREST may return multiple rows.
+ * Selecciona además mp_access_token/stripe_account_id SOLO para calcular los
+ * indicadores booleanos de pagos; la fila cruda nunca se devuelve al cliente:
+ * toda respuesta pasa por pickPublicSedeRow (whitelist sin secretos).
+ */
+const SEDE_UPDATE_SELECT = `${SEDE_PERFIL_SELECT}, mp_access_token, stripe_account_id`;
+
 async function updateSedeById(supabaseAdmin, sedeId, patch) {
   const { data, error } = await supabaseAdmin
     .from('sedes')
     .update(patch)
     .eq('id', sedeId)
-    .select(SEDE_PERFIL_SELECT)
+    .select(SEDE_UPDATE_SELECT)
     .limit(1);
 
   if (error) throw error;
@@ -428,10 +435,15 @@ export function mountSedesProfileRoutes(app, {
 
       if (!updated) return res.status(404).json({ error: 'Sede no encontrada' });
 
-      res.json({ sede: pickPublicSedeRow(enrichSedeWithHeroPhoto(updated)) });
+      // Nunca ecoar la fila cruda ni el secreto guardado: DTO público +
+      // indicadores booleanos de pagos (sin valores ni máscaras).
+      res.json({
+        sede: pickPublicSedeRow(enrichSedeWithHeroPhoto(updated)),
+        pagos: buildSedePagosIndicadores(updated),
+      });
     } catch (err) {
       console.error('❌ Error PATCH /api/sedes/:id:', err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Error interno al actualizar la sede' });
     }
   });
 

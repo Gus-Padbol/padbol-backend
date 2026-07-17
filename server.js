@@ -74,7 +74,7 @@ import {
   persistMercadoPagoPreferencePg,
   persistStripeCheckoutSessionPg,
 } from './routes/reservaPendienteMp.js';
-import { assertCancelReservaOwnerCompat, assertReservaOwnerOrAdmin, buildAdminReservaPutUpdates, buildNormalUserReservaPutUpdates, resolveReservaAccess } from './lib/reservaAccess.js';
+import { assertCancelReservaOwnerCompat, assertReservaOwnerOrAdmin, authorizeReservaWrite, buildAdminReservaPutUpdates, buildNormalUserReservaPutUpdates } from './lib/reservaAccess.js';
 import {
   applyReservasListScopeToQuery,
   isAdminClubOrSuper,
@@ -120,6 +120,7 @@ import { cargarResultadoManualPartidoTorneo } from './lib/torneos/cargarResultad
 import {
   handleGetTorneoPermisos,
   resolveTorneoAdminAccess,
+  resolveTorneoRowScope,
   TORNEO_ADMIN_ACCESS_REASON,
 } from './lib/torneos/torneoAdminAccessService.js';
 import {
@@ -1593,23 +1594,25 @@ app.put('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
       .maybeSingle();
 
     if (fetchErr) throw fetchErr;
-    if (!reserva) {
-      return res.status(404).json({ error: 'Reserva no encontrada' });
-    }
 
-    const access = await resolveReservaAccess(user, reserva, {
+    const authz = await authorizeReservaWrite(user, reserva, {
       fetchUserRoleRowForAuthUser,
       legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
       supabaseAdmin,
       pgPool,
     });
-
-    if (!access) {
-      return res.status(403).json({ error: 'No tenés permiso para esta reserva' });
+    if (!authz.ok) {
+      return res.status(authz.status).json({ error: authz.error });
     }
+    const { access, rol } = authz;
 
     const updates = access === 'admin'
-      ? buildAdminReservaPutUpdates(req.body, { normalizeReservaCancha })
+      ? buildAdminReservaPutUpdates(req.body, {
+        normalizeReservaCancha,
+        // Solo super_admin puede reasignar la sede de una reserva;
+        // un admin_club no puede "mover" recursos hacia otra sede.
+        allowSedeReassign: rol === 'super_admin',
+      })
       : buildNormalUserReservaPutUpdates(req.body);
 
     if (Object.keys(updates).length === 0) {
@@ -1670,22 +1673,18 @@ app.delete('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
       .maybeSingle();
 
     if (fetchErr) throw fetchErr;
-    if (!reserva) {
-      return res.status(404).json({ error: 'Reserva no encontrada' });
-    }
 
-    const access = await resolveReservaAccess(user, reserva, {
+    const authz = await authorizeReservaWrite(user, reserva, {
       fetchUserRoleRowForAuthUser,
       legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
       supabaseAdmin,
       pgPool,
     });
-
-    if (!access) {
-      return res.status(403).json({ error: 'No tenés permiso para esta reserva' });
+    if (!authz.ok) {
+      return res.status(authz.status).json({ error: authz.error });
     }
 
-    if (access === 'owner') {
+    if (authz.access === 'owner') {
       return res.status(405).json({
         error: 'Use POST /api/cancelar-reserva para cancelar tu reserva',
         use: '/api/cancelar-reserva',
@@ -1781,17 +1780,25 @@ function parseTorneoRouteId(raw) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-async function fetchTorneoSedeIdById(torneoId) {
+/** Existencia + sede_id reales del torneo, siempre desde la base (nunca del cliente). */
+async function fetchTorneoScopeById(torneoId) {
   const id = parseTorneoRouteId(torneoId);
-  if (id == null) return null;
+  if (id == null) return resolveTorneoRowScope(null);
   const { data, error } = await supabaseAdmin
     .from('torneos')
-    .select('sede_id')
+    .select('id, sede_id')
     .eq('id', id)
     .maybeSingle();
   if (error) throw error;
-  const sid = data?.sede_id;
-  return sid != null && sid !== '' ? Number(sid) : null;
+  return resolveTorneoRowScope(data);
+}
+
+function sendTorneoAdminForbidden(res, auth, reason) {
+  if (auth.role.rol === 'admin_club' && reason === TORNEO_ADMIN_ACCESS_REASON.SEDE_NO_COINCIDE) {
+    res.status(403).json({ error: 'No tenés permiso para operar torneos de otra sede' });
+    return;
+  }
+  res.status(403).json({ error: 'No tenés permiso para esta operación' });
 }
 
 async function requireTorneoAdminForSede(req, res, torneoSedeId) {
@@ -1801,18 +1808,31 @@ async function requireTorneoAdminForSede(req, res, torneoSedeId) {
   const { allowed, reason } = resolveTorneoAdminAccess(auth, torneoSedeId);
   if (allowed) return auth;
 
-  if (auth.role.rol === 'admin_club' && reason === TORNEO_ADMIN_ACCESS_REASON.SEDE_NO_COINCIDE) {
-    res.status(403).json({ error: 'No tenés permiso para operar torneos de otra sede' });
-    return null;
-  }
-
-  res.status(403).json({ error: 'No tenés permiso para esta operación' });
+  sendTorneoAdminForbidden(res, auth, reason);
   return null;
 }
 
+/**
+ * Gate para rutas admin sobre un torneo puntual:
+ * 1) JWT + rol admin (401/403);
+ * 2) torneo inexistente → 404;
+ * 3) scope contra la sede persistida del torneo (403).
+ */
 async function requireTorneoAdminByTorneoId(req, res, torneoId) {
-  const sedeId = await fetchTorneoSedeIdById(torneoId);
-  return requireTorneoAdminForSede(req, res, sedeId);
+  const auth = await requireAdminUser(req, res, LEGACY_TORNEO_ADMIN_DEPS);
+  if (!auth) return null;
+
+  const { exists, sedeId } = await fetchTorneoScopeById(torneoId);
+  if (!exists) {
+    res.status(404).json({ error: 'Torneo no encontrado' });
+    return null;
+  }
+
+  const { allowed, reason } = resolveTorneoAdminAccess(auth, sedeId);
+  if (allowed) return auth;
+
+  sendTorneoAdminForbidden(res, auth, reason);
+  return null;
 }
 
 mountTorneosFinalizadosRoutes(app, { pgPool });
