@@ -520,21 +520,47 @@ export function createMembresiasSedeService({ supabaseAdmin }) {
         }
       }
 
-      let listQuery = supabaseAdmin
-        .from('membresias_sede')
-        .select(MEMBRESIA_LIST_SELECT, { count: 'exact' })
-        .eq('sede_id', sid)
-        .order(parsed.sort, { ascending: parsed.direction === 'asc' })
-        .range(parsed.offset, parsed.offset + parsed.limit - 1);
+      const applyListFilters = (q) => {
+        let next = q.eq('sede_id', sid);
+        if (parsed.estado) next = next.eq('estado', parsed.estado);
+        if (parsed.planId) next = next.eq('plan_id', parsed.planId);
+        if (searchUserIds) next = next.in('user_id', searchUserIds);
+        return next;
+      };
 
-      if (parsed.estado) listQuery = listQuery.eq('estado', parsed.estado);
-      if (parsed.planId) listQuery = listQuery.eq('plan_id', parsed.planId);
-      if (searchUserIds) listQuery = listQuery.in('user_id', searchUserIds);
+      // Count exacto separado: evita 416 de PostgREST cuando page supera el total.
+      const { count, error: countErr } = await track('membresias_count', () =>
+        applyListFilters(
+          supabaseAdmin
+            .from('membresias_sede')
+            .select('id', { count: 'exact', head: true }),
+        ),
+      );
+      if (countErr) throw schemaErr(countErr);
 
-      const { data, error, count } = await track('membresias_page', () => listQuery);
+      const total = Number.isFinite(count) ? count : 0;
+      if (parsed.offset >= total) {
+        return {
+          membresias: [],
+          pagination: buildMembresiasPagination({
+            page: parsed.page,
+            limit: parsed.limit,
+            total,
+          }),
+        };
+      }
+
+      const { data, error } = await track('membresias_page', () =>
+        applyListFilters(
+          supabaseAdmin
+            .from('membresias_sede')
+            .select(MEMBRESIA_LIST_SELECT)
+            .order(parsed.sort, { ascending: parsed.direction === 'asc' })
+            .range(parsed.offset, parsed.offset + parsed.limit - 1),
+        ),
+      );
       if (error) throw schemaErr(error);
 
-      const total = Number.isFinite(count) ? count : (data || []).length;
       let rows = Array.isArray(data) ? data : [];
 
       // Vencimiento lazy en batch (misma regla, sin update por fila de planes).
