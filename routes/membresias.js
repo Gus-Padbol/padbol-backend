@@ -207,7 +207,12 @@ export function mountMembresiasSedeRoutes(app, {
       const result = await svc.listMembresiasAdmin(auth.role, {
         sedeId,
         estado: req.query.estado,
+        plan_id: req.query.plan_id,
+        q: req.query.q,
+        page: req.query.page,
         limit: req.query.limit,
+        sort: req.query.sort,
+        direction: req.query.direction,
       });
       res.json(result);
     } catch (err) {

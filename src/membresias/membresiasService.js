@@ -2,16 +2,21 @@ import { createNotificacionIfAbsent } from '../../utils/notificaciones.js';
 import {
   applyMembresiaBenefitsToQuote,
   assertAdminSedeScope,
+  buildMembresiaJugadorSearchOrFilter,
   buildMembresiaNotificacionDedupeKey,
+  buildMembresiasPagination,
   buildPeriodoKey,
+  escapeMembresiaIlike,
   httpError,
   isMembershipActive,
   isMissingMembresiaTableError,
+  mapJugadorResumenMembresia,
   mapMembresiaJugadorDto,
   mapMembresiaPublica,
   mapPlanPublico,
   normalizeBeneficios,
   normalizeDuracionTipo,
+  parseMembresiasListQuery,
   parseNonNegativeNumber,
   parsePositiveInt,
   resolveDuracionDias,
@@ -20,11 +25,183 @@ import {
   ORIGENES,
 } from '../../lib/membresiasDomain.js';
 
+const MEMBRESIA_LIST_SELECT = [
+  'id',
+  'user_id',
+  'email',
+  'sede_id',
+  'plan_id',
+  'estado',
+  'origen',
+  'inicio',
+  'vencimiento',
+  'renovacion_automatica',
+  'created_at',
+  'updated_at',
+].join(', ');
+
+const PLAN_LIST_SELECT = [
+  'id',
+  'sede_id',
+  'nombre',
+  'descripcion',
+  'precio',
+  'moneda',
+  'duracion_tipo',
+  'duracion_dias',
+  'activo',
+  'cupo',
+  'vigencia_desde',
+  'vigencia_hasta',
+  'renovacion_automatica',
+  'beneficios',
+].join(', ');
+
+const JUGADOR_LIST_SELECT = 'user_id, nombre, apellido, username, apodo, alias, email';
+
 function schemaErr(err) {
   if (isMissingMembresiaTableError(err)) {
     return httpError(503, 'Membresías por sede aún no disponibles — migración SQL pendiente');
   }
   return err;
+}
+
+async function resolveMembresiaSearchUserIds(supabaseAdmin, { sedeId, q, track = async (_l, run) => run() }) {
+  const orFilter = buildMembresiaJugadorSearchOrFilter(q);
+  const escaped = escapeMembresiaIlike(q);
+  const ids = new Set();
+
+  if (orFilter) {
+    const { data, error } = await track('jugadores_search', () =>
+      supabaseAdmin
+        .from('jugadores_perfil')
+        .select('user_id')
+        .or(orFilter)
+        .limit(300),
+    );
+    if (error) throw schemaErr(error);
+    for (const row of data || []) {
+      if (row?.user_id) ids.add(String(row.user_id));
+    }
+  }
+
+  // También email guardado en la membresía (panel autorizado), acotado a la sede.
+  const { data: byEmail, error: emailErr } = await track('membresias_email_search', () =>
+    supabaseAdmin
+      .from('membresias_sede')
+      .select('user_id')
+      .eq('sede_id', sedeId)
+      .ilike('email', `%${escaped}%`)
+      .limit(300),
+  );
+  if (emailErr) throw schemaErr(emailErr);
+  for (const row of byEmail || []) {
+    if (row?.user_id) ids.add(String(row.user_id));
+  }
+
+  return [...ids];
+}
+
+async function expirePageBatch(supabaseAdmin, rows, track = async (_l, run) => run()) {
+  const toExpire = (rows || []).filter((r) => shouldMarkExpired(r));
+  if (!toExpire.length) return rows || [];
+
+  const ids = toExpire.map((r) => r.id).filter((id) => id != null);
+  const nowIso = new Date().toISOString();
+  const { data: updated, error } = await track('expire_batch', () =>
+    supabaseAdmin
+      .from('membresias_sede')
+      .update({ estado: 'vencida', updated_at: nowIso })
+      .in('id', ids)
+      .eq('estado', 'activa')
+      .select(MEMBRESIA_LIST_SELECT),
+  );
+  if (error) throw schemaErr(error);
+
+  const updatedById = new Map((updated || []).map((r) => [Number(r.id), r]));
+  // Notificaciones: una por membresía vencida (regla existente); no bloquea el listado.
+  for (const row of updated || []) {
+    void notifyMembresiaStandalone(supabaseAdmin, {
+      event: 'membresia_vencida',
+      userId: row.user_id,
+      titulo: 'Membresía vencida',
+      mensaje: 'Tu membresía venció y ya no aplica beneficios',
+      membresiaId: row.id,
+      sedeId: row.sede_id,
+    });
+  }
+
+  return (rows || []).map((row) => {
+    const u = updatedById.get(Number(row.id));
+    if (u) return u;
+    if (shouldMarkExpired(row)) return { ...row, estado: 'vencida' };
+    return row;
+  });
+}
+
+async function notifyMembresiaStandalone(supabaseAdmin, payload) {
+  const {
+    event,
+    userId,
+    titulo,
+    mensaje,
+    membresiaId,
+    sedeId,
+  } = payload;
+  if (!userId) return;
+  const dedupe_key = buildMembresiaNotificacionDedupeKey(event, {
+    membresiaId,
+    sedeId,
+    userId,
+  });
+  try {
+    await createNotificacionIfAbsent(supabaseAdmin, {
+      user_id: userId,
+      tipo: event,
+      titulo,
+      mensaje,
+      link: `padbolmatch://membresias`,
+      data: {
+        dedupe_key,
+        tipo: event,
+        membresia_id: membresiaId != null ? String(membresiaId) : null,
+        sede_id: sedeId != null ? String(sedeId) : null,
+        navegacion: { screen: 'Membresia', params: { sedeId, membresiaId } },
+      },
+    });
+  } catch (err) {
+    console.warn(`⚠️ notif membresia ${event}:`, err.message);
+  }
+}
+
+async function loadPlansBatch(supabaseAdmin, planIds, track = async (_l, run) => run()) {
+  const ids = [...new Set((planIds || []).map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0))];
+  if (!ids.length) return new Map();
+  const { data, error } = await track('planes_batch', () =>
+    supabaseAdmin
+      .from('membresia_planes')
+      .select(PLAN_LIST_SELECT)
+      .in('id', ids),
+  );
+  if (error) throw schemaErr(error);
+  return new Map((data || []).map((p) => [Number(p.id), p]));
+}
+
+async function loadJugadoresBatch(supabaseAdmin, userIds, track = async (_l, run) => run()) {
+  const ids = [...new Set((userIds || []).filter(Boolean).map(String))];
+  if (!ids.length) return new Map();
+  const { data, error } = await track('jugadores_batch', () =>
+    supabaseAdmin
+      .from('jugadores_perfil')
+      .select(JUGADOR_LIST_SELECT)
+      .in('user_id', ids),
+  );
+  if (error) throw schemaErr(error);
+  const map = new Map();
+  for (const row of data || []) {
+    map.set(String(row.user_id), mapJugadorResumenMembresia(row));
+  }
+  return map;
 }
 
 async function setEstado(supabaseAdmin, role, membresiaId, estado, event, titulo, loadPlan) {
@@ -277,27 +454,116 @@ export function createMembresiasSedeService({ supabaseAdmin }) {
       return mapPlanPublico(data);
     },
 
-    async listMembresiasAdmin(role, { sedeId, estado, limit = 50 } = {}) {
+    async listMembresiasAdmin(role, {
+      sedeId,
+      estado,
+      plan_id,
+      q,
+      page,
+      limit,
+      sort,
+      direction,
+      tracker = null,
+    } = {}) {
       const sid = parsePositiveInt(sedeId);
       if (!sid) throw httpError(400, 'sede_id es requerido');
       const scopeErr = assertAdminSedeScope(role, sid);
       if (scopeErr) throw scopeErr;
-      let q = supabaseAdmin
-        .from('membresias_sede')
-        .select('*')
-        .eq('sede_id', sid)
-        .order('created_at', { ascending: false })
-        .limit(Math.min(Number(limit) || 50, 100));
-      if (estado) q = q.eq('estado', estado);
-      const { data, error } = await q;
-      if (error) throw schemaErr(error);
-      const rows = [];
-      for (const row of data || []) {
-        const expired = await expireIfNeeded(row);
-        const plan = await loadPlan(expired.plan_id);
-        rows.push(mapMembresiaPublica(expired, plan));
+
+      const parsed = parseMembresiasListQuery({
+        estado,
+        plan_id,
+        q,
+        page,
+        limit,
+        sort,
+        direction,
+      });
+
+      const track = async (label, run) => {
+        if (tracker?.queries) tracker.queries.push(label);
+        return run();
+      };
+
+      // Validar plan_id pertenece a la sede (1 query opcional).
+      if (parsed.planId) {
+        const { data: planRow, error: planErr } = await track('plan_scope', () =>
+          supabaseAdmin
+            .from('membresia_planes')
+            .select('id, sede_id')
+            .eq('id', parsed.planId)
+            .maybeSingle(),
+        );
+        if (planErr) throw schemaErr(planErr);
+        if (!planRow || Number(planRow.sede_id) !== sid) {
+          throw httpError(400, 'plan_id no pertenece a esta sede');
+        }
       }
-      return { membresias: rows };
+
+      // Búsqueda q → user_ids (consultas acotadas, no N+1).
+      let searchUserIds = null;
+      if (parsed.q) {
+        searchUserIds = await resolveMembresiaSearchUserIds(supabaseAdmin, {
+          sedeId: sid,
+          q: parsed.q,
+          track,
+        });
+        if (searchUserIds.length === 0) {
+          return {
+            membresias: [],
+            pagination: buildMembresiasPagination({
+              page: parsed.page,
+              limit: parsed.limit,
+              total: 0,
+            }),
+          };
+        }
+      }
+
+      let listQuery = supabaseAdmin
+        .from('membresias_sede')
+        .select(MEMBRESIA_LIST_SELECT, { count: 'exact' })
+        .eq('sede_id', sid)
+        .order(parsed.sort, { ascending: parsed.direction === 'asc' })
+        .range(parsed.offset, parsed.offset + parsed.limit - 1);
+
+      if (parsed.estado) listQuery = listQuery.eq('estado', parsed.estado);
+      if (parsed.planId) listQuery = listQuery.eq('plan_id', parsed.planId);
+      if (searchUserIds) listQuery = listQuery.in('user_id', searchUserIds);
+
+      const { data, error, count } = await track('membresias_page', () => listQuery);
+      if (error) throw schemaErr(error);
+
+      const total = Number.isFinite(count) ? count : (data || []).length;
+      let rows = Array.isArray(data) ? data : [];
+
+      // Vencimiento lazy en batch (misma regla, sin update por fila de planes).
+      rows = await expirePageBatch(supabaseAdmin, rows, track);
+
+      const planIds = [...new Set(rows.map((r) => r.plan_id).filter((id) => id != null))];
+      const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean).map(String))];
+
+      const [planMap, jugadorMap] = await Promise.all([
+        loadPlansBatch(supabaseAdmin, planIds, track),
+        loadJugadoresBatch(supabaseAdmin, userIds, track),
+      ]);
+
+      const membresias = rows.map((row) =>
+        mapMembresiaPublica(
+          row,
+          planMap.get(Number(row.plan_id)) || null,
+          jugadorMap.get(String(row.user_id)) || null,
+        ),
+      );
+
+      return {
+        membresias,
+        pagination: buildMembresiasPagination({
+          page: parsed.page,
+          limit: parsed.limit,
+          total,
+        }),
+      };
     },
 
     async asignar(role, body, adminUser) {
