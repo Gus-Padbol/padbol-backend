@@ -1,3 +1,5 @@
+import { applyScoreboardVenueLabels } from '../lib/scoreboardVenueLabels.js';
+
 const SCORE_ADVANTAGE = 45;
 
 function normalizePointScore(value) {
@@ -396,7 +398,7 @@ function applyJerseysToJugadores(jugadores, jerseyValues) {
   });
 }
 
-export function enrichPartidoResponse(partido) {
+export function enrichPartidoResponse(partido, venueContext = {}) {
   const score = formatScoreDisplay(partido.score_a, partido.score_b, partido.es_tiebreak);
   const cronometroSegundos = getCronometroSegundos(partido);
   const equipo_a_jugadores = applyJerseysToJugadores(partido.equipo_a_jugadores, [
@@ -412,10 +414,17 @@ export function enrichPartidoResponse(partido) {
     partido.jersey_b4,
   ]);
 
+  const withVenue = applyScoreboardVenueLabels(
+    {
+      ...partido,
+      equipo_a_jugadores,
+      equipo_b_jugadores,
+    },
+    venueContext,
+  );
+
   return {
-    ...partido,
-    equipo_a_jugadores,
-    equipo_b_jugadores,
+    ...withVenue,
     display: {
       ...score,
       cronometro: formatCronometro(cronometroSegundos),

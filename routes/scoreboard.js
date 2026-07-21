@@ -335,9 +335,64 @@ async function fetchHistorialPuntos(supabaseAdmin, partidoId) {
   return data ?? [];
 }
 
-function emitScoreboardUpdate(io, partidoId, partido) {
+const sedeNombreCache = new Map();
+const canchasBySedeCache = new Map();
+
+async function loadVenueContext(supabaseAdmin, sedeId) {
+  const sid = Number(sedeId);
+  if (!Number.isFinite(sid) || sid <= 0 || !supabaseAdmin) {
+    return { sedeNombre: null, canchas: [] };
+  }
+
+  if (!sedeNombreCache.has(sid)) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('sedes')
+        .select('nombre')
+        .eq('id', sid)
+        .maybeSingle();
+      if (error) throw error;
+      const nombre = data?.nombre != null ? String(data.nombre).trim() : null;
+      sedeNombreCache.set(sid, nombre || null);
+    } catch {
+      sedeNombreCache.set(sid, null);
+    }
+  }
+
+  if (!canchasBySedeCache.has(sid)) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('canchas')
+        .select('id, nombre, orden')
+        .eq('sede_id', sid)
+        .order('id', { ascending: true });
+      if (error) throw error;
+      canchasBySedeCache.set(sid, data || []);
+    } catch {
+      canchasBySedeCache.set(sid, []);
+    }
+  }
+
+  return {
+    sedeNombre: sedeNombreCache.get(sid) ?? null,
+    canchas: canchasBySedeCache.get(sid) || [],
+  };
+}
+
+async function enrichPartidoWithVenue(supabaseAdmin, partido) {
+  const ctx = await loadVenueContext(supabaseAdmin, partido?.sede_id);
+  return enrichPartidoResponse(partido, ctx);
+}
+
+async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null) {
   if (!io) return;
-  const payload = enrichPartidoResponse(partido);
+  const ctx = supabaseAdmin
+    ? await loadVenueContext(supabaseAdmin, partido?.sede_id)
+    : {
+      sedeNombre: partido?.sede_nombre ?? null,
+      canchas: [],
+    };
+  const payload = enrichPartidoResponse(partido, ctx);
   io.to(`scoreboard:${partidoId}`).emit('scoreboard:update', payload);
 }
 
@@ -379,8 +434,8 @@ export function mountScoreboardRoutes(app, {
 }) {
   async function saveAndEmit(partido) {
     const saved = await savePartido(supabaseAdmin, partido);
-    emitScoreboardUpdate(io, saved.id, saved);
-    return enrichPartidoResponse(saved);
+    await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
+    return enrichPartidoWithVenue(supabaseAdmin, saved);
   }
 
   async function handleRegistrarPunto(partido, equipo) {
@@ -391,8 +446,8 @@ export function mountScoreboardRoutes(app, {
     const saved = await savePartido(supabaseAdmin, partido);
     await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
     await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
-    emitScoreboardUpdate(io, saved.id, saved);
-    return enrichPartidoResponse(saved);
+    await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
+    return enrichPartidoWithVenue(supabaseAdmin, saved);
   }
 
   async function handleUndo(partido) {
@@ -498,7 +553,7 @@ export function mountScoreboardRoutes(app, {
   app.get('/api/scoreboard/control/:token', async (req, res) => {
     try {
       const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
-      return res.json(enrichPartidoResponse(partido));
+      return res.json(await enrichPartidoWithVenue(supabaseAdmin, partido));
     } catch (err) {
       console.error(
         '❌ GET /api/scoreboard/control/:token:',
@@ -725,8 +780,8 @@ export function mountScoreboardRoutes(app, {
       const created = Array.isArray(data) ? data[0] : data;
       if (!created) throw new Error('No se pudo crear el partido');
 
-      const enriched = enrichPartidoResponse(created);
-      emitScoreboardUpdate(io, created.id, created);
+      const enriched = await enrichPartidoWithVenue(supabaseAdmin, created);
+      await emitScoreboardUpdate(io, created.id, created, supabaseAdmin);
       return res.status(201).json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -750,7 +805,9 @@ export function mountScoreboardRoutes(app, {
 
       if (error) throw error;
 
-      const partidos = (data ?? []).map((row) => enrichPartidoResponse(row));
+      const partidos = await Promise.all(
+        (data ?? []).map((row) => enrichPartidoWithVenue(supabaseAdmin, row)),
+      );
       return res.json({ partidos });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/partidos:', err.message);
@@ -761,7 +818,7 @@ export function mountScoreboardRoutes(app, {
   app.get('/api/scoreboard/partidos/:id', async (req, res) => {
     try {
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
-      return res.json(enrichPartidoResponse(partido));
+      return res.json(await enrichPartidoWithVenue(supabaseAdmin, partido));
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/partidos/:id:', err.message);
@@ -806,8 +863,8 @@ export function mountScoreboardRoutes(app, {
       const updated = Array.isArray(data) ? data[0] : data;
       if (!updated) return res.status(404).json({ error: 'Partido no encontrado' });
 
-      const enriched = enrichPartidoResponse(updated);
-      emitScoreboardUpdate(io, updated.id, updated);
+      const enriched = await enrichPartidoWithVenue(supabaseAdmin, updated);
+      await emitScoreboardUpdate(io, updated.id, updated, supabaseAdmin);
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -936,7 +993,9 @@ export function mountScoreboardRoutes(app, {
         return res.json({ partido: null });
       }
 
-      return res.json({ partido: enrichPartidoResponse(partido) });
+      return res.json({
+        partido: await enrichPartidoWithVenue(supabaseAdmin, partido),
+      });
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/cancha/:sedeId/:cancha:', err.message);
