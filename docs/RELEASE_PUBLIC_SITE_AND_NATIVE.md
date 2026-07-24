@@ -22,15 +22,17 @@ Ejecutar una sola vez, en este orden, desde el editor SQL de Supabase:
 
 1. `docs/sql/account_deletion_requests.sql`
 2. `docs/sql/license_requests.sql`
+3. `docs/sql/admin_push_notifications.sql`
 
 Verificar que existan:
 
 ```sql
 select to_regclass('public.account_deletion_requests');
 select to_regclass('public.solicitudes_licencia');
+select to_regclass('public.admin_push_notifications');
 ```
 
-Ambas consultas deben devolver el nombre de la tabla. Las tablas tienen RLS
+Las tres consultas deben devolver el nombre de la tabla. Las tablas tienen RLS
 activo y no conceden acceso directo a `anon` ni `authenticated`; el acceso se
 realiza únicamente mediante el backend.
 
