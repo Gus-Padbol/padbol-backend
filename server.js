@@ -148,6 +148,7 @@ import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountPushRoutes } from './routes/push.js';
 import { mountAccountDeletionRoutes } from './routes/accountDeletion.js';
+import { mountLicenseRequestRoutes } from './routes/licenseRequests.js';
 import { mountArenaRoutes } from './routes/arena.js';
 import { mountComunidadRoutes } from './routes/comunidad.js';
 import { mountJugadorBuscarRoutes, handleLegacyUsuariosBuscar } from './routes/jugadorBuscar.js';
@@ -1002,6 +1003,12 @@ mountAdminJugadoresRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountAdminCoreRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountLicenseRequestRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
