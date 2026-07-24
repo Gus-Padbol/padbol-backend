@@ -60,6 +60,7 @@ import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js'
 import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
 import { mountSedesDuracionesRoutes } from './routes/sedesDuraciones.js';
 import { mountAdminJugadoresRoutes } from './routes/adminJugadores.js';
+import { mountAdminCoreRoutes } from './routes/adminCore.js';
 import { mountAdminTorneosResumenStatsRoutes } from './routes/adminTorneosResumenStats.js';
 import { mountTorneoInteresRoutes } from './routes/torneoInteres.js';
 import { mountListaEsperaGeneralRoutes } from './routes/listaEsperaGeneral.js';
@@ -146,6 +147,7 @@ import { isSolicitudPendienteActiva } from './lib/solicitudesPartidoHorario.js';
 import { mountReservaQrRoutes } from './routes/reservaQr.js';
 import { mountJugadorPerfilPublicoRoutes } from './routes/jugadorPerfilPublico.js';
 import { mountPushRoutes } from './routes/push.js';
+import { mountAccountDeletionRoutes } from './routes/accountDeletion.js';
 import { mountArenaRoutes } from './routes/arena.js';
 import { mountComunidadRoutes } from './routes/comunidad.js';
 import { mountJugadorBuscarRoutes, handleLegacyUsuariosBuscar } from './routes/jugadorBuscar.js';
@@ -994,6 +996,12 @@ mountSedesDuracionesRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountAdminJugadoresRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountAdminCoreRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
@@ -4707,6 +4715,11 @@ usuariosRouter.post('/perfil', async (req, res) => {
 
 // PUT /api/usuarios/perfil — Update jugadores_perfil for authenticated user
 usuariosRouter.put('/perfil', handlePutAuthenticatedPerfil);
+
+mountAccountDeletionRoutes(usuariosRouter, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+});
 
 // POST /api/usuarios/foto-perfil — Upload profile photo to Supabase Storage
 usuariosRouter.post('/foto-perfil', async (req, res) => {
