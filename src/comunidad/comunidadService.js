@@ -118,10 +118,32 @@ async function viewerReactions(supabaseAdmin, pubIds, viewerId) {
 async function hydratePublicaciones(supabaseAdmin, rows, viewerId) {
   const list = rows || [];
   const ids = list.map((r) => r.id);
+  const { data: mediaRows, error: mediaError } = ids.length
+    ? await supabaseAdmin
+      .from('comunidad_medios')
+      .select('publicacion_id,tipo,storage_path,orden,estado')
+      .in('publicacion_id', ids)
+      .eq('estado', 'listo')
+      .order('orden', { ascending: true })
+    : { data: [], error: null };
+  if (mediaError) throw schemaUnavailable(mediaError);
+  const photoByPost = new Map();
+  await Promise.all((mediaRows || [])
+    .filter((media) => media.tipo === 'foto' && !photoByPost.has(String(media.publicacion_id)))
+    .map(async (media) => {
+      const { data, error } = await supabaseAdmin.storage
+        .from('comunidad-media')
+        .createSignedUrl(media.storage_path, 60 * 60 * 24 * 7);
+      if (!error && data?.signedUrl) photoByPost.set(String(media.publicacion_id), data.signedUrl);
+    }));
+  const hydratedRows = list.map((row) => ({
+    ...row,
+    imagen_url: photoByPost.get(String(row.id)) || row.imagen_url,
+  }));
   const perfiles = await loadPerfilesByUserIds(supabaseAdmin, list.map((r) => r.autor_user_id));
   const { reacciones, comentarios } = await countsForPublicaciones(supabaseAdmin, ids);
   const reacted = await viewerReactions(supabaseAdmin, ids, viewerId);
-  return list.map((row) => mapPublicacionDto(row, {
+  return hydratedRows.map((row) => mapPublicacionDto(row, {
     autor: mapAutorPublico(perfiles.get(String(row.autor_user_id)) || { user_id: row.autor_user_id }),
     reacciones_count: reacciones.get(String(row.id)) || 0,
     comentarios_count: comentarios.get(String(row.id)) || 0,

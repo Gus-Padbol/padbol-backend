@@ -1,5 +1,22 @@
 import { sendHttpError } from '../lib/httpErrors.js';
+import multer from 'multer';
 import { createComunidadService, isModeratorRole } from '../src/comunidad/comunidadService.js';
+
+const COMUNIDAD_MEDIA_BUCKET = 'comunidad-media';
+const COMUNIDAD_MEDIA_MIME_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/quicktime',
+]);
+const comunidadMediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024, files: 1 },
+});
+
+function mediaExtension(mimeType) {
+  return ({
+    'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+    'video/mp4': 'mp4', 'video/quicktime': 'mov',
+  })[mimeType] || 'bin';
+}
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -65,6 +82,79 @@ export function mountComunidadRoutes(app, {
       res.status(201).json(pub);
     } catch (err) {
       console.error('❌ POST /api/comunidad/publicaciones:', err.message);
+      return sendHttpError(res, err);
+    }
+  });
+
+  /** Attach one photo or video to a post owned by the authenticated user. */
+  app.post('/api/comunidad/publicaciones/:id/media', comunidadMediaUpload.single('media'), async (req, res) => {
+    let storagePath = null;
+    try {
+      const user = await requireUser(req, res);
+      if (!user) return;
+      if (!req.file?.buffer) return res.status(400).json({ error: 'Seleccioná una foto o video.' });
+
+      const publicacionId = Number(req.params.id);
+      if (!Number.isSafeInteger(publicacionId) || publicacionId <= 0) {
+        return res.status(400).json({ error: 'Publicación inválida.' });
+      }
+      const mimeType = String(req.file.mimetype || '').toLowerCase();
+      if (!COMUNIDAD_MEDIA_MIME_TYPES.has(mimeType)) {
+        return res.status(400).json({ error: 'Formato no permitido. Usá JPG, PNG, WebP, MP4 o MOV.' });
+      }
+      const tipo = mimeType.startsWith('image/') ? 'foto' : 'video';
+
+      const { data: pub, error: pubError } = await supabaseAdmin
+        .from('comunidad_publicaciones')
+        .select('id,autor_user_id')
+        .eq('id', publicacionId)
+        .maybeSingle();
+      if (pubError) throw pubError;
+      if (!pub) return res.status(404).json({ error: 'La publicación ya no existe.' });
+      if (String(pub.autor_user_id) !== String(user.id)) {
+        return res.status(403).json({ error: 'No podés adjuntar medios a esta publicación.' });
+      }
+
+      storagePath = `${user.id}/${publicacionId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${mediaExtension(mimeType)}`;
+      const { error: storageError } = await supabaseAdmin.storage
+        .from(COMUNIDAD_MEDIA_BUCKET)
+        .upload(storagePath, req.file.buffer, { contentType: mimeType, upsert: false });
+      if (storageError) throw storageError;
+
+      const { data: media, error: mediaError } = await supabaseAdmin
+        .from('comunidad_medios')
+        .insert({
+          publicacion_id: publicacionId,
+          tipo,
+          storage_path: storagePath,
+          mime_type: mimeType,
+          bytes: req.file.size || null,
+          orden: 0,
+          estado: 'listo',
+        })
+        .select('*')
+        .single();
+      if (mediaError) throw mediaError;
+
+      const { data: signed, error: signedError } = await supabaseAdmin.storage
+        .from(COMUNIDAD_MEDIA_BUCKET)
+        .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
+      if (signedError || !signed?.signedUrl) throw signedError || new Error('No se pudo generar el acceso al archivo.');
+
+      if (tipo === 'foto') {
+        const { error: updateError } = await supabaseAdmin
+          .from('comunidad_publicaciones')
+          .update({ imagen_url: signed.signedUrl, updated_at: new Date().toISOString() })
+          .eq('id', publicacionId);
+        if (updateError) throw updateError;
+      }
+
+      return res.status(201).json({ media, url: signed.signedUrl });
+    } catch (err) {
+      if (storagePath) {
+        await supabaseAdmin.storage.from(COMUNIDAD_MEDIA_BUCKET).remove([storagePath]).catch(() => {});
+      }
+      console.error('❌ POST /api/comunidad/publicaciones/:id/media:', err.message);
       return sendHttpError(res, err);
     }
   });
