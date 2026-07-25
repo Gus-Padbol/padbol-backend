@@ -25,6 +25,8 @@ export function mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenti
     try {
       const deporte = String(req.params.deporte ?? '').trim().toLowerCase();
       const nivel = String(req.query.nivel ?? 'club').trim().toLowerCase();
+      const sedeId = Number(req.query.sede_id);
+      const categoria = String(req.query.categoria ?? '').trim();
 
       if (!VALID_DEPORTES.has(deporte)) {
         return res.status(400).json({ error: 'Deporte no válido' });
@@ -85,10 +87,14 @@ export function mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenti
       }
 
       const userIds = [...new Set(rows.map((row) => row.user_id).filter(Boolean))];
-      const { data: perfiles, error: perfilErr } = await supabaseAdmin
+      let perfilesQuery = supabaseAdmin
         .from('jugadores_perfil')
-        .select(RANKINGS_LEADERBOARD_PERFIL_SELECT)
+        .select(`${RANKINGS_LEADERBOARD_PERFIL_SELECT},sede_id,nivel`)
         .in('user_id', userIds);
+      if (nivel === 'club' && Number.isSafeInteger(sedeId) && sedeId > 0 && categoria) {
+        perfilesQuery = perfilesQuery.eq('sede_id', sedeId).eq('nivel', categoria);
+      }
+      const { data: perfiles, error: perfilErr } = await perfilesQuery;
 
       if (perfilErr) throw perfilErr;
 
@@ -96,7 +102,10 @@ export function mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenti
         (perfiles ?? []).map((perfil) => [perfil.user_id, perfil]),
       );
 
-      const rankings = rows.map((row, index) =>
+      const filteredRows = nivel === 'club' && Number.isSafeInteger(sedeId) && sedeId > 0 && categoria
+        ? rows.filter((row) => perfilByUserId[row.user_id])
+        : rows;
+      const rankings = filteredRows.map((row, index) =>
         mapRankingsLeaderboardPublicRow(
           row,
           perfilByUserId[row.user_id] ?? {},
