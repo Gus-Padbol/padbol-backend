@@ -121,25 +121,35 @@ async function hydratePublicaciones(supabaseAdmin, rows, viewerId) {
   const { data: mediaRows, error: mediaError } = ids.length
     ? await supabaseAdmin
       .from('comunidad_medios')
-      .select('publicacion_id,tipo,storage_path,orden,estado')
+      .select('publicacion_id,tipo,storage_path,duracion_ms,orden,estado')
       .in('publicacion_id', ids)
       .eq('estado', 'listo')
       .order('orden', { ascending: true })
     : { data: [], error: null };
   if (mediaError) throw schemaUnavailable(mediaError);
-  const photoByPost = new Map();
+  const mediaByPost = new Map();
   await Promise.all((mediaRows || [])
-    .filter((media) => media.tipo === 'foto' && !photoByPost.has(String(media.publicacion_id)))
+    .filter((media) => !mediaByPost.has(String(media.publicacion_id)))
     .map(async (media) => {
       const { data, error } = await supabaseAdmin.storage
         .from('comunidad-media')
         .createSignedUrl(media.storage_path, 60 * 60 * 24 * 7);
-      if (!error && data?.signedUrl) photoByPost.set(String(media.publicacion_id), data.signedUrl);
+      if (!error && data?.signedUrl) mediaByPost.set(String(media.publicacion_id), {
+        tipo: media.tipo,
+        url: data.signedUrl,
+        duracion_ms: media.duracion_ms,
+      });
     }));
-  const hydratedRows = list.map((row) => ({
-    ...row,
-    imagen_url: photoByPost.get(String(row.id)) || row.imagen_url,
-  }));
+  const hydratedRows = list.map((row) => {
+    const media = mediaByPost.get(String(row.id));
+    return {
+      ...row,
+      imagen_url: media?.tipo === 'foto' ? media.url : row.imagen_url,
+      video_url: media?.tipo === 'video' ? media.url : null,
+      media_tipo: media?.tipo || null,
+      video_duracion_ms: media?.tipo === 'video' ? media.duracion_ms : null,
+    };
+  });
   const perfiles = await loadPerfilesByUserIds(supabaseAdmin, list.map((r) => r.autor_user_id));
   const { reacciones, comentarios } = await countsForPublicaciones(supabaseAdmin, ids);
   const reacted = await viewerReactions(supabaseAdmin, ids, viewerId);

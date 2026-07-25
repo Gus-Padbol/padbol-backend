@@ -103,6 +103,10 @@ export function mountComunidadRoutes(app, {
         return res.status(400).json({ error: 'Formato no permitido. Usá JPG, PNG, WebP, MP4 o MOV.' });
       }
       const tipo = mimeType.startsWith('image/') ? 'foto' : 'video';
+      const durationMs = Number(req.body?.duration_ms);
+      if (tipo === 'video' && Number.isFinite(durationMs) && durationMs > 45_000) {
+        return res.status(400).json({ error: 'El video puede durar hasta 45 segundos.' });
+      }
 
       const { data: pub, error: pubError } = await supabaseAdmin
         .from('comunidad_publicaciones')
@@ -129,6 +133,9 @@ export function mountComunidadRoutes(app, {
           storage_path: storagePath,
           mime_type: mimeType,
           bytes: req.file.size || null,
+          duracion_ms: tipo === 'video' && Number.isFinite(durationMs) && durationMs > 0
+            ? Math.round(durationMs)
+            : null,
           orden: 0,
           estado: 'listo',
         })
