@@ -63,6 +63,9 @@ function mapCardResponse(row, staticImageUrl) {
     image_url: row?.imagen_url ?? staticImageUrl ?? null,
     titulo: row?.titulo ?? null,
     subtitulo: row?.subtitulo ?? null,
+    media_type: row?.media_type ?? 'image',
+    video_url: row?.video_url ?? null,
+    poster_url: row?.poster_url ?? null,
   };
 }
 
@@ -107,11 +110,21 @@ export function createHubRouter({ supabaseAdmin }) {
       try {
         const { data, error } = await supabaseAdmin
           .from('hub_deporte_config')
-          .select('card_key, titulo, subtitulo, imagen_url')
+          .select('card_key, titulo, subtitulo, imagen_url, media_type, video_url, poster_url')
           .eq('deporte', deporte);
 
-        if (error) throw error;
-        rows = data ?? [];
+        if (error && /column/i.test(String(error.message))) {
+          const legacy = await supabaseAdmin
+            .from('hub_deporte_config')
+            .select('card_key, titulo, subtitulo, imagen_url')
+            .eq('deporte', deporte);
+          if (legacy.error) throw legacy.error;
+          rows = legacy.data ?? [];
+        } else if (error) {
+          throw error;
+        } else {
+          rows = data ?? [];
+        }
         console.log('GET /api/hub/imagenes DB result:', {
           deporte,
           rowCount: rows.length,

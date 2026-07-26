@@ -12,6 +12,8 @@ import Stripe from 'stripe';
 import cron from 'node-cron';
 import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
+import { createContentAdminRouter } from './routes/contentAdmin.js';
+import { createContentPublicRouter } from './routes/contentPublic.js';
 import { createMembresiasRouter, mountMembresiasSedeRoutes } from './routes/membresias.js';
 import {
   buildPartidoAbiertoInsertRow,
@@ -2761,6 +2763,13 @@ mountJugadorInvitacionesEquipoRoute(app, { supabaseAdmin, getAuthenticatedUser }
 // ===== HUB (action card images — public GET /api/hub/imagenes) =====
 app.use('/api/hub', createHubRouter({ supabaseAdmin }));
 console.log('Hub router registered at /api/hub (GET /api/hub/imagenes)');
+app.use('/api/admin/content', createContentAdminRouter({
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+}));
+app.use('/api/content', createContentPublicRouter({ supabaseAdmin }));
 
 app.post('/api/notificaciones/zona-interes', async (req, res) => {
   try {
@@ -4433,6 +4442,116 @@ jugadorRouter.get('/perfil', handleGetAuthenticatedPerfil);
 
 // PUT /api/jugador/perfil — Update authenticated player profile
 jugadorRouter.put('/perfil', handlePutAuthenticatedPerfil);
+
+// GET /api/jugador/nivel-externo?deporte=padel — Player's declared external level.
+jugadorRouter.get('/nivel-externo', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) return res.status(status).json({ error: authError });
+
+    const deporte = String(req.query?.deporte ?? 'padel').trim().toLowerCase();
+    const { data, error } = await supabaseAdmin
+      .from('jugador_nivel_externo')
+      .select('deporte, plataforma, puntuacion, categoria_inicial, estado, evidencia_storage_path, created_at, updated_at')
+      .eq('user_id', user.id)
+      .eq('deporte', deporte)
+      .maybeSingle();
+
+    if (error) throw error;
+    return res.json({
+      declaracion: data
+        ? { ...data, evidencia_cargada: Boolean(data.evidencia_storage_path), evidencia_storage_path: undefined }
+        : null,
+    });
+  } catch (err) {
+    console.error('❌ Error GET jugador nivel externo:', err.message);
+    return sendHttpError(res, err);
+  }
+});
+
+// PUT /api/jugador/nivel-externo — Save a self-declared starting level.
+// It never changes the player's chosen Padbol Match category or blocks enrollment.
+jugadorRouter.put('/nivel-externo', async (req, res) => {
+  try {
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
+    if (!user) return res.status(status).json({ error: authError });
+
+    const body = req.body ?? {};
+    const deporte = String(body.deporte ?? 'padel').trim().toLowerCase();
+    const plataforma = String(body.plataforma ?? '').trim().toLowerCase();
+    const puntuacion = String(body.puntuacion ?? '').trim();
+    const categoriaInicial = String(body.categoria_inicial ?? '').trim();
+    const allowedPlatforms = new Set(['playtomic', 'otra']);
+
+    if (deporte !== 'padel') return res.status(400).json({ error: 'Solo se admite acreditación externa para pádel.' });
+    if (!allowedPlatforms.has(plataforma)) return res.status(400).json({ error: 'Plataforma de nivel inválida.' });
+    if (!puntuacion || puntuacion.length > 40) return res.status(400).json({ error: 'Ingresá una puntuación o nivel válido.' });
+    if (!categoriaInicial || categoriaInicial.length > 40) return res.status(400).json({ error: 'Categoría inicial inválida.' });
+
+    const { data: previous, error: previousError } = await supabaseAdmin
+      .from('jugador_nivel_externo')
+      .select('evidencia_storage_path')
+      .eq('user_id', user.id)
+      .eq('deporte', deporte)
+      .maybeSingle();
+    if (previousError) throw previousError;
+
+    let evidenciaStoragePath = previous?.evidencia_storage_path ?? null;
+    if (body.evidencia_base64) {
+      const mimeType = String(body.evidencia_mime_type ?? 'image/jpeg').toLowerCase();
+      const allowedMimeTypes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+      if (!allowedMimeTypes.has(mimeType)) return res.status(400).json({ error: 'Formato de captura no soportado.' });
+
+      const imageBuffer = Buffer.from(
+        String(body.evidencia_base64).replace(/^data:image\/[\w.+-]+;base64,/, ''),
+        'base64',
+      );
+      if (!imageBuffer.length) return res.status(400).json({ error: 'La captura es inválida.' });
+      if (imageBuffer.length > 5 * 1024 * 1024) return res.status(400).json({ error: 'La captura supera el máximo de 5 MB.' });
+
+      const extensionByMimeType = {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+      };
+      const normalizedMimeType = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+      evidenciaStoragePath = `${user.id}/${deporte}/${Date.now()}.${extensionByMimeType[mimeType]}`;
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from('nivel-externo-evidencias')
+        .upload(evidenciaStoragePath, imageBuffer, {
+          contentType: normalizedMimeType,
+          upsert: false,
+        });
+      if (uploadError) throw uploadError;
+    }
+
+    const now = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from('jugador_nivel_externo')
+      .upsert({
+        user_id: user.id,
+        deporte,
+        plataforma,
+        puntuacion,
+        categoria_inicial: categoriaInicial,
+        estado: 'declarado',
+        evidencia_storage_path: evidenciaStoragePath,
+        updated_at: now,
+      }, { onConflict: 'user_id,deporte' })
+      .select('deporte, plataforma, puntuacion, categoria_inicial, estado, evidencia_storage_path, created_at, updated_at')
+      .single();
+    if (error) throw error;
+
+    console.log(`✓ PUT jugador nivel externo — user ${user.id}`);
+    return res.json({
+      declaracion: { ...data, evidencia_cargada: Boolean(data.evidencia_storage_path), evidencia_storage_path: undefined },
+    });
+  } catch (err) {
+    console.error('❌ Error PUT jugador nivel externo:', err.message);
+    return sendHttpError(res, err);
+  }
+});
 
 // GET /api/jugador/perfiles?user_ids=uuid1,uuid2 — Batch jugadores_perfil for partido slots
 jugadorRouter.get('/perfiles', async (req, res) => {
