@@ -1,7 +1,16 @@
 import express from 'express';
 import { safeQueryLog } from '../lib/safeLog.js';
 
-const CARD_KEYS = ['reservar', 'buscar_partido', 'torneos', 'rankings', 'armar_partido'];
+const CARD_KEYS = [
+  'reservar',
+  'buscar_partido',
+  'torneos',
+  'rankings',
+  'armar_partido',
+  'comunidad',
+  'perfil',
+  'mis_partidos',
+];
 
 const VALID_DEPORTES = new Set([
   'padbol',
