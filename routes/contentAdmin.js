@@ -1,6 +1,9 @@
 import express from 'express';
 import multer from 'multer';
-import { requireContentEditorUser } from '../lib/authAccess.js';
+import {
+  requireContentEditorUser,
+  requireSuperAdminUser,
+} from '../lib/authAccess.js';
 
 const VALID_DEPORTES = new Set([
   'padbol',
@@ -17,6 +20,9 @@ const VALID_CARD_KEYS = new Set([
   'torneos',
   'rankings',
   'armar_partido',
+  'comunidad',
+  'perfil',
+  'mis_partidos',
 ]);
 const VALID_AD_SLOTS = new Set([
   'app_general',
@@ -26,6 +32,8 @@ const VALID_AD_SLOTS = new Set([
   'competir_hub',
 ]);
 const VALID_MEDIA_TYPES = new Set(['image', 'video']);
+const VALID_CONTENT_TYPES = new Set(['hub', 'ad']);
+const VALID_DRAFT_STATUSES = new Set(['draft', 'pending_review', 'rejected', 'approved']);
 const CONTENT_MEDIA_BUCKET = 'content-media';
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -71,6 +79,21 @@ function mapAdRow(row) {
   };
 }
 
+function mapDraftRow(row) {
+  return {
+    content_type: row.content_type,
+    deporte: row.deporte,
+    item_key: row.item_key,
+    payload: row.payload ?? {},
+    status: VALID_DRAFT_STATUSES.has(row.status) ? row.status : 'draft',
+    review_note: row.review_note ?? '',
+    submitted_at: row.submitted_at ?? null,
+    reviewed_at: row.reviewed_at ?? null,
+    published_at: row.published_at ?? null,
+    updated_at: row.updated_at ?? null,
+  };
+}
+
 function contentDeps(deps) {
   return {
     getAuthenticatedUser: deps.getAuthenticatedUser,
@@ -78,6 +101,62 @@ function contentDeps(deps) {
     legacySuperAdminEmails: deps.legacySuperAdminEmails ?? [],
   };
 }
+
+function validateContentTarget(contentType, deporte, itemKey) {
+  if (!VALID_CONTENT_TYPES.has(contentType) || !VALID_DEPORTES.has(deporte)) {
+    return false;
+  }
+  return contentType === 'hub'
+    ? VALID_CARD_KEYS.has(itemKey)
+    : VALID_AD_SLOTS.has(itemKey);
+}
+
+function buildHubPayload(deporte, cardKey, body) {
+  const mediaType = normalizeMediaType(body?.media_type);
+  const payload = {
+    deporte,
+    card_key: cardKey,
+    titulo: normalizedValue(body?.titulo, 140) ?? '',
+    subtitulo: normalizedValue(body?.subtitulo, 280) ?? '',
+    imagen_url: normalizedValue(body?.imagen_url),
+    media_type: mediaType,
+    video_url: mediaType === 'video' ? normalizedValue(body?.video_url) : null,
+    poster_url: mediaType === 'video' ? normalizedValue(body?.poster_url) : null,
+  };
+  if (mediaType === 'video' && !payload.video_url) {
+    return { error: 'Un video necesita su URL de video' };
+  }
+  return { payload };
+}
+
+function buildAdPayload(deporte, slotKey, body) {
+  const mediaType = normalizeMediaType(body?.media_type);
+  return {
+    payload: {
+      deporte,
+      slot_key: slotKey,
+      titulo: normalizedValue(body?.titulo, 140) ?? '',
+      media_type: mediaType,
+      imagen_url: normalizedValue(body?.imagen_url),
+      video_url: mediaType === 'video' ? normalizedValue(body?.video_url) : null,
+      poster_url: mediaType === 'video' ? normalizedValue(body?.poster_url) : null,
+      destino_url: normalizedValue(body?.destino_url),
+      activo: body?.activo !== false,
+    },
+  };
+}
+
+function buildPayload(contentType, deporte, itemKey, body) {
+  return contentType === 'hub'
+    ? buildHubPayload(deporte, itemKey, body)
+    : buildAdPayload(deporte, itemKey, body);
+}
+
+export const contentWorkflowInternals = {
+  buildPayload,
+  mapDraftRow,
+  validateContentTarget,
+};
 
 export function createContentAdminRouter({
   supabaseAdmin,
@@ -91,6 +170,206 @@ export function createContentAdminRouter({
     fetchUserRoleRowForAuthUser,
     legacySuperAdminEmails,
   };
+
+  async function saveDraft(req, res, contentType, deporte, itemKey, body) {
+    if (!validateContentTarget(contentType, deporte, itemKey)) {
+      return res.status(400).json({ error: 'Contenido o deporte inválido' });
+    }
+    const built = buildPayload(contentType, deporte, itemKey, body);
+    if (built.error) return res.status(400).json({ error: built.error });
+
+    const now = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from('content_editor_drafts')
+      .upsert({
+        content_type: contentType,
+        deporte,
+        item_key: itemKey,
+        payload: built.payload,
+        status: 'draft',
+        updated_by: req.contentAuth.user.id,
+        review_note: null,
+        submitted_at: null,
+        reviewed_at: null,
+        reviewed_by: null,
+        published_at: null,
+        updated_at: now,
+      }, { onConflict: 'content_type,deporte,item_key' })
+      .select('content_type, deporte, item_key, payload, status, review_note, submitted_at, reviewed_at, published_at, updated_at')
+      .single();
+    if (error) throw error;
+    return res.json({ draft: mapDraftRow(data) });
+  }
+
+  router.get('/drafts', async (req, res) => {
+    const auth = await requireContentEditorUser(req, res, contentDeps(deps));
+    if (!auth) return;
+    const status = normalizedValue(req.query.status, 32)?.toLowerCase();
+    if (status && !VALID_DRAFT_STATUSES.has(status)) {
+      return res.status(400).json({ error: 'Estado inválido' });
+    }
+
+    try {
+      let query = supabaseAdmin
+        .from('content_editor_drafts')
+        .select('content_type, deporte, item_key, payload, status, review_note, submitted_at, reviewed_at, published_at, updated_at')
+        .order('updated_at', { ascending: false });
+      if (status) query = query.eq('status', status);
+      const { data, error } = await query;
+      if (error) throw error;
+      return res.json({
+        items: (data ?? []).map(mapDraftRow),
+        can_approve: auth.role.rol === 'super_admin',
+      });
+    } catch {
+      return res.status(500).json({
+        error: 'No se pudieron cargar los borradores. Verificá la migración editorial.',
+      });
+    }
+  });
+
+  router.put('/drafts/:contentType/:deporte/:itemKey', async (req, res) => {
+    const auth = await requireContentEditorUser(req, res, contentDeps(deps));
+    if (!auth) return;
+    req.contentAuth = auth;
+    const contentType = normalizedValue(req.params.contentType, 16)?.toLowerCase();
+    const deporte = normalizedValue(req.params.deporte, 32)?.toLowerCase();
+    const itemKey = normalizedValue(req.params.itemKey, 64)?.toLowerCase();
+
+    try {
+      return await saveDraft(req, res, contentType, deporte, itemKey, req.body);
+    } catch {
+      return res.status(500).json({
+        error: 'No se pudo guardar el borrador. Verificá la migración editorial.',
+      });
+    }
+  });
+
+  router.post('/drafts/:contentType/:deporte/:itemKey/submit', async (req, res) => {
+    const auth = await requireContentEditorUser(req, res, contentDeps(deps));
+    if (!auth) return;
+    const contentType = normalizedValue(req.params.contentType, 16)?.toLowerCase();
+    const deporte = normalizedValue(req.params.deporte, 32)?.toLowerCase();
+    const itemKey = normalizedValue(req.params.itemKey, 64)?.toLowerCase();
+    if (!validateContentTarget(contentType, deporte, itemKey)) {
+      return res.status(400).json({ error: 'Contenido o deporte inválido' });
+    }
+
+    try {
+      const now = new Date().toISOString();
+      const { data, error } = await supabaseAdmin
+        .from('content_editor_drafts')
+        .update({
+          status: 'pending_review',
+          submitted_at: now,
+          updated_by: auth.user.id,
+          updated_at: now,
+          review_note: null,
+        })
+        .eq('content_type', contentType)
+        .eq('deporte', deporte)
+        .eq('item_key', itemKey)
+        .select('content_type, deporte, item_key, payload, status, review_note, submitted_at, reviewed_at, published_at, updated_at')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'Primero guardá el borrador' });
+      return res.json({ draft: mapDraftRow(data) });
+    } catch {
+      return res.status(500).json({ error: 'No se pudo enviar a revisión' });
+    }
+  });
+
+  router.post('/drafts/:contentType/:deporte/:itemKey/approve', async (req, res) => {
+    const auth = await requireSuperAdminUser(req, res, contentDeps(deps));
+    if (!auth) return;
+    const contentType = normalizedValue(req.params.contentType, 16)?.toLowerCase();
+    const deporte = normalizedValue(req.params.deporte, 32)?.toLowerCase();
+    const itemKey = normalizedValue(req.params.itemKey, 64)?.toLowerCase();
+    if (!validateContentTarget(contentType, deporte, itemKey)) {
+      return res.status(400).json({ error: 'Contenido o deporte inválido' });
+    }
+
+    try {
+      const draftResult = await supabaseAdmin
+        .from('content_editor_drafts')
+        .select('content_type, deporte, item_key, payload, status')
+        .eq('content_type', contentType)
+        .eq('deporte', deporte)
+        .eq('item_key', itemKey)
+        .maybeSingle();
+      if (draftResult.error) throw draftResult.error;
+      if (!draftResult.data) return res.status(404).json({ error: 'Borrador inexistente' });
+      if (draftResult.data.status !== 'pending_review') {
+        return res.status(409).json({ error: 'El contenido no está pendiente de aprobación' });
+      }
+
+      const now = new Date().toISOString();
+      const payload = { ...draftResult.data.payload, updated_at: now };
+      const target = contentType === 'hub' ? 'hub_deporte_config' : 'content_ad_slots';
+      const conflict = contentType === 'hub' ? 'deporte,card_key' : 'deporte,slot_key';
+      const published = await supabaseAdmin
+        .from(target)
+        .upsert(payload, { onConflict: conflict });
+      if (published.error) throw published.error;
+
+      const reviewed = await supabaseAdmin
+        .from('content_editor_drafts')
+        .update({
+          status: 'approved',
+          reviewed_by: auth.user.id,
+          reviewed_at: now,
+          published_at: now,
+          review_note: normalizedValue(req.body?.note, 500),
+          updated_at: now,
+        })
+        .eq('content_type', contentType)
+        .eq('deporte', deporte)
+        .eq('item_key', itemKey)
+        .select('content_type, deporte, item_key, payload, status, review_note, submitted_at, reviewed_at, published_at, updated_at')
+        .single();
+      if (reviewed.error) throw reviewed.error;
+      return res.json({ draft: mapDraftRow(reviewed.data), published: true });
+    } catch {
+      return res.status(500).json({ error: 'No se pudo aprobar y publicar el contenido' });
+    }
+  });
+
+  router.post('/drafts/:contentType/:deporte/:itemKey/reject', async (req, res) => {
+    const auth = await requireSuperAdminUser(req, res, contentDeps(deps));
+    if (!auth) return;
+    const contentType = normalizedValue(req.params.contentType, 16)?.toLowerCase();
+    const deporte = normalizedValue(req.params.deporte, 32)?.toLowerCase();
+    const itemKey = normalizedValue(req.params.itemKey, 64)?.toLowerCase();
+    if (!validateContentTarget(contentType, deporte, itemKey)) {
+      return res.status(400).json({ error: 'Contenido o deporte inválido' });
+    }
+    const note = normalizedValue(req.body?.note, 500);
+    if (!note) return res.status(400).json({ error: 'Indicá qué hay que corregir' });
+
+    try {
+      const now = new Date().toISOString();
+      const { data, error } = await supabaseAdmin
+        .from('content_editor_drafts')
+        .update({
+          status: 'rejected',
+          reviewed_by: auth.user.id,
+          reviewed_at: now,
+          review_note: note,
+          updated_at: now,
+        })
+        .eq('content_type', contentType)
+        .eq('deporte', deporte)
+        .eq('item_key', itemKey)
+        .eq('status', 'pending_review')
+        .select('content_type, deporte, item_key, payload, status, review_note, submitted_at, reviewed_at, published_at, updated_at')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(409).json({ error: 'El contenido no está pendiente' });
+      return res.json({ draft: mapDraftRow(data) });
+    } catch {
+      return res.status(500).json({ error: 'No se pudo devolver el contenido' });
+    }
+  });
 
   router.get('/hub', async (req, res) => {
     const auth = await requireContentEditorUser(req, res, contentDeps(deps));
@@ -134,37 +413,11 @@ export function createContentAdminRouter({
       return res.status(400).json({ error: 'Card o deporte inválido' });
     }
 
-    const mediaType = normalizeMediaType(req.body?.media_type);
-    const payload = {
-      deporte,
-      card_key: cardKey,
-      titulo: normalizedValue(req.body?.titulo, 140) ?? '',
-      subtitulo: normalizedValue(req.body?.subtitulo, 280) ?? '',
-      imagen_url: normalizedValue(req.body?.imagen_url),
-      media_type: mediaType,
-      video_url: mediaType === 'video' ? normalizedValue(req.body?.video_url) : null,
-      poster_url: mediaType === 'video' ? normalizedValue(req.body?.poster_url) : null,
-      updated_at: new Date().toISOString(),
-    };
-    if (mediaType === 'video' && !payload.video_url) {
-      return res.status(400).json({ error: 'Un video necesita su URL de video' });
-    }
-
     try {
-      const result = await supabaseAdmin
-        .from('hub_deporte_config')
-        .upsert(payload, { onConflict: 'deporte,card_key' })
-        .select('deporte, card_key, titulo, subtitulo, imagen_url, media_type, video_url, poster_url, updated_at')
-        .single();
-      if (result.error && /column/i.test(String(result.error.message))) {
-        return res.status(409).json({
-          error: 'Falta ejecutar la migración de Contenido antes de guardar videos.',
-        });
-      }
-      if (result.error) throw result.error;
-      return res.json({ item: mapHubRow(result.data) });
+      req.contentAuth = auth;
+      return await saveDraft(req, res, 'hub', deporte, cardKey, req.body);
     } catch {
-      return res.status(500).json({ error: 'No se pudo guardar la card' });
+      return res.status(500).json({ error: 'No se pudo guardar el borrador de la card' });
     }
   });
 
@@ -233,31 +486,12 @@ export function createContentAdminRouter({
       return res.status(400).json({ error: 'Espacio o deporte inválido' });
     }
 
-    const mediaType = normalizeMediaType(req.body?.media_type);
-    const payload = {
-      deporte,
-      slot_key: slotKey,
-      titulo: normalizedValue(req.body?.titulo, 140) ?? '',
-      media_type: mediaType,
-      imagen_url: normalizedValue(req.body?.imagen_url),
-      video_url: mediaType === 'video' ? normalizedValue(req.body?.video_url) : null,
-      poster_url: mediaType === 'video' ? normalizedValue(req.body?.poster_url) : null,
-      destino_url: normalizedValue(req.body?.destino_url),
-      activo: req.body?.activo !== false,
-      updated_at: new Date().toISOString(),
-    };
-
     try {
-      const { data, error } = await supabaseAdmin
-        .from('content_ad_slots')
-        .upsert(payload, { onConflict: 'deporte,slot_key' })
-        .select('deporte, slot_key, titulo, media_type, imagen_url, video_url, poster_url, destino_url, activo, updated_at')
-        .single();
-      if (error) throw error;
-      return res.json({ item: mapAdRow(data) });
+      req.contentAuth = auth;
+      return await saveDraft(req, res, 'ad', deporte, slotKey, req.body);
     } catch {
       return res.status(500).json({
-        error: 'No se pudo guardar la publicidad. Verificá la migración de Contenido.',
+        error: 'No se pudo guardar el borrador de publicidad. Verificá la migración editorial.',
       });
     }
   });
