@@ -60,6 +60,8 @@ import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
 import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js';
 import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
+import { mountStoreSedeConfigRoutes } from './routes/storeSedeConfig.js';
+import { mountStoreAdminRoutes } from './routes/storeAdmin.js';
 import { mountSedesDuracionesRoutes } from './routes/sedesDuraciones.js';
 import { mountAdminJugadoresRoutes } from './routes/adminJugadores.js';
 import { mountAdminCoreRoutes } from './routes/adminCore.js';
@@ -987,6 +989,18 @@ mountReservasHoldCleanupRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountSedeExtrasRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountStoreSedeConfigRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountStoreAdminRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
