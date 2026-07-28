@@ -70,8 +70,19 @@ export function mountStoreAdminRoutes(app, deps) {
       const body = req.body || {}; const patch = { updated_at: new Date().toISOString() };
       if ('estado' in body) { if (!ORDER_STATES.includes(body.estado)) return res.status(400).json({ error: 'Estado de pedido inválido' }); patch.estado = body.estado; }
       if ('pago_estado' in body) { if (!PAYMENT_STATES.includes(body.pago_estado)) return res.status(400).json({ error: 'Estado de pago inválido' }); patch.pago_estado = body.pago_estado; }
+      const { data: current, error: currentError } = await supabaseAdmin.from('store_orders').select('id,estado,items:store_order_items(product_id,cantidad)').eq('id', orderId).eq('sede_id', access.sedeId).single();
+      if (currentError) throw currentError;
       const { data, error } = await supabaseAdmin.from('store_orders').update(patch).eq('id', orderId).eq('sede_id', access.sedeId).select('*, items:store_order_items(*)').single();
-      if (error) throw error; return res.json({ order: data });
+      if (error) throw error;
+      // A cancelled order releases the units reserved when it was created. Do it
+      // only once, on the transition into cancelado.
+      if (patch.estado === 'cancelado' && current.estado !== 'cancelado') {
+        await Promise.all((current.items || []).filter((item) => item.product_id).map(async (item) => {
+          const { data: offer } = await supabaseAdmin.from('store_sede_offers').select('id,stock').eq('sede_id', access.sedeId).eq('product_id', item.product_id).maybeSingle();
+          if (offer) await supabaseAdmin.from('store_sede_offers').update({ stock: Number(offer.stock || 0) + Number(item.cantidad || 0), updated_at: new Date().toISOString() }).eq('id', offer.id);
+        }));
+      }
+      return res.json({ order: data });
     } catch (error) { console.error('PATCH shop order:', error.message); return res.status(500).json({ error: 'No se pudo actualizar el pedido' }); }
   });
 
