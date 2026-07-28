@@ -62,6 +62,7 @@ import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js'
 import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
 import { mountStoreSedeConfigRoutes } from './routes/storeSedeConfig.js';
 import { mountStoreAdminRoutes } from './routes/storeAdmin.js';
+import { mountStorePublicRoutes } from './routes/storePublic.js';
 import { mountSedesDuracionesRoutes } from './routes/sedesDuraciones.js';
 import { mountAdminJugadoresRoutes } from './routes/adminJugadores.js';
 import { mountAdminCoreRoutes } from './routes/adminCore.js';
@@ -1005,6 +1006,10 @@ mountStoreAdminRoutes(app, {
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountStorePublicRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
 });
 mountSedesDuracionesRoutes(app, {
   supabaseAdmin,
