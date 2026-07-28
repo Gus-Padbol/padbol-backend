@@ -1,4 +1,5 @@
 import { requireAdminUser } from '../lib/authAccess.js';
+import { requireSuperAdminUser } from '../lib/authAccess.js';
 
 const ORDER_STATES = ['nuevo', 'confirmado', 'preparando', 'listo_retiro', 'enviado', 'entregado', 'cancelado'];
 const PAYMENT_STATES = ['pendiente', 'a_confirmar', 'confirmado', 'rechazado', 'reembolsado'];
@@ -72,5 +73,41 @@ export function mountStoreAdminRoutes(app, deps) {
       const { data, error } = await supabaseAdmin.from('store_orders').update(patch).eq('id', orderId).eq('sede_id', access.sedeId).select('*, items:store_order_items(*)').single();
       if (error) throw error; return res.json({ order: data });
     } catch (error) { console.error('PATCH shop order:', error.message); return res.status(500).json({ error: 'No se pudo actualizar el pedido' }); }
+  });
+
+  const requireGlobal = async (req, res) => requireSuperAdminUser(req, res, authDepsFor(deps));
+  app.get('/api/admin/shop/global', async (req, res) => {
+    try {
+      const auth = await requireGlobal(req, res); if (!auth) return;
+      const [products, sedes, centralOffers, orders] = await Promise.all([
+        supabaseAdmin.from('store_catalog_products').select('*').order('nombre'),
+        supabaseAdmin.from('store_sede_config').select('*, sede:sedes(id,nombre,pais,ciudad)').order('sede_id'),
+        supabaseAdmin.from('store_central_offers').select('*, product:store_catalog_products(id,nombre,slug)').order('id'),
+        supabaseAdmin.from('store_orders').select('id,codigo,sede_id,estado,pago_estado,total,moneda,created_at,sede:sedes(nombre)').order('created_at', { ascending: false }).limit(200),
+      ]);
+      for (const r of [products, sedes, centralOffers, orders]) if (r.error) throw r.error;
+      const list = orders.data || [];
+      return res.json({ products: products.data || [], sedes: sedes.data || [], central_offers: centralOffers.data || [], orders: list, metrics: { orders: list.length, pending: list.filter(o => !['entregado', 'cancelado'].includes(o.estado)).length, total_informativo: list.filter(o => o.estado !== 'cancelado').reduce((sum, o) => sum + Number(o.total || 0), 0) } });
+    } catch (error) { console.error('GET global shop:', error.message); return res.status(500).json({ error: 'No se pudo cargar la red global de tiendas' }); }
+  });
+
+  app.post('/api/admin/shop/products', async (req, res) => {
+    try {
+      const auth = await requireGlobal(req, res); if (!auth) return;
+      const b = req.body || {}; const nombre = String(b.nombre || '').trim(); const slug = String(b.slug || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+      if (!nombre || !slug) return res.status(400).json({ error: 'Nombre y slug son obligatorios' });
+      const { data, error } = await supabaseAdmin.from('store_catalog_products').insert({ nombre: nombre.slice(0, 200), slug: slug.slice(0, 120), categoria: String(b.categoria || 'official_merchandise').slice(0, 80), descripcion: String(b.descripcion || '').slice(0, 2000) || null, imagen_url: String(b.imagen_url || '').slice(0, 2000) || null, activo: b.activo !== false }).select('*').single();
+      if (error) throw error; return res.status(201).json({ product: data });
+    } catch (error) { console.error('POST global product:', error.message); return res.status(500).json({ error: 'No se pudo crear el producto maestro' }); }
+  });
+
+  app.patch('/api/admin/shop/products/:productId', async (req, res) => {
+    try {
+      const auth = await requireGlobal(req, res); if (!auth) return;
+      const productId = sid(req.params.productId); if (!productId) return res.status(400).json({ error: 'Producto inválido' });
+      const b = req.body || {}; const patch = { updated_at: new Date().toISOString() };
+      ['nombre', 'categoria', 'descripcion', 'imagen_url'].forEach(k => { if (k in b) patch[k] = String(b[k] || '').trim() || null; }); if ('activo' in b) patch.activo = Boolean(b.activo);
+      const { data, error } = await supabaseAdmin.from('store_catalog_products').update(patch).eq('id', productId).select('*').single(); if (error) throw error; return res.json({ product: data });
+    } catch (error) { console.error('PATCH global product:', error.message); return res.status(500).json({ error: 'No se pudo editar el producto maestro' }); }
   });
 }
