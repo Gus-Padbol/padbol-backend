@@ -2949,28 +2949,11 @@ export function createPartidosRouter({
           }
         }
 
-        if (reservaId && triggerPartidoCreatorPayment) {
-          const { data: reserva, error: reservaErr } = await supabaseAdmin
-            .from('reservas')
-            .select('*')
-            .eq('id', reservaId)
-            .maybeSingle();
-
-          if (!reservaErr && reserva) {
-            try {
-              const payment = await triggerPartidoCreatorPayment({
-                reserva,
-                partido: { ...partido, id: partidoId },
-                sedeId: partido.sede_id,
-              });
-              requierePagoCreador = true;
-              pagoUrl = payment.init_point ?? null;
-              console.log(`✓ Partido ${partidoId} completo — MP preference para creador ${capitanUserId}`);
-            } catch (paymentErr) {
-              console.warn(`⚠️ Pago creador partido ${partidoId}:`, paymentErr.message);
-            }
-          }
-        }
+        // Completar el grupo no inicia ni prepara el cobro automáticamente.
+        // Sólo habilita al capitán a abrir el checkout desde “Pagar reserva”.
+        // Así ningún medio de pago recibe una intención antes de que el grupo
+        // esté confirmado y el capitán tome esa acción explícita.
+        requierePagoCreador = Boolean(reservaId && triggerPartidoCreatorPayment);
       }
 
       const hostNombre = await resolveHostName(partido, supabaseAdmin);
