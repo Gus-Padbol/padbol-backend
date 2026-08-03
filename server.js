@@ -19,6 +19,7 @@ import {
   buildPartidoAbiertoInsertRow,
   buildCapitanFields,
   buildReservaInsertRow,
+  cancelExpiredPartidos,
   createPartidosAbiertosRouter,
   createPartidosRouter,
   buildDisponibilidadSlots,
@@ -3684,6 +3685,24 @@ initReservasCron({
   cron,
   timezone: 'America/Argentina/Buenos_Aires',
 });
+
+// ─── Cron: partidos abiertos incompletos → liberar prereserva sin cobro ─────
+// La prereserva sólo se cobra cuando el cuarto jugador completa el equipo.
+// Si llegan las 8 h previas sin completarse, el turno vuelve a estar disponible.
+cron.schedule(
+  '*/5 * * * *',
+  async () => {
+    try {
+      const cancelled = await cancelExpiredPartidos(supabaseAdmin);
+      if (cancelled > 0) {
+        console.log(`✓ Cron partidos abiertos: ${cancelled} prereserva(s) liberada(s) sin cobro`);
+      }
+    } catch (err) {
+      console.error('❌ Cron partidos abiertos - error:', err.message);
+    }
+  },
+  { timezone: 'America/Argentina/Buenos_Aires' },
+);
 
 initReservasHoldCleanupCron({
   supabaseAdmin,
