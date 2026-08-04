@@ -219,6 +219,41 @@ export function mountReputacionRoutes(app, {
     }
   });
 
+  /** Jugadores con suspensión vigente. Una lista vacía es un estado válido. */
+  app.get('/api/admin/suspensiones', async (req, res) => {
+    try {
+      if (!pgPool) return pgUnavailable(res);
+
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status).json({ error: authError });
+      }
+
+      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      if (role.rol !== 'super_admin') {
+        return res.status(403).json({ error: 'Solo super_admin puede consultar suspensiones' });
+      }
+
+      const { rows } = await pgPool.query(
+        `SELECT
+           s.user_id,
+           s.suspendido_hasta,
+           COALESCE(NULLIF(TRIM(j.apodo), ''), NULLIF(TRIM(CONCAT_WS(' ', j.nombre, j.apellido)), ''), 'Jugador') AS nombre,
+           j.email
+         FROM suspensiones_jugador s
+         LEFT JOIN jugadores_perfil j ON j.user_id = s.user_id
+         WHERE s.levantada_at IS NULL
+           AND s.suspendido_hasta > NOW()
+         ORDER BY s.suspendido_hasta ASC`,
+      );
+
+      res.json({ suspensiones: rows });
+    } catch (err) {
+      console.error('❌ GET /api/admin/suspensiones:', err.message);
+      res.status(500).json({ error: err.message || 'Error al consultar suspensiones' });
+    }
+  });
+
   app.post('/api/admin/suspensiones/:userId/levantar', async (req, res) => {
     try {
       if (!pgPool) return pgUnavailable(res);
