@@ -64,6 +64,48 @@ export function mountSedeExtrasRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails = [],
 }) {
+  app.get('/api/admin/sede-extras-pendientes', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status).json({ error: authError });
+
+      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      if (!isSuperAdminRole(role)) {
+        return res.status(403).json({ error: 'Solo super admin puede ver extras pendientes' });
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('sede_extras')
+        .select('*')
+        .eq('aprobado_super', false)
+        .eq('activo', true)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const sedeIds = [...new Set((data || []).map((item) => item.sede_id).filter(Boolean))];
+      let sedesById = new Map();
+      if (sedeIds.length) {
+        const { data: sedes, error: sedesError } = await supabaseAdmin
+          .from('sedes')
+          .select('id, nombre')
+          .in('id', sedeIds);
+        if (sedesError) throw sedesError;
+        sedesById = new Map((sedes || []).map((sede) => [String(sede.id), sede]));
+      }
+
+      const items = (data || []).map((item) => ({
+        ...item,
+        sede: sedesById.get(String(item.sede_id)) || null,
+      }));
+      return res.json({ items });
+    } catch (err) {
+      const st = err.status || 500;
+      console.error('❌ GET /api/admin/sede-extras-pendientes:', err.message);
+      return res.status(st).json({ error: err.message || 'Error al listar extras pendientes' });
+    }
+  });
+
   app.get('/api/sedes/:id/extras-admin', async (req, res) => {
     try {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
