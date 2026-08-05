@@ -16,14 +16,18 @@ export function buildLicenseRequestPayload(body = {}) {
   if (!EMAIL_RE.test(email)) return { error: 'Ingresá un email de contacto válido' };
   if (!clubNombre) return { error: 'El nombre del club es obligatorio' };
   if (!responsableNombre) return { error: 'El nombre de la persona responsable es obligatorio' };
-  if (!pais || !ciudad) return { error: 'País y ciudad son obligatorios' };
+  // La solicitud pública es solamente el inicio comercial. La ubicación y
+  // los datos operativos se completan después, desde la configuración guiada
+  // de la sede, una vez que el acceso y el plan estén definidos.
 
   return {
     data: {
       club_nombre: clubNombre,
       club_direccion: text(body.club_direccion, 240) || null,
-      pais,
-      ciudad,
+      // La tabla histórica todavía exige estos campos. Conservamos una marca
+      // explícita hasta que la sede los complete en el asistente guiado.
+      pais: pais || 'Pendiente de completar',
+      ciudad: ciudad || 'Pendiente de completar',
       provincia_estado: text(body.provincia_estado, 120) || null,
       club_telefono: text(body.club_telefono, 80) || null,
       club_email: text(body.club_email, 254).toLowerCase() || null,
