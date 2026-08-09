@@ -69,6 +69,7 @@ import { mountAdminJugadoresRoutes } from './routes/adminJugadores.js';
 import { mountAdminCoreRoutes } from './routes/adminCore.js';
 import { mountAdminProfesoresRoutes } from './routes/adminProfesores.js';
 import { mountAdminTorneosResumenStatsRoutes } from './routes/adminTorneosResumenStats.js';
+import { mountSupportTicketsRoutes } from './routes/supportTickets.js';
 import { mountTorneoInteresRoutes } from './routes/torneoInteres.js';
 import { mountListaEsperaGeneralRoutes } from './routes/listaEsperaGeneral.js';
 import { mountLogrosPremiosRoutes } from './routes/logrosPremios.js';
@@ -2759,6 +2760,12 @@ mountPadcoinsReportesRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountAdminTorneosResumenStatsRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountSupportTicketsRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
