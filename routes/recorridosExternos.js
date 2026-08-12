@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import multer from 'multer';
 import { requireAuthenticatedUser, requireSuperAdminUser } from '../lib/authAccess.js';
 import { createNotificacion } from '../utils/notificaciones.js';
+import { analyzeRecorridoWithChivi } from '../src/services/chiviRecorridoAnalysis.js';
 
 const BUCKET = 'recorridos-externos';
 const CATEGORIES = new Set(['categoria_nivel', 'ranking', 'puntos', 'partidos', 'torneos_posiciones', 'estadisticas', 'logros']);
@@ -115,6 +116,7 @@ export function mountRecorridosExternosRoutes(app, deps) {
       if (!Number.isInteger(id) || id < 1 || !STATES.has(estado)) return res.status(400).json({ error: 'Resolución inválida' });
       if (['requiere_informacion', 'rechazado'].includes(estado) && !nota) return res.status(400).json({ error: 'Escribí una explicación para el jugador.' });
       const datos = req.body?.datos_reconocidos && typeof req.body.datos_reconocidos === 'object' ? req.body.datos_reconocidos : {};
+      if (estado === 'aprobado' && Object.keys(datos).length === 0) return res.status(400).json({ error: 'Confirmá al menos un dato reconocido antes de aprobar.' });
       const { data, error } = await supabaseAdmin.from('recorridos_externos').update({
         estado, nota_revision: nota, datos_reconocidos: datos, revisado_por: auth.user.id,
         revisado_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -130,6 +132,22 @@ export function mountRecorridosExternosRoutes(app, deps) {
     } catch (error) {
       console.error('PATCH /api/admin/recorridos-externos/:id', error.message);
       return res.status(500).json({ error: 'No se pudo actualizar la solicitud' });
+    }
+  });
+
+  app.post('/api/admin/recorridos-externos/:id/analizar', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, deps); if (!auth) return;
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Solicitud inválida' });
+      const { data: row, error } = await supabaseAdmin.from('recorridos_externos').select('*').eq('id', id).maybeSingle();
+      if (error) throw error;
+      if (!row) return res.status(404).json({ error: 'Solicitud no encontrada' });
+      const analisis = await analyzeRecorridoWithChivi({ supabaseAdmin, row });
+      return res.json({ ok: true, analisis });
+    } catch (error) {
+      console.error('POST /api/admin/recorridos-externos/:id/analizar', error.message);
+      return res.status(500).json({ error: error.message || 'Chivi no pudo analizar las evidencias' });
     }
   });
 }
