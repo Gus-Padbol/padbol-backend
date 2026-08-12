@@ -70,6 +70,7 @@ import { mountAdminCoreRoutes } from './routes/adminCore.js';
 import { mountAdminProfesoresRoutes } from './routes/adminProfesores.js';
 import { mountAdminTorneosResumenStatsRoutes } from './routes/adminTorneosResumenStats.js';
 import { mountSupportTicketsRoutes } from './routes/supportTickets.js';
+import { mountRecorridosExternosRoutes } from './routes/recorridosExternos.js';
 import { mountTorneoInteresRoutes } from './routes/torneoInteres.js';
 import { mountListaEsperaGeneralRoutes } from './routes/listaEsperaGeneral.js';
 import { mountLogrosPremiosRoutes } from './routes/logrosPremios.js';
@@ -2766,6 +2767,12 @@ mountAdminTorneosResumenStatsRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountSupportTicketsRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountRecorridosExternosRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
