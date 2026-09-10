@@ -1,3 +1,4 @@
+import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
@@ -206,6 +207,8 @@ globalThis.WebSocket = ws;
 dotenv.config();
 assertStagingIsolation();
 const runtime = backendRuntime();
+// Capture transport only for the opt-in, exact-GET QA diagnostic; the global guard stays unchanged.
+const runWhatsappMetaQaStartupCheck = createWhatsappMetaQaStartupCheck();
 installStagingFetchGuard();
 const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
@@ -5096,6 +5099,7 @@ app.use((err, _req, res, _next) => {
 (async () => {
   await verifyPgPoolConnection();
   httpServer.listen(PORT, () => {
+    void runWhatsappMetaQaStartupCheck();
     console.log(`🚀 Padbol Match API running on port ${PORT}`);
     console.log('✅ Rutas rol: GET /api/auth/mi-rol');
     console.log('✅ Rutas rol: GET /api/usuarios/mi-rol');
