@@ -29,12 +29,13 @@
     "socket.io": "^4.8.3",
     "stripe": "^17.7.0",
     "twilio": "^5.13.1",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "luxon": "^3.7.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   },
   "engines": {
-    "node": "18.x"
+    "node": "22.x"
   }
 }

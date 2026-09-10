@@ -1,3 +1,7 @@
+import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
+import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
+import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
+import { mountReleaseRoutes } from './lib/releaseServices.js';
 import http from 'http';
 import ws from 'ws';
 import express from 'express';
@@ -9,7 +13,7 @@ import twilio from 'twilio';
 import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
 import Stripe from 'stripe';
-import cron from 'node-cron';
+import cronLibrary from 'node-cron';
 import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
 import { createContentAdminRouter } from './routes/contentAdmin.js';
@@ -200,13 +204,19 @@ import {
 globalThis.WebSocket = ws;
 
 dotenv.config();
+assertStagingIsolation();
+const runtime = backendRuntime();
+installStagingFetchGuard();
+const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
+const configuredOrigins = String(process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || '').split(',').map(value => value.trim()).filter(Boolean);
 const app = express();
 configureRateLimitTrustProxy(app);
 const httpServer = http.createServer(app);
 const io = new SocketIOServer(httpServer, {
   cors: {
     origin: [
+      ...configuredOrigins,
       'https://padbolmatch.com',
       'https://www.padbolmatch.com',
       'http://localhost:3000',
@@ -219,11 +229,12 @@ const io = new SocketIOServer(httpServer, {
     credentials: true,
   },
 });
-const PORT = 3001;
+const PORT = Number(process.env.PORT || 3001);
 
 // CORS
 app.use(cors({
   origin: [
+    ...configuredOrigins,
     'https://padbolmatch.com',
     'https://www.padbolmatch.com',
     'http://localhost:3000',
@@ -238,6 +249,10 @@ app.use(cors({
   credentials: true,
 }));
 applySecurityHeaders(app);
+app.use(WHATSAPP_CLOUD_WEBHOOK_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (req, _res, next) => {
+  if (Buffer.isBuffer(req.body)) req.rawBody = req.body;
+  next();
+});
 app.use(express.json({
   verify: (req, _res, buf) => {
     if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe') {
@@ -247,6 +262,10 @@ app.use(express.json({
 }));
 
 app.use(publicReadRateLimitIfMatch);
+// Gate SDKs with their own HTTP transports before any payment persistence.
+app.use(['/api/crear-preferencia', '/api/crear-pago-stripe', '/api/pago-exitoso',
+  '/api/pago-exitoso-stripe', '/api/webhooks/mercadopago', '/api/webhooks/stripe'],
+  externalOperationsGate(runtime));
 
 // Supabase (desde .env)
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -512,6 +531,7 @@ async function createMercadoPagoPreferenceInternal({
   extras = [],
   pricing,
 }) {
+  assertOutboundDeliveryEnabled(runtime);
   const client = await resolveMercadoPagoClient(sedeId);
   const paymentExtras = extras ?? reservaData?.extras ?? [];
   const paymentPricing = pricing ?? {
@@ -635,15 +655,16 @@ if (!process.env.FRONTEND_URL) {
 const TWILIO_ACCOUNT_SID   = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN    = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
-const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+const twilioTransport = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+const twilioClient = new Proxy(twilioTransport, {
+  get(target, property, receiver) {
+    if (property === 'messages' && !runtime.outboundDeliveryEnabled) return { create: async () => ({ disabled: true }) };
+    return Reflect.get(target, property, receiver);
+  },
+});
 
 // ─── JWT + user_roles (mi-rol para panel /admin) ─────────────────────────────
-const LEGACY_SUPER_ADMIN_EMAILS_API = [
-  'padbolinternacional@gmail.com',
-  'admin@padbol.com',
-  'sm@padbol.com',
-  'juanpablo@padbol.com',
-];
+const LEGACY_SUPER_ADMIN_EMAILS_API = [];
 
 async function authUserFromBearer(req) {
   const auth = String(req.headers.authorization || '');
@@ -662,7 +683,7 @@ async function fetchUserRoleRow(email) {
   // supabaseAdmin: bypass RLS (el client anon puede no ver user_roles).
   let q = await supabaseAdmin
     .from('user_roles')
-    .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
+    .select('role, alcance, organizacion_id, provincia, ciudad, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
     .eq('email', em)
     .maybeSingle();
   if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
@@ -678,24 +699,7 @@ async function fetchUserRoleRow(email) {
 
 /** Rol autenticado: `user_id` (JWT) primero, luego email. Service role bypass RLS. */
 async function fetchUserRoleRowForAuthUser(user) {
-  if (!user?.email) return null;
-  const uid = user.id ? String(user.id).trim() : '';
-  if (uid) {
-    let q = await supabaseAdmin
-      .from('user_roles')
-      .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
-      .eq('user_id', uid)
-      .maybeSingle();
-    if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
-      q = await supabaseAdmin
-        .from('user_roles')
-        .select('role, sede_id, nombre, pais, email')
-        .eq('user_id', uid)
-        .maybeSingle();
-    }
-    if (!q.error && q.data) return q.data;
-  }
-  return fetchUserRoleRow(user.email);
+  return resolveStoredRoleForVerifiedUser(supabaseAdmin, user);
 }
 
 function buildMiRolJsonPayload(email, row) {
@@ -725,6 +729,10 @@ function buildMiRolJsonPayload(email, row) {
     role: rol,
     sede_id: Number.isFinite(sedeIdNum) ? sedeIdNum : null,
     sedeId: Number.isFinite(sedeIdNum) ? sedeIdNum : null,
+    alcance: row.alcance || null,
+    organizacion_id: row.organizacion_id || null,
+    provincia: row.provincia || null,
+    ciudad: row.ciudad || null,
     nombre: row.nombre ?? null,
     pais: row.pais ?? null,
     torneosOficialesHabilitados: Boolean(row.torneos_oficiales_habilitados),
@@ -737,7 +745,7 @@ async function fetchUserRoleRowByJwtUserId(userId) {
   if (!uid) return { data: null, error: null };
   let q = await supabaseAdmin
     .from('user_roles')
-    .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados, user_id')
+    .select('role, alcance, organizacion_id, provincia, ciudad, sede_id, nombre, pais, email, torneos_oficiales_habilitados, user_id')
     .eq('user_id', uid)
     .maybeSingle();
   if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
@@ -775,7 +783,8 @@ async function handleGetMiRol(req, res) {
 
     console.log('[mi-rol] lookup:', { userId });
 
-    const { data: row, error: roleError } = await fetchUserRoleRowByJwtUserId(userId);
+    const row = await fetchUserRoleRowForAuthUser(authUser);
+    const roleError = null;
 
     console.log('[mi-rol] user_roles query result:', {
       userId,
@@ -1028,6 +1037,8 @@ mountAdminJugadoresRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountAdminCoreRoutes(app, {
+  resolveTerritorialScope: (req) => releaseServices.adminListScopeFromRequest(req),
+  sedesPermitidasPorScope: (scope) => releaseServices.sedesPermitidasPorScope(scope),
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
@@ -1883,12 +1894,8 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 }
 
 mountTorneosFinalizadosRoutes(app, { pgPool });
-mountPushRoutes(app, {
-  supabaseAdmin,
-  getAuthenticatedUser,
-  fetchUserRoleRowForAuthUser,
-  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
-});
+const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron });
 
 app.post('/api/torneos', async (req, res) => {
   try {
@@ -3798,8 +3805,10 @@ async function runPartidoAutoCancelCron() {
   }
 }
 
-setInterval(runPartidoAutoCancelCron, PARTIDO_AUTO_CANCEL_MS);
-runPartidoAutoCancelCron();
+if (runtime.backgroundJobsEnabled) {
+  setInterval(runPartidoAutoCancelCron, PARTIDO_AUTO_CANCEL_MS);
+  runPartidoAutoCancelCron();
+}
 
 // ===== USUARIOS =====
 
@@ -4672,35 +4681,21 @@ mountJugadorHistorialRoutes(jugadorRouter, { supabaseAdmin, getAuthenticatedUser
 
 const usuariosRouter = express.Router();
 
-// POST /api/usuarios/push-token — Save Expo push token on jugadores_perfil
+// Legacy URL uses the same private installation registry as current clients.
 usuariosRouter.post('/push-token', pushTokensRateLimit, async (req, res) => {
   try {
     const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status).json({ error: authError });
-    }
-
-    const pushToken = req.body?.push_token ?? req.body?.expo_push_token ?? null;
-    if (!pushToken) {
-      return res.status(400).json({ error: 'push_token es requerido' });
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('jugadores_perfil')
-      .update({ push_token: pushToken, expo_push_token: pushToken })
-      .eq('user_id', user.id)
-      .select('id');
-
-    if (error) throw error;
-    if (!data?.length) {
-      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
-    }
-
-    console.log(`✓ POST /api/usuarios/push-token — token guardado para ${user.id}`);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('❌ Error POST /api/usuarios/push-token:', err.message);
-    sendHttpError(res, err);
+    if (!user) return res.status(status || 401).json({ error: authError || 'No autorizado' });
+    const result = await releaseServices.pushService.registerToken({
+      userId: user.id,
+      token: req.body?.token ?? req.body?.push_token ?? req.body?.expo_push_token,
+      platform: req.body?.platform,
+      deviceId: req.body?.deviceId,
+      language: req.body?.language,
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    return res.status(error.status || 503).json({ error: error.message, code: error.code });
   }
 });
 
@@ -4902,6 +4897,7 @@ usuariosRouter.post('/perfil', async (req, res) => {
 usuariosRouter.put('/perfil', handlePutAuthenticatedPerfil);
 
 mountAccountDeletionRoutes(usuariosRouter, {
+  requestDeletion: releaseServices.accountDeletionHandler,
   supabaseAdmin,
   getAuthenticatedUser,
 });

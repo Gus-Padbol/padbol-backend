@@ -1,116 +1,29 @@
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-
+let mobilePushBridge = null;
+export function configureMobilePushBridge(bridge) { mobilePushBridge = bridge; }
+const unavailable = () => ({ ok:false, skipped:true, reason:'secure_delivery_not_configured' });
 export async function sendExpoPushMessages(messages) {
-  const valid = (messages ?? []).filter(
-    (message) => message?.to && String(message.to).startsWith('ExponentPushToken['),
-  );
-  if (!valid.length) return { ok: true, skipped: true };
-
-  const chunks = [];
-  for (let i = 0; i < valid.length; i += 100) {
-    chunks.push(valid.slice(i, i + 100));
-  }
-
-  const results = [];
-  for (const chunk of chunks) {
-    try {
-      const response = await fetch(EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'Accept-Encoding': 'gzip, deflate',
-        },
-        body: JSON.stringify(chunk),
-      });
-      const json = await response.json().catch(() => ({}));
-      results.push(json);
-    } catch (error) {
-      console.error('Push notification error:', error);
-      results.push({ error: error?.message ?? String(error) });
-    }
-  }
-
-  return { ok: true, results };
+  if (!mobilePushBridge) return unavailable();
+  const results=[];
+  for (const message of messages || []) results.push(await mobilePushBridge.send({ tokens:[message.to], title:message.title, body:message.body, data:message.data || {} }));
+  return {ok:true,results};
 }
-
-export async function sendPushToTokens(tokens, title, body, data = {}) {
-  const unique = [...new Set((tokens ?? []).filter(Boolean))];
-  if (!unique.length) return { ok: true, skipped: true };
-
-  const messages = unique.map((to) => ({
-    to,
-    sound: 'default',
-    title,
-    body,
-    data,
-    color: '#e33030',
-  }));
-
-  return sendExpoPushMessages(messages);
+export async function sendPushToTokens(tokens,title,body,data={}) {
+  return mobilePushBridge ? mobilePushBridge.send({tokens,title,body,data}) : unavailable();
 }
-
-export async function resolveUserPushTokens(supabaseAdmin, userId) {
-  if (!userId) return [];
-
-  const tokens = new Set();
-
-  const { data: rows, error } = await supabaseAdmin
-    .from('push_tokens')
-    .select('token')
-    .eq('user_id', userId);
-
-  if (!error) {
-    (rows ?? []).forEach((row) => {
-      if (row?.token) tokens.add(row.token);
-    });
-  }
-
-  const { data: perfil } = await supabaseAdmin
-    .from('jugadores_perfil')
-    .select('push_token, expo_push_token')
-    .eq('user_id', userId)
-    .maybeSingle();
-
-  const legacy = perfil?.push_token ?? perfil?.expo_push_token ?? null;
-  if (legacy) tokens.add(legacy);
-
-  return [...tokens];
+export async function resolveUserPushTokens(_supabaseAdmin,userId) {
+  return mobilePushBridge && userId ? mobilePushBridge.tokensForUser(userId) : [];
 }
-
-export async function sendPushToUser(supabaseAdmin, userId, { title, body, data = {} }) {
-  const tokens = await resolveUserPushTokens(supabaseAdmin, userId);
-  if (!tokens.length) {
-    console.log('[push]', userId, title, '(sin token)');
-    return { ok: false, skipped: true };
-  }
-
-  return sendPushToTokens(tokens, title, body, data);
+export async function sendPushToUser(_supabaseAdmin,userId,payload) {
+  return mobilePushBridge ? mobilePushBridge.send({userIds:[userId],...payload}) : unavailable();
 }
-
-export async function sendPushToUsers(supabaseAdmin, userIds, payload) {
-  const uniqueIds = [...new Set((userIds ?? []).filter(Boolean))];
-  const tokenSet = new Set();
-
-  await Promise.all(
-    uniqueIds.map(async (userId) => {
-      const tokens = await resolveUserPushTokens(supabaseAdmin, userId);
-      tokens.forEach((token) => tokenSet.add(token));
-    }),
-  );
-
-  return sendPushToTokens([...tokenSet], payload.title, payload.body, payload.data ?? {});
+export async function sendPushToUsers(_supabaseAdmin,userIds,payload) {
+  return mobilePushBridge ? mobilePushBridge.send({userIds:[...new Set(userIds || [])],...payload}) : unavailable();
 }
-
-/** @deprecated */
-export async function sendPushNotification(pushToken, title, body, data = {}) {
-  return sendPushToTokens([pushToken], title, body, data);
+export async function sendPushNotification(token,title,body,data={}) {
+  return sendPushToTokens([token],title,body,data);
 }
-
-/** @deprecated */
-export async function resolveUserPushToken(supabaseAdmin, userId) {
-  const tokens = await resolveUserPushTokens(supabaseAdmin, userId);
-  return tokens[0] ?? null;
+export async function resolveUserPushToken(supabaseAdmin,userId) {
+  return (await resolveUserPushTokens(supabaseAdmin,userId))[0] || null;
 }
 
 export async function collectEquipoUserIds(supabaseAdmin, equipoId) {

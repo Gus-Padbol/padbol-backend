@@ -37,6 +37,7 @@ export function mapAdminRoleRow(row, sedesById = new Map()) {
     rol: role,
     alcance: alcance || null,
     sede_id: sedeId,
+    organizacion_id: row?.organizacion_id || null,
     sede_nombre: sedeId != null ? sedesById.get(sedeId) || null : null,
     pais: row?.pais || null,
     provincia: row?.provincia || null,
@@ -60,6 +61,8 @@ export function mountAdminCoreRoutes(app, {
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails = [],
+  resolveTerritorialScope = null,
+  sedesPermitidasPorScope = null,
 }) {
   const adminDeps = {
     getAuthenticatedUser,
@@ -82,6 +85,17 @@ export function mountAdminCoreRoutes(app, {
 
   app.get('/api/admin/sedes-alcance', async (req, res) => {
     try {
+      if (resolveTerritorialScope && sedesPermitidasPorScope) {
+        const scope = await resolveTerritorialScope(req);
+        if (!scope) return res.status(401).json({ error: 'No autorizado' });
+        if (!['super_admin', 'admin_nacional', 'admin_cadena', 'admin_club', 'empleado'].includes(scope.rol)) {
+          return res.status(403).json({ error: 'No autorizado' });
+        }
+        const allowed = await sedesPermitidasPorScope(scope);
+        return res.json({ rol: scope.rol, alcance: scope.alcance, sede_id: scope.sedeId,
+          organizacion_id: scope.organizacionId, pais: scope.pais, provincia: scope.provincia,
+          ciudad: scope.ciudad, sedes: (allowed.sedes || []).map(sanitizeAdminSede).filter(Boolean) });
+      }
       const auth = await requireAdminUser(req, res, adminDeps);
       if (!auth) return;
       let query = supabaseAdmin.from('sedes').select('*').order('nombre');
