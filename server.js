@@ -425,16 +425,6 @@ function buildMercadoPagoItems({ titulo, moneda, pricing, extras = [] }) {
     });
   }
 
-  const fee = Number(pricing?.fee ?? 0);
-  if (fee > 0) {
-    items.push({
-      title: 'Comisión plataforma (3%)',
-      unit_price: fee,
-      quantity: 1,
-      currency_id: currency,
-    });
-  }
-
   return items;
 }
 
@@ -458,18 +448,6 @@ function buildStripeLineItems({ titulo, moneda, pricing, extras = [] }) {
         unit_amount: toStripeMinorUnits(extra.moneda || moneda, extra.precio),
       },
       quantity: extra.cantidad,
-    });
-  }
-
-  const fee = Number(pricing?.fee ?? 0);
-  if (fee > 0) {
-    line_items.push({
-      price_data: {
-        currency,
-        product_data: { name: 'Comisión plataforma (3%)' },
-        unit_amount: toStripeMinorUnits(currency, fee),
-      },
-      quantity: 1,
     });
   }
 
@@ -516,7 +494,7 @@ async function createMercadoPagoPreferenceInternal({
   const paymentExtras = extras ?? reservaData?.extras ?? [];
   const paymentPricing = pricing ?? {
     base: reservaData?.precio_base ?? precio,
-    fee: reservaData?.platform_fee ?? 0,
+    fee: 0,
     extrasSubtotal: reservaData?.extras_subtotal ?? 0,
     total: precio,
   };
