@@ -178,12 +178,20 @@ async function fetchDeportesPg(pgPool, perfil) {
 
   if (!perfil.user_id) return [];
 
+  // The deployed schema stores sports on the profile; older installations may
+  // additionally have this table. Check before querying to keep transactions
+  // usable when the optional legacy relation is absent.
+  const { rows: relationRows } = await pgPool.query(
+    `SELECT to_regclass('public.jugador_deportes') IS NOT NULL AS available`,
+  );
+  if (!relationRows[0]?.available) return [];
+
   const { rows } = await pgPool.query(
-    `SELECT deporte FROM jugador_deportes WHERE user_id = $1::uuid ORDER BY deporte`,
+    `SELECT deporte FROM public.jugador_deportes WHERE user_id = $1::uuid ORDER BY deporte`,
     [String(perfil.user_id)],
   );
   const list = rows.map((r) => String(r.deporte || '').trim()).filter(Boolean);
-  return list.length ? list : ['padbol'];
+  return list;
 }
 
 async function fetchEquiposDelJugadorPg(pgPool, perfil) {
