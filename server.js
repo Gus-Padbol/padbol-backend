@@ -1,4 +1,5 @@
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
+import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
@@ -209,6 +210,7 @@ assertStagingIsolation();
 const runtime = backendRuntime();
 // Capture transport only for the opt-in, exact-GET QA diagnostic; the global guard stays unchanged.
 const runWhatsappMetaQaStartupCheck = createWhatsappMetaQaStartupCheck();
+const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
 installStagingFetchGuard();
 const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
@@ -1898,7 +1900,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
-  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron });
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory });
 
 app.post('/api/torneos', async (req, res) => {
   try {
