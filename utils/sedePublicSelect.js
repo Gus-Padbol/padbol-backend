@@ -51,6 +51,8 @@ export const SEDE_PUBLIC_COLUMNS = [
 export const SEDE_APP_SELECT = SEDE_PUBLIC_COLUMNS.join(', ');
 
 export const SEDE_PERFIL_SELECT = SEDE_APP_SELECT;
+// Only the authorized server uses this projection. Always map before returning.
+export const SEDE_PAYMENT_STATUS_SELECT = `${SEDE_APP_SELECT}, mp_access_token, stripe_account_id`;
 
 /**
  * Patrón de nombres de campos que NUNCA deben salir en una respuesta de sede
@@ -58,6 +60,23 @@ export const SEDE_PERFIL_SELECT = SEDE_APP_SELECT;
  * tests además del whitelist de SEDE_PUBLIC_COLUMNS.
  */
 export const SEDE_SECRET_FIELD_PATTERN = /(token|secret|api_key|apikey|private|credencial|credential|password|client_id)/i;
+
+const PAYMENT_INDICATOR_KEYS = new Set(['mercadopago_configurado', 'stripe_configurado']);
+export function isPrivateSedeKey(key) {
+  return !PAYMENT_INDICATOR_KEYS.has(key) && (
+    SEDE_SECRET_FIELD_PATTERN.test(key) || /^(mp_|mercadopago_|stripe_)/i.test(key)
+  );
+}
+
+/** Strip private keys at every depth; keep administrative workflow fields. */
+export function stripPrivateSedeValues(value) {
+  if (Array.isArray(value)) return value.map(stripPrivateSedeValues);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !isPrivateSedeKey(key))
+    .map(([key, item]) => [key, stripPrivateSedeValues(item)]));
+}
+
 
 /**
  * Indicadores booleanos no sensibles de configuración de pagos.
@@ -81,11 +100,22 @@ export function pickPublicSedeRow(row) {
   const out = {};
   for (const key of SEDE_PUBLIC_COLUMNS) {
     if (Object.prototype.hasOwnProperty.call(row, key)) {
-      out[key] = row[key];
+      out[key] = stripPrivateSedeValues(row[key]);
     }
   }
   if (row.hero_foto_url !== undefined) {
     out.hero_foto_url = row.hero_foto_url;
   }
   return out;
+}
+
+export function pickPublicSedeWithPaymentStatus(row) {
+  if (!row || typeof row !== 'object') return row ?? null;
+  return { ...pickPublicSedeRow(row), ...buildSedePagosIndicadores(row) };
+}
+
+/** Admin pending rows keep their workflow fields, never stored payment values. */
+export function redactSedePaymentValues(row) {
+  if (!row || typeof row !== 'object') return row ?? null;
+  return { ...stripPrivateSedeValues(row), ...buildSedePagosIndicadores(row) };
 }

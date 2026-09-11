@@ -1,3 +1,4 @@
+import { pickPublicSedeWithPaymentStatus, redactSedePaymentValues } from '../utils/sedePublicSelect.js';
 import { buildSedeReleaseInsert } from '../lib/sedeReleaseContract.js';
 import { resolveStoredRoleForVerifiedUser } from '../lib/roleIdentity.js';
 import { DateTime } from 'luxon';
@@ -13,7 +14,7 @@ import crypto from 'crypto';
 import twilio from 'twilio';
 import { strictSuperAdminRole } from '../lib/fipaDocumentLibrary.js';
 import { registerAdminOrganizationsRoutes } from '../lib/adminOrganizations.js';
-import { registerSedeIncentiveRoutes } from '../lib/sedeIncentives.js';
+import { registerSedeIncentiveRoutes } from '../lib/sedeIncentivesV4.js';
 
 // Ported from the validated local release. Mounted into the existing server; no second runtime.
 export function mountCommercialReleaseRoutes(app, { supabaseAdmin, runtime, authUserFromBearer, assertSuperAdminReq, adminListScopeFromRequest, sedesPermitidasPorScope }) {
@@ -377,7 +378,7 @@ app.post('/api/sedes', async (req, res) => {
       deportes: deportesBody,
     });
 
-    res.status(201).json(created);
+    res.status(201).json(pickPublicSedeWithPaymentStatus(created));
   } catch (err) {
     console.error('❌ POST /api/sedes:', err.message);
     res.status(err.status || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
@@ -1507,7 +1508,7 @@ app.post('/api/invitacion/:token/completar', async (req, res) => {
       origen: 'invitacion_admin_club',
     });
 
-    res.status(201).json({ ok: true, sede: created, sede_id: sedeId });
+    res.status(201).json({ ok: true, sede: pickPublicSedeWithPaymentStatus(created), sede_id: sedeId });
   } catch (err) {
     const st = err.status || 500;
     if (st >= 400 && st < 500) return res.status(st).json({ error: err.message || String(err) });
@@ -1789,7 +1790,7 @@ app.get('/api/admin/sedes-pendientes', async (req, res) => {
     if (estado && estado !== 'todas' && estado !== 'todos') q = q.eq('estado', estado);
     const { data, error } = await q;
     if (error) throw error;
-    res.json(data || []);
+    res.json((data || []).map(redactSedePaymentValues));
   } catch (err) {
     console.error('❌ GET /api/admin/sedes-pendientes:', err.message);
     res.status(err.status || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });

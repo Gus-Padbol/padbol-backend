@@ -4,12 +4,15 @@ import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
+import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
 import http from 'http';
 import ws from 'ws';
 import express from 'express';
 import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
 import { createClient } from '@supabase/supabase-js';
+import { buildCrearTorneoPayload } from './lib/torneos/crearTorneoPayload.js';
+import { enrichSedesWithCourtCatalog, normalizeAvailabilitySport } from './lib/sedeCourtCatalog.js';
 import pg from 'pg';
 import twilio from 'twilio';
 import dotenv from 'dotenv';
@@ -82,7 +85,7 @@ import { mountListaEsperaGeneralRoutes } from './routes/listaEsperaGeneral.js';
 import { mountLogrosPremiosRoutes } from './routes/logrosPremios.js';
 import { mountLigasPremiosRoutes } from './routes/ligasPremios.js';
 import { enrichSedeWithHeroPhoto } from './utils/sedeHero.js';
-import { SEDE_APP_SELECT } from './utils/sedePublicSelect.js';
+import { SEDE_PAYMENT_STATUS_SELECT, pickPublicSedeWithPaymentStatus } from './utils/sedePublicSelect.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { mountStripeWebhookRoutes } from './routes/stripeWebhook.js';
 import {
@@ -134,6 +137,9 @@ import {
 } from './lib/torneos/knockoutBracketService.js';
 import { generarKnockoutDesdeGrupos } from './lib/torneos/generarKnockoutDesdeGruposService.js';
 import { cargarResultadoManualPartidoTorneo } from './lib/torneos/cargarResultadoManualPartidoTorneoService.js';
+import { mountManualPlayedDateRoutes } from './lib/torneos/manualPlayedDateService.js';
+import { MANUAL_PLAYED_DATE_CAPABILITY } from './lib/torneos/manualPlayedDateCapability.js';
+import { mountManualPlayedDateCapabilityRoute } from './lib/torneos/manualPlayedDateCapabilityService.js';
 import {
   handleGetTorneoPermisos,
   resolveTorneoAdminAccess,
@@ -449,16 +455,6 @@ function buildMercadoPagoItems({ titulo, moneda, pricing, extras = [] }) {
     });
   }
 
-  const fee = Number(pricing?.fee ?? 0);
-  if (fee > 0) {
-    items.push({
-      title: 'Comisión plataforma (3%)',
-      unit_price: fee,
-      quantity: 1,
-      currency_id: currency,
-    });
-  }
-
   return items;
 }
 
@@ -482,18 +478,6 @@ function buildStripeLineItems({ titulo, moneda, pricing, extras = [] }) {
         unit_amount: toStripeMinorUnits(extra.moneda || moneda, extra.precio),
       },
       quantity: extra.cantidad,
-    });
-  }
-
-  const fee = Number(pricing?.fee ?? 0);
-  if (fee > 0) {
-    line_items.push({
-      price_data: {
-        currency,
-        product_data: { name: 'Comisión plataforma (3%)' },
-        unit_amount: toStripeMinorUnits(currency, fee),
-      },
-      quantity: 1,
     });
   }
 
@@ -541,7 +525,7 @@ async function createMercadoPagoPreferenceInternal({
   const paymentExtras = extras ?? reservaData?.extras ?? [];
   const paymentPricing = pricing ?? {
     base: reservaData?.precio_base ?? precio,
-    fee: reservaData?.platform_fee ?? 0,
+    fee: 0,
     extrasSubtotal: reservaData?.extras_subtotal ?? 0,
     total: precio,
   };
@@ -945,10 +929,11 @@ function reservaBelongsToUser(reserva, user, qrUserId) {
 // GET sedes
 app.get('/api/sedes', async (req, res) => {
   try {
+    const sport = normalizeAvailabilitySport(req.query.deporte);
     console.log('📡 GET /api/sedes - Conectando a Supabase...');
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('sedes')
-      .select(SEDE_APP_SELECT);
+      .select(SEDE_PAYMENT_STATUS_SELECT);
 
     if (error) {
       console.error('❌ Error Supabase GET /api/sedes:', summarizeError(error));
@@ -956,7 +941,8 @@ app.get('/api/sedes', async (req, res) => {
     }
 
     console.log(`✓ GET /api/sedes — ${(data || []).length} sede(s)`);
-    res.json(data || []);
+    const sedes = await enrichSedesWithCourtCatalog(supabaseAdmin, (data || []).map(pickPublicSedeWithPaymentStatus));
+    res.json(sport ? sedes.filter(sede => sede.deportes_disponibles.includes(sport)) : sedes);
   } catch (err) {
     console.error('❌ Error GET /api/sedes:', err.message);
     sendHttpError(res, err);
@@ -1136,7 +1122,7 @@ app.get('/api/sedes/:id', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('sedes')
-      .select(SEDE_APP_SELECT)
+      .select(SEDE_PAYMENT_STATUS_SELECT)
       .eq('id', sedeId)
       .maybeSingle();
 
@@ -1145,7 +1131,8 @@ app.get('/api/sedes/:id', async (req, res) => {
       return res.status(404).json({ error: 'Sede no encontrada' });
     }
 
-    res.json(enrichSedeWithHeroPhoto(data));
+    const [withCatalog] = await enrichSedesWithCourtCatalog(supabaseAdmin, [pickPublicSedeWithPaymentStatus(data)]);
+    res.json(enrichSedeWithHeroPhoto(withCatalog));
   } catch (err) {
     console.error('❌ Error GET /api/sedes/:id:', err.message);
     sendHttpError(res, err);
@@ -1210,6 +1197,7 @@ app.get('/api/disponibilidad', async (req, res) => {
       fecha,
       duracionMinutos,
       expandCourts,
+      deporte: req.query.deporte,
     });
 
     if (!slots) {
@@ -1904,25 +1892,16 @@ const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticate
 
 app.post('/api/torneos', async (req, res) => {
   try {
-    const { nombre, sede_id, nivel_torneo, tipo_torneo, fecha_inicio, fecha_fin, cantidad_equipos, es_multisede, created_by } = req.body;
-    const targetSedeId = sede_id != null && sede_id !== '' ? Number(sede_id) : null;
+    const { sede_id } = req.body;
+    const targetSedeId = req.body.es_multisede === true ? null : (sede_id != null && sede_id !== '' ? Number(sede_id) : null);
     const auth = await requireTorneoAdminForSede(req, res, targetSedeId);
     if (!auth) return;
 
-    const { data, error } = await supabase
+    const payload = buildCrearTorneoPayload(req.body, auth.user.id);
+    // The JWT/role/sede guard above authorizes this write; the anon client has no user JWT.
+    const { data, error } = await supabaseAdmin
       .from('torneos')
-      .insert([{
-        nombre,
-        sede_id: sede_id || null,
-        nivel_torneo,
-        tipo_torneo,
-        estado: 'planificacion',
-        fecha_inicio,
-        fecha_fin,
-        cantidad_equipos,
-        es_multisede,
-        created_by,
-      }])
+      .insert([payload])
       .select();
 
     if (error) throw error;
@@ -2040,19 +2019,14 @@ app.put('/api/torneos/:id', async (req, res) => {
 
     const { nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin } = req.body;
 
-    const { data, error } = await supabase
-      .from('torneos')
-      .update({
-        nombre,
-        nivel_torneo,
-        tipo_torneo,
-        estado,
-        fecha_inicio,
-        fecha_fin,
-        updated_at: new Date(),
-      })
-      .eq('id', id)
-      .select();
+    const { patch, torneo: current } = await prepareTournamentUpdate(supabaseAdmin, id, {
+      nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin,
+    });
+    let mutation = supabase.from('torneos').update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id).eq('estado', current.estado);
+    mutation = current.updated_at == null ? mutation.is('updated_at', null) : mutation.eq('updated_at', current.updated_at);
+    const { data, error } = await mutation.select();
+    if (!error && !data?.length) return res.status(409).json({ code: 'TORNEO_CHANGED_RETRY', error: 'El torneo cambió. Actualiza antes de volver a guardar.' });
 
     if (error) throw error;
     res.json(data);
@@ -2409,6 +2383,11 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       });
     }
 
+    const closureEvidence = getTournamentCompletionEvidence(torneo, partidos || [], equipos || []);
+    if (!closureEvidence.verified) return res.status(409).json({
+      code: 'TORNEO_CLOSURE_UNVERIFIED', error: 'Completa los resultados y la definición del campeón antes de cerrar el torneo.',
+    });
+
     const { rankingRows, source } = buildFinalRankingForTorneo({
       equipos: equipos || [],
       partidos: partidos || [],
@@ -2443,13 +2422,13 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
     );
 
     // Mark torneo as finalizado
-    const { data: torneoFinal, error: errFinal } = await supabase
-      .from('torneos')
-      .update({ estado: 'finalizado', updated_at: new Date() })
-      .eq('id', id)
-      .select()
-      .single();
+    let closeMutation = supabase.from('torneos')
+      .update({ estado: 'finalizado', fecha_fin: torneo.estado === 'finalizado' ? torneo.fecha_fin : new Date().toISOString().slice(0, 10), updated_at: new Date() })
+      .eq('id', id).eq('estado', torneo.estado);
+    closeMutation = torneo.updated_at == null ? closeMutation.is('updated_at', null) : closeMutation.eq('updated_at', torneo.updated_at);
+    const { data: torneoFinal, error: errFinal } = await closeMutation.select().maybeSingle();
     if (errFinal) throw errFinal;
+    if (!torneoFinal) return res.status(409).json({ code: 'TORNEO_CHANGED_RETRY', error: 'El torneo cambió. Actualiza antes de volver a cerrar.' });
 
     const jugadorUserIds = collectUserIdsFromEquipos(equipos);
     await Promise.all(
@@ -2888,6 +2867,9 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
     sendHttpError(res, err);
   }
 });
+
+mountManualPlayedDateCapabilityRoute(app, { supabaseAdmin, getAuthenticatedUser, capabilities: MANUAL_PLAYED_DATE_CAPABILITY });
+mountManualPlayedDateRoutes(app, { supabaseAdmin, requireTorneoAdminByTorneoId, enabled: MANUAL_PLAYED_DATE_CAPABILITY.writeEnabled });
 
 app.post('/api/torneos/:torneoId/partidos/:partidoId/resultado', async (req, res) => {
   try {

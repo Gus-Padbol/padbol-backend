@@ -1,4 +1,5 @@
 import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
+import { enrichSedesWithCourtCatalog } from '../lib/sedeCourtCatalog.js';
 import {
   enrichSedeWithHeroPhoto,
   capSedeFotoUrls,
@@ -102,59 +103,6 @@ function collectSedeFotos(sede, hubImageUrl = null) {
   return [...new Set(urls.filter(Boolean))];
 }
 
-function normalizeDeporteKey(value) {
-  const key = String(value ?? 'padbol').trim().toLowerCase();
-  if (key === 'futbol') return 'futbol_5';
-  return key || 'padbol';
-}
-
-async function fetchDeportesDisponiblesForSede(supabase, sedeId, sede) {
-  const tables = ['canchas', 'cancha'];
-
-  for (const table of tables) {
-    try {
-      const { data, error } = await supabase
-        .from(table)
-        .select('deporte, sport, tipo_deporte, id')
-        .eq('sede_id', sedeId);
-
-      if (error) throw error;
-      if (!data?.length) continue;
-
-      const counts = new Map();
-      for (const row of data) {
-        const deporte = normalizeDeporteKey(row.deporte ?? row.sport ?? row.tipo_deporte);
-        counts.set(deporte, (counts.get(deporte) ?? 0) + 1);
-      }
-
-      return [...counts.entries()]
-        .map(([deporte, canchas_count]) => ({ deporte, canchas_count }))
-        .sort((a, b) => a.deporte.localeCompare(b.deporte));
-    } catch {
-      // try next table or fallback
-    }
-  }
-
-  const deportesList = Array.isArray(sede?.deportes_disponibles) && sede.deportes_disponibles.length > 0
-    ? sede.deportes_disponibles.map(normalizeDeporteKey)
-    : ['padbol'];
-
-  const uniqueDeportes = [...new Set(deportesList)];
-  const totalCanchas = Number(sede?.cantidad_canchas) > 0
-    ? Number(sede.cantidad_canchas)
-    : uniqueDeportes.length;
-
-  return uniqueDeportes.map((deporte, index) => {
-    const base = Math.floor(totalCanchas / uniqueDeportes.length);
-    const remainder = totalCanchas % uniqueDeportes.length;
-    const canchas_count = base + (index < remainder ? 1 : 0);
-    return {
-      deporte,
-      canchas_count: Math.max(canchas_count, 1),
-    };
-  });
-}
-
 async function fetchHubHeroImage(supabaseAdmin, deporte = 'padbol') {
   try {
     const { data, error } = await supabaseAdmin
@@ -207,24 +155,27 @@ export function mountSedesProfileRoutes(app, {
         return res.status(404).json({ error: 'Sede no encontrada' });
       }
 
-      const sedeEnriched = enrichSedeWithHeroPhoto(sede);
+      const [withCatalog] = await enrichSedesWithCourtCatalog(supabaseAdmin, [sede]);
+      const sedeEnriched = enrichSedeWithHeroPhoto(withCatalog);
       const deporte = (sedeEnriched.deportes_disponibles?.[0] ?? 'padbol').toLowerCase();
       const hubHero = await fetchHubHeroImage(supabaseAdmin, deporte);
       const fotos = collectSedeFotos(sedeEnriched, hubHero);
       const horarios = buildHorarios(sedeEnriched);
       const coords = buildCoords(sedeEnriched);
-      const deportesDisponibles = await fetchDeportesDisponiblesForSede(supabase, sedeId, sedeEnriched);
-      const canchasCount = deportesDisponibles.reduce(
-        (sum, item) => sum + (item.canchas_count ?? 0),
-        0,
-      ) || (Number(sedeEnriched.cantidad_canchas) > 0 ? Number(sedeEnriched.cantidad_canchas) : null);
+      const deportesDisponibles = sedeEnriched.canchas_por_deporte.map(({ deporte, cantidad }) => ({ deporte, canchas_count: cantidad }));
+      const canchasCount = sedeEnriched.canchas_activas.length;
 
       const tagline = sedeEnriched.slogan ?? sedeEnriched.descripcion ?? null;
       const amenities = normalizeSedeAmenities(sedeEnriched.amenities ?? []);
       const historia = sedeEnriched.historia ?? sedeEnriched.descripcion_larga ?? null;
 
       res.json({
-        sede: pickPublicSedeRow(sedeEnriched),
+        sede: {
+          ...pickPublicSedeRow(sedeEnriched),
+          catalogo_canchas_configurado: sedeEnriched.catalogo_canchas_configurado,
+          canchas_activas: sedeEnriched.canchas_activas,
+          canchas_por_deporte: sedeEnriched.canchas_por_deporte,
+        },
         hero_foto_url: sedeEnriched.hero_foto_url ?? null,
         foto_portada: sedeEnriched.foto_portada ?? null,
         fotos_destacadas: sedeEnriched.fotos_destacadas ?? [],

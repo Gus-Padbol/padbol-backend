@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "tenantId": "00000000-0000-4000-8000-000000000001",
+  "draftId": "00000000-0000-4000-8000-000000000002",
+  "revision": 1,
+  "status": "draft",
+  "enabled": false,
+  "locale": "es",
+  "contentStatus": "synthetic",
+  "greeting": { "text": "[SINTÉTICO] Saludo de ejemplo para revisar en el editor." },
+  "topics": [
+    { "id": "example_topic", "label": "[SINTÉTICO] Tema de ejemplo", "savedReplyId": "example_reply" }
+  ],
+  "savedReplies": [
+    { "id": "example_reply", "text": "[SINTÉTICO] Contenido de ejemplo pendiente de reemplazo y aprobación." }
+  ],
+  "fallback": { "text": "[SINTÉTICO] Respuesta alternativa de ejemplo." },
+  "humanHandoff": { "text": "[SINTÉTICO] Vista previa del pedido de atención humana; no se ha registrado un pedido." }
+}

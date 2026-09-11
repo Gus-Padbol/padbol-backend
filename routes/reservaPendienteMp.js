@@ -328,6 +328,9 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
     canchaText,
   });
 
+  // Only a NEW reservation created by the authenticated player checkout is stamped.
+  // Reusing/paying a manual or historical reservation above never grants provenance.
+  const creationOrigin = authUserId && quote && sedeId ? 'checkout_jugador_v1' : null;
   let reservaId;
   try {
     const insertWithPricing = paymentProvider
@@ -335,24 +338,24 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
            sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
            nombre, email, telefono, whatsapp,
            nivel, precio, precio_esperado, moneda, pricing_snapshot, payment_provider,
-           estado, pago_estado, duracion_minutos, user_id
+           estado, pago_estado, duracion_minutos, user_id, origen_creacion
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8,
            $9, $10, $11, $12,
            $13, $14, $15, $16, $17::jsonb, $18,
-           'pendiente', 'pendiente', $19, $20
+           'pendiente', 'pendiente', $19, $20, $21
          )
          RETURNING id`
       : `INSERT INTO reservas (
            sede, sede_id, fecha, hora, hora_inicio, hora_fin, cancha, cancha_id,
            nombre, email, telefono, whatsapp,
            nivel, precio, precio_esperado, moneda, pricing_snapshot,
-           estado, pago_estado, duracion_minutos, user_id
+           estado, pago_estado, duracion_minutos, user_id, origen_creacion
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8,
            $9, $10, $11, $12,
            $13, $14, $15, $16, $17::jsonb,
-           'pendiente', 'pendiente', $18, $19
+           'pendiente', 'pendiente', $18, $19, $20
          )
          RETURNING id`;
 
@@ -378,6 +381,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
         paymentProvider,
         duracionMinutos,
         authUserId || input.user_id || null,
+        creationOrigin,
       ]
       : [
         sedeNombre,
@@ -399,6 +403,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
         quote?.pricing_snapshot ? JSON.stringify(quote.pricing_snapshot) : null,
         duracionMinutos,
         authUserId || input.user_id || null,
+        creationOrigin,
       ];
 
     const { rows } = await pgPool.query(insertWithPricing, insertParams);

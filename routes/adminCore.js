@@ -1,19 +1,10 @@
 import { requireAdminUser, requireSuperAdminUser } from '../lib/authAccess.js';
 
-const SENSITIVE_SEDE_KEYS = new Set([
-  'mp_access_token',
-  'mp_public_key',
-  'stripe_secret_key',
-  'stripe_webhook_secret',
-  'password',
-  'secret',
-]);
+import { redactSedePaymentValues } from '../utils/sedePublicSelect.js';
 
 export function sanitizeAdminSede(row) {
   if (!row || typeof row !== 'object') return null;
-  return Object.fromEntries(
-    Object.entries(row).filter(([key]) => !SENSITIVE_SEDE_KEYS.has(String(key).toLowerCase())),
-  );
+  return redactSedePaymentValues(row);
 }
 
 export function mapAdminRoleRow(row, sedesById = new Map()) {
