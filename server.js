@@ -5,7 +5,9 @@ import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, asser
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
 import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, registerWhatsappAdminRoutes } from './lib/whatsappAdmin.js';
 import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
-import { createSupabaseCrmRepository } from './lib/crmService.js';
+import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
+import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
+import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
 import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
 import http from 'http';
@@ -710,6 +712,12 @@ const crmAdminService = createCrmAdminService({
   superAdminEmails: whatsappSuperAdminEmails,
 });
 registerCrmAdminRoutes(app, { crmAdminService, authUserFromBearer, fetchUserRoleRow });
+
+const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
+registerCrmInboundRoutes(app, {
+  crmService,
+  emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
+});
 
 /** Rol autenticado: `user_id` (JWT) primero, luego email. Service role bypass RLS. */
 async function fetchUserRoleRowForAuthUser(user) {
