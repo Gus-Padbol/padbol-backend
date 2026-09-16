@@ -3,6 +3,9 @@ import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSe
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
+import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, registerWhatsappAdminRoutes } from './lib/whatsappAdmin.js';
+import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
+import { createSupabaseCrmRepository } from './lib/crmService.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
 import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
 import http from 'http';
@@ -685,6 +688,28 @@ async function fetchUserRoleRow(email) {
   if (q.error) return null;
   return q.data;
 }
+
+const whatsappOperators = new Set(
+  String(process.env.WHATSAPP_ASSISTANT_OPERATORS ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
+);
+const whatsappSuperAdminEmails = new Set(LEGACY_SUPER_ADMIN_EMAILS_API);
+
+const whatsappAdminService = createWhatsappAdminService({
+  repository: createSupabaseWhatsappAdminRepository(supabaseAdmin),
+  operators: whatsappOperators,
+  superAdminEmails: whatsappSuperAdminEmails,
+});
+registerWhatsappAdminRoutes(app, { whatsappAdminService, authUserFromBearer, fetchUserRoleRow });
+
+const crmAdminService = createCrmAdminService({
+  repository: createSupabaseCrmRepository(supabaseAdmin),
+  operators: whatsappOperators,
+  superAdminEmails: whatsappSuperAdminEmails,
+});
+registerCrmAdminRoutes(app, { crmAdminService, authUserFromBearer, fetchUserRoleRow });
 
 /** Rol autenticado: `user_id` (JWT) primero, luego email. Service role bypass RLS. */
 async function fetchUserRoleRowForAuthUser(user) {
