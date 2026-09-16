@@ -1,9 +1,16 @@
 import { requireSuperAdminUser } from '../lib/authAccess.js';
+import { licenseRequestsRateLimit } from '../lib/rateLimit.js';
+import crypto from 'node:crypto';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ALLOWED_STATES = new Set(['pendiente', 'aprobada', 'rechazada']);
 const WHATSAPP_FOLLOWUP_CONSENT_VERSION = 'whatsapp-followup-v1';
 const WHATSAPP_FOLLOWUP_CONSENT_TEXT = 'Autorizo de forma opcional a Padbol a contactarme por WhatsApp exclusivamente para dar seguimiento a esta solicitud. Esta autorización no incluye comunicaciones de marketing y puedo revocarla.';
+
+export function licenseRequestPayloadHash(data) {
+  const stable = { ...data, whatsapp_followup_consent_at: data.whatsapp_followup_consent ? true : null };
+  return crypto.createHash('sha256').update(JSON.stringify(stable)).digest('hex');
+}
 
 function text(value, max = 240) {
   return String(value ?? '').trim().slice(0, max);
@@ -87,15 +94,37 @@ export function mountLicenseRequestRoutes(app, {
     legacySuperAdminEmails,
   };
 
-  app.post('/api/solicitudes-licencia', async (req, res) => {
+  app.post('/api/solicitudes-licencia', licenseRequestsRateLimit, async (req, res) => {
     try {
       const parsed = buildLicenseRequestPayload(req.body);
       if (parsed.error) return res.status(400).json({ error: parsed.error });
+      const rawIdempotencyKey = String(req.headers['idempotency-key'] || '').trim();
+      if (rawIdempotencyKey && (rawIdempotencyKey.length < 8 || rawIdempotencyKey.length > 200 || !/^[\x21-\x7e]+$/.test(rawIdempotencyKey))) {
+        return res.status(400).json({ error: 'Idempotency-Key inválido' });
+      }
+      const idempotencyKey = rawIdempotencyKey
+        ? crypto.createHash('sha256').update(rawIdempotencyKey).digest('hex')
+        : null;
+      if (idempotencyKey) {
+        parsed.data.idempotency_key = idempotencyKey;
+        parsed.data.idempotency_payload_hash = licenseRequestPayloadHash(parsed.data);
+      }
       const { data, error } = await supabaseAdmin
         .from('solicitudes_licencia')
         .insert(parsed.data)
         .select('id, estado, created_at')
         .single();
+      if (error?.code === '23505' && idempotencyKey) {
+        const existing = await supabaseAdmin.from('solicitudes_licencia')
+          .select('id, estado, created_at, idempotency_payload_hash').eq('idempotency_key', idempotencyKey).maybeSingle();
+        if (!existing.error && existing.data) {
+          if (existing.data.idempotency_payload_hash !== parsed.data.idempotency_payload_hash) {
+            return res.status(409).json({ error: 'Idempotency-Key ya utilizado con otra solicitud', code: 'IDEMPOTENCY_KEY_REUSED' });
+          }
+          const { idempotency_payload_hash: _privateHash, ...response } = existing.data;
+          return res.status(200).json({ ...response, idempotent: true });
+        }
+      }
       if (error) return sendStorageError(res, error, 'No se pudo enviar la solicitud');
       return res.status(201).json(data);
     } catch (error) {
