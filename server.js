@@ -6,6 +6,7 @@ import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
 import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, registerWhatsappAdminRoutes } from './lib/whatsappAdmin.js';
 import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
 import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
+import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
 import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
 import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
@@ -714,6 +715,10 @@ const crmAdminService = createCrmAdminService({
 registerCrmAdminRoutes(app, { crmAdminService, authUserFromBearer, fetchUserRoleRow });
 
 const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
+const crmFunnel = createCrmFunnel({
+  crmService,
+  paths: parseCrmFunnelPaths(process.env.CRM_WHATSAPP_FUNNEL_PATHS_JSON),
+});
 registerCrmInboundRoutes(app, {
   crmService,
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
@@ -1921,7 +1926,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
-  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory });
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel });
 
 app.post('/api/torneos', async (req, res) => {
   try {
