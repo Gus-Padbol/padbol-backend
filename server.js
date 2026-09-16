@@ -220,10 +220,10 @@ globalThis.WebSocket = ws;
 dotenv.config();
 assertStagingIsolation();
 const runtime = backendRuntime();
-// Capture transport only for the opt-in, exact-GET QA diagnostic; the global guard stays unchanged.
+// Install the environment-wide outbound guard before constructing any optional sender.
 const runWhatsappMetaQaStartupCheck = createWhatsappMetaQaStartupCheck();
-const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
 installStagingFetchGuard();
+const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
 const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
 const configuredOrigins = String(process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || '').split(',').map(value => value.trim()).filter(Boolean);
