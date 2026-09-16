@@ -29,10 +29,16 @@ do $$ begin
   alter table public.crm_conversations add constraint crm_conversations_qualification_status_check
     check (qualification_status in ('pending', 'in_progress', 'qualified', 'disqualified', 'needs_review'));
 exception when duplicate_object then null; end $$;
-do $$ begin
-  alter table public.crm_conversations add constraint crm_conversations_qualification_question_count_check
-    check (qualification_question_count between 0 and 3);
-exception when duplicate_object then null; end $$;
+alter table public.crm_conversations
+  drop constraint if exists crm_conversations_qualification_question_count_check;
+alter table public.crm_conversations
+  add constraint crm_conversations_qualification_question_count_check
+  check (
+    qualification_question_count between 0 and 3
+    -- El camino nacional conserva cuatro preguntas base. Nombre y ubicación
+    -- del club son campos identificatorios condicionales, no preguntas comerciales.
+    or (selected_path = 'national' and qualification_question_count = 4)
+  );
 do $$ begin
   alter table public.crm_conversations add constraint crm_conversations_next_prompt_check
     check (next_prompt is null or length(trim(next_prompt)) between 1 and 2000);
