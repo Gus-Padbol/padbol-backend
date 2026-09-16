@@ -2,6 +2,8 @@ import { requireSuperAdminUser } from '../lib/authAccess.js';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ALLOWED_STATES = new Set(['pendiente', 'aprobada', 'rechazada']);
+const WHATSAPP_FOLLOWUP_CONSENT_VERSION = 'whatsapp-followup-v1';
+const WHATSAPP_FOLLOWUP_CONSENT_TEXT = 'Autorizo de forma opcional a Padbol a contactarme por WhatsApp exclusivamente para dar seguimiento a esta solicitud. Esta autorización no incluye comunicaciones de marketing y puedo revocarla.';
 
 function text(value, max = 240) {
   return String(value ?? '').trim().slice(0, max);
@@ -13,6 +15,7 @@ export function buildLicenseRequestPayload(body = {}) {
   const responsableNombre = text(body.responsable_nombre, 160);
   const pais = text(body.pais, 100);
   const ciudad = text(body.ciudad, 120);
+  const whatsappFollowupConsent = body.whatsapp_followup_consent === true;
   if (!EMAIL_RE.test(email)) return { error: 'Ingresá un email de contacto válido' };
   if (!clubNombre) return { error: 'El nombre del club es obligatorio' };
   if (!responsableNombre) return { error: 'El nombre de la persona responsable es obligatorio' };
@@ -39,6 +42,13 @@ export function buildLicenseRequestPayload(body = {}) {
       responsable_cargo: text(body.responsable_cargo, 120) || null,
       email,
       whatsapp: text(body.whatsapp, 80) || null,
+      whatsapp_followup_consent: whatsappFollowupConsent,
+      whatsapp_followup_consent_source: whatsappFollowupConsent
+        ? text(body.whatsapp_followup_consent_source, 120) || 'web:solicitud_licencia'
+        : null,
+      whatsapp_followup_consent_version: whatsappFollowupConsent ? WHATSAPP_FOLLOWUP_CONSENT_VERSION : null,
+      whatsapp_followup_consent_text: whatsappFollowupConsent ? WHATSAPP_FOLLOWUP_CONSENT_TEXT : null,
+      whatsapp_followup_consent_at: whatsappFollowupConsent ? new Date().toISOString() : null,
       nombre_legal: text(body.nombre_legal, 200) || null,
       numero_fiscal: text(body.numero_fiscal, 100) || null,
       fiscal_misma_que_club: body.fiscal_misma_que_club !== false,
