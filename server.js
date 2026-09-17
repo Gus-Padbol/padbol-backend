@@ -8,6 +8,7 @@ import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js
 import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
 import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
 import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
+import { createCrmImapInboxSync, readCrmImapConfig } from './lib/crmImapInbound.js';
 import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
 import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
@@ -723,6 +724,11 @@ registerCrmInboundRoutes(app, {
   crmService,
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
 });
+const crmImapInboxSync = createCrmImapInboxSync({
+  crmService,
+  config: readCrmImapConfig(process.env),
+});
+crmImapInboxSync.start();
 
 /** Rol autenticado: `user_id` (JWT) primero, luego email. Service role bypass RLS. */
 async function fetchUserRoleRowForAuthUser(user) {
