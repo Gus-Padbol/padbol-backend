@@ -1,3 +1,5 @@
+import { fetchOfficialFipaTournamentHistory } from '../lib/fipaTournamentHistory.js';
+
 function pgUnavailable(res) {
   return res.status(503).json({ error: 'DATABASE_URL no configurada — torneos finalizados no disponible' });
 }
@@ -119,7 +121,7 @@ async function fetchPerfilesForJugadoresPg(pgPool, jugadoresLists) {
   return { perfilByEmail, perfilByUserId };
 }
 
-async function listTorneosFinalizadosPg(pgPool, { sedeId, deporte, page, limit }) {
+async function listTorneosFinalizadosPg(pgPool, { sedeId, deporte, offset, limit }) {
   const params = [];
   const where = [`lower(trim(t.estado)) = 'finalizado'`];
 
@@ -141,7 +143,6 @@ async function listTorneosFinalizadosPg(pgPool, { sedeId, deporte, page, limit }
   );
   const total = countResult.rows[0]?.total ?? 0;
 
-  const offset = (page - 1) * limit;
   params.push(limit, offset);
 
   const { rows: torneos } = await pgPool.query(
@@ -165,7 +166,7 @@ async function listTorneosFinalizadosPg(pgPool, { sedeId, deporte, page, limit }
   if (!torneos.length) {
     return {
       torneos: [],
-      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) || 0 },
+      total,
     };
   }
 
@@ -232,12 +233,7 @@ async function listTorneosFinalizadosPg(pgPool, { sedeId, deporte, page, limit }
 
   return {
     torneos: items,
-    pagination: {
-      page,
-      limit,
-      total,
-      total_pages: Math.ceil(total / limit) || 0,
-    },
+    total,
   };
 }
 
@@ -247,20 +243,37 @@ export function mountTorneosFinalizadosRoutes(app, { pgPool }) {
       if (!pgPool) return pgUnavailable(res);
 
       const page = parsePositiveInt(req.query.page, 1);
-      const limit = Math.min(parsePositiveInt(req.query.limit, 10), 50);
+      const limit = Math.min(parsePositiveInt(req.query.limit, 50), 50);
       const sedeId = req.query.sede_id != null && String(req.query.sede_id).trim() !== ''
         ? parsePositiveInt(req.query.sede_id, null)
         : null;
       const deporte = normalizeDeporteFilter(req.query.deporte);
 
+      let officialHistory = [];
+      if (sedeId == null && (!deporte || deporte === 'padbol')) {
+        try {
+          officialHistory = await fetchOfficialFipaTournamentHistory();
+        } catch (sourceError) {
+          console.warn('⚠️ Historial FIPA oficial no disponible:', sourceError?.message || sourceError);
+        }
+      }
+
+      const combinedOffset = (page - 1) * limit;
+      const officialPage = officialHistory.slice(combinedOffset, combinedOffset + limit);
+      const dbOffset = Math.max(0, combinedOffset - officialHistory.length);
+      const dbLimit = Math.max(0, limit - officialPage.length);
       const result = await listTorneosFinalizadosPg(pgPool, {
         sedeId,
         deporte,
-        page,
-        limit,
+        offset: dbOffset,
+        limit: dbLimit,
       });
 
-      return res.json(result);
+      const total = officialHistory.length + result.total;
+      return res.json({
+        torneos: [...officialPage, ...result.torneos],
+        pagination: { page, limit, total, total_pages: Math.ceil(total / limit) || 0 },
+      });
     } catch (err) {
       console.error('❌ GET /api/torneos/finalizados:', err.message);
       return res.status(500).json({ error: err.message || 'Error al listar torneos finalizados' });
