@@ -1,10 +1,12 @@
 import crypto from 'crypto';
+import { readFile } from 'node:fs/promises';
 
 export const FIPA_OFFICIAL_RANKING_SOURCE_URL =
   'https://docs.google.com/spreadsheets/d/1Bv57k5Izof_nTiojFn7Y1seNf5ofQfJPYB9oBup0zdk/gviz/tq?tqx=out:csv&gid=2147420736';
 
 const CACHE_MS = 5 * 60 * 1000;
 let cache = null;
+const BUNDLED_RANKING_URL = new URL('../data/fipa-ranking-2026.csv', import.meta.url);
 
 const CONTINENT_ALIASES = new Map([
   ['america', 'america'],
@@ -154,17 +156,26 @@ async function loadSource(fetchImpl) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
   try {
-    const response = await fetchImpl(FIPA_OFFICIAL_RANKING_SOURCE_URL, {
-      signal: controller.signal,
-      headers: { accept: 'text/csv' },
-    });
-    if (!response.ok) throw new Error(`La fuente oficial respondió HTTP ${response.status}`);
-    const csv = await response.text();
+    let csv;
+    let sourceMode = 'live';
+    try {
+      const response = await fetchImpl(FIPA_OFFICIAL_RANKING_SOURCE_URL, {
+        signal: controller.signal,
+        headers: { accept: 'text/csv' },
+      });
+      if (!response.ok) throw new Error(`La fuente oficial respondió HTTP ${response.status}`);
+      csv = await response.text();
+    } catch (error) {
+      console.warn('⚠️ Ranking FIPA en vivo no disponible; usando la copia oficial incluida:', error.message);
+      csv = await readFile(BUNDLED_RANKING_URL, 'utf8');
+      sourceMode = 'bundled';
+    }
     const parsed = parseFipaOfficialRankingCsv(csv);
     if (!parsed.players.length) throw new Error('La fuente oficial no contiene jugadores completos');
     cache = {
       loadedAt: now,
       hash: crypto.createHash('sha256').update(csv).digest('hex'),
+      sourceMode,
       ...parsed,
     };
     return cache;
@@ -182,6 +193,7 @@ export function mountFipaOfficialRankingRoutes(app, { fetchImpl = globalThis.fet
       return res.json({
         fuente: 'fipa_oficial',
         fuente_url: FIPA_OFFICIAL_RANKING_SOURCE_URL,
+        fuente_modo: source.sourceMode,
         actualizado: source.updatedLabel,
         hash_fuente: source.hash,
         total_mundial: source.players.length,
@@ -194,4 +206,3 @@ export function mountFipaOfficialRankingRoutes(app, { fetchImpl = globalThis.fet
     }
   });
 }
-
