@@ -54,6 +54,7 @@ import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountSurgeRoutes } from './routes/surge.js';
 import { mountCanchasRoutes } from './routes/canchas.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
+import { mountFipaOfficialRankingRoutes } from './routes/fipaOfficialRanking.js';
 import { mountResenasRoutes } from './routes/resenas.js';
 import {
   mountReputacionRoutes,
@@ -1143,6 +1144,7 @@ mountStripeWebhookRoutes(app, {
   sendWhatsAppConfirmation,
 });
 mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
+mountFipaOfficialRankingRoutes(app);
 mountArenaRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountComunidadRoutes(app, {
   supabaseAdmin,
@@ -5147,6 +5149,7 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Perfil público: GET /api/jugador/perfil-publico/:userId');
     console.log('✅ Historial unificado: GET /api/jugador/historial');
     console.log('✅ Torneos: GET /api/torneos/finalizados');
+    console.log('✅ Ranking FIPA: GET /api/fipa/rankings/oficial');
     console.log('✅ Push: POST /api/push-tokens, POST /api/push/send');
     console.log('✅ XP ARENA: GET /api/xp/mi-xp, GET /api/xp/historial');
     console.log('✅ Partidos: POST /api/partidos/:id/resultado');
