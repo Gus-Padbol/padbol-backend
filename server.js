@@ -1,5 +1,6 @@
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
+import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.js';
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
@@ -222,10 +223,11 @@ globalThis.WebSocket = ws;
 dotenv.config();
 assertStagingIsolation();
 const runtime = backendRuntime();
-// Install the environment-wide outbound guard before constructing any optional sender.
+// Capture the original fetch for the two narrowly scoped QA senders, then guard all other outbound traffic.
 const runWhatsappMetaQaStartupCheck = createWhatsappMetaQaStartupCheck();
-installStagingFetchGuard();
 const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
+const whatsappQaCrmManualSenderFactory = createWhatsappQaCrmManualSender();
+installStagingFetchGuard();
 const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
 const configuredOrigins = String(process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || '').split(',').map(value => value.trim()).filter(Boolean);
@@ -713,6 +715,8 @@ const crmAdminService = createCrmAdminService({
   repository: createSupabaseCrmRepository(supabaseAdmin),
   operators: whatsappOperators,
   superAdminEmails: whatsappSuperAdminEmails,
+  sendWhatsappReply: whatsappQaCrmManualSenderFactory?.({ supabaseAdmin }) || null,
+  superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
 });
 registerCrmAdminRoutes(app, { crmAdminService, authUserFromBearer, fetchUserRoleRow });
 
