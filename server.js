@@ -1814,7 +1814,10 @@ app.delete('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({
+    status: 'ok',
+    ...(runtime.staging ? { qaWhatsappManualSend: Boolean(whatsappQaCrmManualSenderFactory) } : {}),
+  });
 });
 
 // ===== GENERADORES DE PARTIDOS =====
