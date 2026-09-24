@@ -1,5 +1,6 @@
 import { requireSuperAdminUser } from '../lib/authAccess.js';
 import { licenseRequestsRateLimit } from '../lib/rateLimit.js';
+import { formSubmissionToCrmIngest } from '../lib/crmInboundForm.js';
 import crypto from 'node:crypto';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -82,11 +83,48 @@ function sendStorageError(res, error, fallback) {
   return res.status(500).json({ error: fallback });
 }
 
+export function licenseRequestToCrmIngest(id, data = {}) {
+  const location = [data.ciudad, data.provincia_estado, data.pais]
+    .map((value) => text(value, 120))
+    .filter((value) => value && value !== 'Pendiente de completar')
+    .join(', ');
+  const details = [
+    text(data.mensaje, 2000),
+    `Club u organización: ${text(data.club_nombre, 160)}`,
+    location ? `Ubicación: ${location}` : null,
+    text(data.responsable_cargo, 120) ? `Cargo: ${text(data.responsable_cargo, 120)}` : null,
+  ].filter(Boolean).join('\n');
+
+  return formSubmissionToCrmIngest({
+    id,
+    form: 'dev_padbol_contacto_business',
+    email: data.email,
+    phone: data.whatsapp || data.club_telefono,
+    name: data.responsable_nombre,
+    subject: `Solicitud comercial desde dev.padbol.com — ${text(data.club_nombre, 160)}`,
+    message: details,
+  });
+}
+
+async function ingestLicenseRequestInCrm(crmService, id, data) {
+  if (!crmService?.ingestInbound) return;
+  const ingest = licenseRequestToCrmIngest(id, data);
+  if (!ingest) return;
+  try {
+    await crmService.ingestInbound(ingest);
+  } catch (error) {
+    // La solicitud comercial ya quedó guardada. Una falla del CRM no debe
+    // hacer que el visitante repita el formulario ni crear duplicados.
+    console.error('[crm-form] no se pudo incorporar solicitud de licencia:', error?.message || error);
+  }
+}
+
 export function mountLicenseRequestRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails = [],
+  crmService = null,
 }) {
   const adminDeps = {
     getAuthenticatedUser,
@@ -121,11 +159,13 @@ export function mountLicenseRequestRoutes(app, {
           if (existing.data.idempotency_payload_hash !== parsed.data.idempotency_payload_hash) {
             return res.status(409).json({ error: 'Idempotency-Key ya utilizado con otra solicitud', code: 'IDEMPOTENCY_KEY_REUSED' });
           }
+          await ingestLicenseRequestInCrm(crmService, existing.data.id, parsed.data);
           const { idempotency_payload_hash: _privateHash, ...response } = existing.data;
           return res.status(200).json({ ...response, idempotent: true });
         }
       }
       if (error) return sendStorageError(res, error, 'No se pudo enviar la solicitud');
+      await ingestLicenseRequestInCrm(crmService, data.id, parsed.data);
       return res.status(201).json(data);
     } catch (error) {
       console.error('❌ POST /api/solicitudes-licencia:', error.message);
