@@ -2,6 +2,7 @@ import express from 'express';
 import { pushSendRateLimit, pushTokensRateLimit } from '../lib/rateLimit.js';
 import { requireAdminOrInternalSecret } from '../lib/authAccess.js';
 import { sendPushToTokens } from '../utils/push.js';
+import { createNotificacion } from '../utils/notificaciones.js';
 
 const ADMIN_PUSH_ROLES = new Set(['super_admin', 'admin_nacional', 'admin_club']);
 const ADMIN_PUSH_WEEKLY_QUOTA = Math.max(1, Number.parseInt(process.env.ADMIN_PUSH_WEEKLY_QUOTA || '10', 10) || 10);
@@ -27,6 +28,14 @@ function buildPushPreferencesRow(current = {}, patch = {}) {
   return {
     transactional_enabled: next.transactionalEnabled,
     marketing_enabled: next.marketingEnabled,
+  };
+}
+
+function buildAdminPushData(segmentType) {
+  return {
+    type: 'admin_message',
+    route: 'Notificaciones',
+    segment: String(segmentType || ''),
   };
 }
 
@@ -187,6 +196,7 @@ async function readAdminPushQuota(supabaseAdmin, auth) {
 
 export {
   assertSegmentAllowed,
+  buildAdminPushData,
   buildPushPreferencesRow,
   normalizeAdminPushSegment,
   normalizePushPreferences,
@@ -454,10 +464,18 @@ export function mountPushRoutes(app, {
 
       const profiles = await fetchProfilesForSegment(supabaseAdmin, auth, segment);
       const tokens = await fetchTokensForProfiles(supabaseAdmin, profiles);
-      const result = await sendPushToTokens(tokens, title, body, {
-        type: 'admin_broadcast',
-        segment: segment.type,
-      });
+      const pushData = buildAdminPushData(segment.type);
+      await Promise.all((profiles || []).map((profile) => createNotificacion(supabaseAdmin, {
+        user_id: profile.user_id,
+        tipo: 'admin_message',
+        titulo: title,
+        mensaje: body,
+        data: {
+          source: 'admin_push',
+          segment: segment.type,
+        },
+      })));
+      const result = await sendPushToTokens(tokens, title, body, pushData);
       const sentCount = tokens.length;
       const { error: historyError } = await supabaseAdmin
         .from(ADMIN_PUSH_HISTORY_TABLE)
