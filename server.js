@@ -9,6 +9,7 @@ import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js
 import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
 import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
 import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
+import { createCrmLeadAutoAnalyzer } from './lib/crmLeadAutoAnalysis.js';
 import { createCrmImapInboxSync, readCrmImapConfig } from './lib/crmImapInbound.js';
 import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
@@ -731,6 +732,7 @@ const crmFunnel = createCrmFunnel({
 });
 registerCrmInboundRoutes(app, {
   crmService,
+  leadAnalyzer: createCrmLeadAutoAnalyzer({ crmService }),
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
 });
 const crmImapInboxSync = createCrmImapInboxSync({
