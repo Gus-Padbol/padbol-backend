@@ -6,6 +6,29 @@ import { sendPushToTokens } from '../utils/push.js';
 const ADMIN_PUSH_ROLES = new Set(['super_admin', 'admin_nacional', 'admin_club']);
 const ADMIN_PUSH_WEEKLY_QUOTA = Math.max(1, Number.parseInt(process.env.ADMIN_PUSH_WEEKLY_QUOTA || '10', 10) || 10);
 const ADMIN_PUSH_HISTORY_TABLE = 'admin_push_notifications';
+const PUSH_PREFERENCES_TABLE = 'push_notification_preferences';
+
+function normalizePushPreferences(row = {}) {
+  return {
+    transactionalEnabled: row?.transactional_enabled !== false,
+    marketingEnabled: row?.marketing_enabled === true,
+    updatedAt: row?.updated_at ?? null,
+  };
+}
+
+function buildPushPreferencesRow(current = {}, patch = {}) {
+  const next = normalizePushPreferences(current);
+  if (typeof patch?.transactionalEnabled === 'boolean') {
+    next.transactionalEnabled = patch.transactionalEnabled;
+  }
+  if (typeof patch?.marketingEnabled === 'boolean') {
+    next.marketingEnabled = patch.marketingEnabled;
+  }
+  return {
+    transactional_enabled: next.transactionalEnabled,
+    marketing_enabled: next.marketingEnabled,
+  };
+}
 
 function startOfCurrentWeekIso(now = new Date()) {
   const date = new Date(now);
@@ -164,7 +187,9 @@ async function readAdminPushQuota(supabaseAdmin, auth) {
 
 export {
   assertSegmentAllowed,
+  buildPushPreferencesRow,
   normalizeAdminPushSegment,
+  normalizePushPreferences,
   startOfCurrentWeekIso,
 };
 
@@ -175,6 +200,63 @@ export function mountPushRoutes(app, {
   legacySuperAdminEmails = [],
 }) {
   const router = express.Router();
+
+  router.get('/push-preferences', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+      }
+      const { data, error } = await supabaseAdmin
+        .from(PUSH_PREFERENCES_TABLE)
+        .select('transactional_enabled, marketing_enabled, updated_at')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (error) throw error;
+      return res.json(normalizePushPreferences(data));
+    } catch (error) {
+      console.error('❌ GET /api/push-preferences:', error.message);
+      return res.status(500).json({ error: 'No se pudieron cargar las preferencias de notificaciones' });
+    }
+  });
+
+  router.patch('/push-preferences', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+      }
+      const hasTransactional = typeof req.body?.transactionalEnabled === 'boolean';
+      const hasMarketing = typeof req.body?.marketingEnabled === 'boolean';
+      if (!hasTransactional && !hasMarketing) {
+        return res.status(400).json({ error: 'Preferencias inválidas' });
+      }
+
+      const { data: current, error: readError } = await supabaseAdmin
+        .from(PUSH_PREFERENCES_TABLE)
+        .select('transactional_enabled, marketing_enabled, updated_at')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (readError) throw readError;
+
+      const now = new Date().toISOString();
+      const row = {
+        user_id: user.id,
+        ...buildPushPreferencesRow(current, req.body),
+        updated_at: now,
+      };
+      const { data, error } = await supabaseAdmin
+        .from(PUSH_PREFERENCES_TABLE)
+        .upsert(row, { onConflict: 'user_id' })
+        .select('transactional_enabled, marketing_enabled, updated_at')
+        .single();
+      if (error) throw error;
+      return res.json(normalizePushPreferences(data));
+    } catch (error) {
+      console.error('❌ PATCH /api/push-preferences:', error.message);
+      return res.status(500).json({ error: 'No se pudieron guardar las preferencias de notificaciones' });
+    }
+  });
 
   router.post('/push-tokens', pushTokensRateLimit, async (req, res) => {
     try {
