@@ -39,6 +39,57 @@ function buildAdminPushData(segmentType) {
   };
 }
 
+function normalizeAdminPushDestination(raw = {}) {
+  const type = String(raw?.type || 'inbox').trim().toLowerCase();
+  if (type === 'inbox') return { type, route: 'Notificaciones', params: {} };
+  if (type === 'reserva') {
+    const sedeId = Number(raw?.sedeId ?? raw?.sede_id);
+    if (!Number.isFinite(sedeId) || sedeId <= 0) return null;
+    return {
+      type,
+      route: 'Reserva',
+      params: { sedeId, deporte: String(raw?.deporte || 'padbol').trim().toLowerCase() || 'padbol' },
+    };
+  }
+  if (type === 'torneo') {
+    const torneoId = Number(raw?.torneoId ?? raw?.torneo_id);
+    if (!Number.isFinite(torneoId) || torneoId <= 0) return null;
+    return { type, route: 'TorneoDetalle', params: { torneoId } };
+  }
+  if (type === 'external') {
+    const url = String(raw?.url || '').trim();
+    if (!/^https:\/\//i.test(url) || url.length > 500) return null;
+    return { type, route: 'ExternalUrl', params: { url }, url };
+  }
+  return null;
+}
+
+function buildAdminPushNavigationData(segmentType, destination) {
+  return {
+    type: 'admin_message',
+    route: destination.route,
+    params: destination.params,
+    segment: String(segmentType || ''),
+  };
+}
+
+function buildAdminInboxNotification(destination) {
+  if (destination.type === 'torneo') {
+    return { tipo: 'torneo', data: { torneo_id: destination.params.torneoId }, link: null };
+  }
+  if (destination.type === 'reserva') {
+    return {
+      tipo: 'admin_message',
+      data: { action: 'reserva_sede', sede_id: destination.params.sedeId, deporte: destination.params.deporte },
+      link: null,
+    };
+  }
+  if (destination.type === 'external') {
+    return { tipo: 'admin_message', data: { action: 'open_url' }, link: destination.url };
+  }
+  return { tipo: 'admin_message', data: {}, link: null };
+}
+
 function startOfCurrentWeekIso(now = new Date()) {
   const date = new Date(now);
   const day = date.getUTCDay();
@@ -206,8 +257,11 @@ async function readAdminPushQuota(supabaseAdmin, auth) {
 export {
   assertSegmentAllowed,
   buildAdminPushData,
+  buildAdminPushNavigationData,
+  buildAdminInboxNotification,
   buildPushPreferencesRow,
   normalizeAdminPushSegment,
+  normalizeAdminPushDestination,
   normalizePushPreferences,
   readAdminPushQuota,
   startOfCurrentWeekIso,
@@ -411,8 +465,10 @@ export function mountPushRoutes(app, {
       const auth = await requirePushAdmin(req, res, adminDeps);
       if (!auth) return;
       const segment = normalizeAdminPushSegment(req.body?.segment);
+      const destination = normalizeAdminPushDestination(req.body?.destination);
       const segmentError = assertSegmentAllowed(auth, segment);
       if (segmentError) return res.status(400).json({ error: segmentError });
+      if (!destination) return res.status(400).json({ error: 'Destino inválido' });
       const profiles = await fetchProfilesForSegment(supabaseAdmin, auth, segment);
       const tokens = await fetchTokensForProfiles(supabaseAdmin, profiles);
       return res.json({ recipients: profiles.length, withPushToken: tokens.length });
@@ -474,16 +530,15 @@ export function mountPushRoutes(app, {
 
       const profiles = await fetchProfilesForSegment(supabaseAdmin, auth, segment);
       const tokens = await fetchTokensForProfiles(supabaseAdmin, profiles);
-      const pushData = buildAdminPushData(segment.type);
+      const pushData = buildAdminPushNavigationData(segment.type, destination);
+      const inbox = buildAdminInboxNotification(destination);
       await Promise.all((profiles || []).map((profile) => createNotificacion(supabaseAdmin, {
         user_id: profile.user_id,
-        tipo: 'admin_message',
+        tipo: inbox.tipo,
         titulo: title,
         mensaje: body,
-        data: {
-          source: 'admin_push',
-          segment: segment.type,
-        },
+        data: { ...inbox.data, source: 'admin_push', segment: segment.type },
+        link: inbox.link,
       })));
       const result = await sendPushToTokens(tokens, title, body, pushData);
       const sentCount = tokens.length;
