@@ -176,13 +176,21 @@ async function fetchTokensForProfiles(supabaseAdmin, profiles) {
 }
 
 async function readAdminPushQuota(supabaseAdmin, auth) {
-  const targetedUnlimited = auth.role === 'super_admin';
+  const unlimited = auth.role === 'super_admin';
+  if (unlimited) {
+    return {
+      limit: null,
+      used: null,
+      remaining: null,
+      unlimited: true,
+      unlimitedTargeted: true,
+    };
+  }
   let query = supabaseAdmin
     .from(ADMIN_PUSH_HISTORY_TABLE)
     .select('id', { count: 'exact', head: true })
     .eq('admin_user_id', auth.user.id)
     .gte('created_at', startOfCurrentWeekIso());
-  if (targetedUnlimited) query = query.neq('segment_type', 'jugador');
   const { count, error } = await query;
   if (error) throw error;
   const used = Math.max(0, Number(count) || 0);
@@ -190,7 +198,8 @@ async function readAdminPushQuota(supabaseAdmin, auth) {
     limit: ADMIN_PUSH_WEEKLY_QUOTA,
     used,
     remaining: Math.max(0, ADMIN_PUSH_WEEKLY_QUOTA - used),
-    unlimitedTargeted: targetedUnlimited,
+    unlimited: false,
+    unlimitedTargeted: false,
   };
 }
 
@@ -200,6 +209,7 @@ export {
   buildPushPreferencesRow,
   normalizeAdminPushSegment,
   normalizePushPreferences,
+  readAdminPushQuota,
   startOfCurrentWeekIso,
 };
 
@@ -457,7 +467,7 @@ export function mountPushRoutes(app, {
       if (!title || !body) return res.status(400).json({ error: 'Título y mensaje son obligatorios' });
 
       const quota = await readAdminPushQuota(supabaseAdmin, auth);
-      const consumesQuota = !(segment.type === 'jugador' && quota.unlimitedTargeted);
+      const consumesQuota = !quota.unlimited;
       if (consumesQuota && quota.remaining <= 0) {
         return res.status(429).json({ error: 'Se alcanzó el cupo semanal de notificaciones', quota });
       }
