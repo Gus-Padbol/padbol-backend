@@ -31,7 +31,7 @@ const SCOREBOARD_TOKEN_LOOKUP_SELECT = [
   'cronometro_inicio', 'cronometro_pausado', 'cronometro_segundos',
   'control_token_hash', 'control_token_created_at', 'control_token_revoked_at',
   'synced_to_torneo_at', 'sync_torneo_status',
-  'created_at', 'updated_at',
+  'revision', 'created_at', 'updated_at',
 ].join(', ');
 
 /**

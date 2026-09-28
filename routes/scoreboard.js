@@ -21,6 +21,7 @@ import {
 import {
   buildControlPath,
   maskControlTokenForLog,
+  stripSensitiveControlFields,
 } from '../src/scoreboard/scoreboardControlToken.js';
 import { persistControlTokenForScoreboard } from '../src/scoreboard/scoreboardControlTokenService.js';
 import {
@@ -32,6 +33,17 @@ import { onPartidoTorneoFinalizado } from '../lib/torneos/partidoTorneoFinalizad
 import { advanceWinnerIfNeeded } from '../lib/torneos/bracketAdvanceService.js';
 import { ensureScoreboardForCompletedBracketPartido } from '../lib/torneos/bracketScoreboardService.js';
 import { maybeProcessCasualPadcoinsAfterScoreboardTerminated } from '../src/matches/scoreboardMatchRewardsService.js';
+import {
+  parseWatchAction,
+  parseAtomicActionResult,
+  toAtomicState,
+} from '../src/scoreboard/scoreboardWatchAction.js';
+import {
+  createWatchSession,
+  claimWatchSession,
+  resolveWatchSession,
+  revokeWatchSession,
+} from '../src/scoreboard/scoreboardWatchSessionService.js';
 
 async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
   const email = String(user.email || '').trim().toLowerCase();
@@ -105,7 +117,7 @@ const SCOREBOARD_PARTIDO_SELECT = [
   'estado', 'saque_actual', 'score_a', 'score_b', 'games_a', 'games_b', 'sets_a', 'sets_b',
   'historial_sets', 'es_tiebreak', 'ultimo_punto', 'historial_puntos',
   'cronometro_inicio', 'cronometro_pausado', 'cronometro_segundos',
-  'created_at', 'updated_at',
+  'revision', 'created_at', 'updated_at',
 ].join(', ');
 
 const COLOR_UNIFORME_FIELDS = [
@@ -414,15 +426,23 @@ async function fetchPartido(supabaseAdmin, partidoId) {
 
 async function savePartido(supabaseAdmin, partido) {
   const { id, ...rest } = partido;
+  const expectedRevision = Number(partido.revision ?? 0);
   const { data, error } = await supabaseAdmin
     .from('scoreboard_partidos')
-    .update({ ...rest, updated_at: new Date().toISOString() })
+    .update({ ...rest, revision: expectedRevision + 1, updated_at: new Date().toISOString() })
     .eq('id', id)
+    .eq('revision', expectedRevision)
     .select(SCOREBOARD_PARTIDO_SELECT)
     .limit(1);
 
   if (error) throw error;
-  return Array.isArray(data) ? data[0] ?? null : data;
+  const saved = Array.isArray(data) ? data[0] ?? null : data;
+  if (!saved) {
+    throw Object.assign(new Error('El marcador cambió en otro dispositivo; actualizá antes de reintentar'), {
+      status: 409,
+    });
+  }
+  return saved;
 }
 
 export function mountScoreboardRoutes(app, {
@@ -432,6 +452,50 @@ export function mountScoreboardRoutes(app, {
   legacySuperAdminEmails = [],
   io = null,
 }) {
+  function applyWatchCommand(partido, action) {
+    assertScoreboardMutable(partido);
+    if (action.command === 'punto') registrarPunto(partido, action.equipo);
+    else if (action.command === 'deshacer') deshacerPunto(partido);
+    else if (action.command === 'saque') cambiarSaque(partido);
+    else if (action.command === 'tiebreak') iniciarTiebreak(partido);
+    else if (action.accion === 'start') startCronometro(partido);
+    else if (action.accion === 'pause') pauseCronometro(partido);
+    else resetPartidoCompleto(partido);
+    return partido;
+  }
+
+  async function runAtomicWatchAction(token, body) {
+    const action = parseWatchAction(body);
+    const session = await resolveWatchSession(supabaseAdmin, token, action.device_id);
+    const partido = await fetchPartido(supabaseAdmin, session.scoreboard_id);
+    const estadoAntes = partido.estado;
+    if (Number(partido.revision ?? 0) === action.expected_revision) {
+      applyWatchCommand(partido, action);
+    }
+    const { data, error } = await supabaseAdmin.rpc('scoreboard_apply_control_action', {
+      p_session_id: session.id,
+      p_action_id: action.action_id,
+      p_device_id: action.device_id,
+      p_expected_revision: action.expected_revision,
+      p_next_state: toAtomicState(partido),
+    });
+    if (error) throw error;
+    const result = parseAtomicActionResult(data);
+    const board = stripSensitiveControlFields(result.scoreboard ?? partido);
+    if (!result.deduplicated) {
+      await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, board, estadoAntes);
+      await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin, board, estadoAntes);
+    }
+    await emitScoreboardUpdate(io, board.id, board, supabaseAdmin);
+    return {
+      accepted: true,
+      duplicate: result.deduplicated === true,
+      revision: Number(result.revision),
+      scoreboard: await enrichPartidoWithVenue(supabaseAdmin, board),
+      server_time: new Date().toISOString(),
+    };
+  }
+
   async function saveAndEmit(partido) {
     const saved = await savePartido(supabaseAdmin, partido);
     await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
@@ -519,6 +583,95 @@ export function mountScoreboardRoutes(app, {
       return sendHttpError(res, err, { fallbackMessage: 'Error al emitir token de control' });
     }
   });
+
+  app.post('/api/scoreboard/partidos/:id/watch-sessions', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status).json({ error: authError });
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      assertCanControlScoreboard(role, partido.sede_id);
+      const created = await createWatchSession(
+        supabaseAdmin, partido.id, req.body?.ttl_seconds,
+      );
+      return res.status(201).json({
+        session_id: created.session.id,
+        pairing_code: created.pairingCode,
+        pairing_expires_at: created.session.pairing_expires_at,
+        expires_at: created.session.expires_at,
+        revision: Number(partido.revision ?? 0),
+      });
+    } catch (err) {
+      return sendHttpError(res, err, { fallbackMessage: 'Error al crear sesión de reloj' });
+    }
+  });
+
+  app.post(
+    '/api/scoreboard/watch/v1/pair',
+    scoreboardControlWriteRateLimit,
+    async (req, res) => {
+      try {
+        const claimed = await claimWatchSession(
+          supabaseAdmin, req.body?.pairing_code, req.body?.device_id,
+        );
+        return res.json({
+          control_token: claimed.control_token,
+          scoreboard_id: claimed.scoreboard_id,
+          revision: Number(claimed.revision ?? 0),
+          expires_at: claimed.expires_at,
+        });
+      } catch (err) {
+        return sendHttpError(res, err, { fallbackMessage: 'Error al emparejar reloj' });
+      }
+    },
+  );
+
+  app.post('/api/scoreboard/partidos/:id/watch-sessions/revoke', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status).json({ error: authError });
+      const partido = await fetchPartido(supabaseAdmin, req.params.id);
+      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      assertCanControlScoreboard(role, partido.sede_id);
+      const revokedAt = await revokeWatchSession(supabaseAdmin, partido.id, req.body?.session_id);
+      return res.json({ ok: true, revoked_at: revokedAt });
+    } catch (err) {
+      return sendHttpError(res, err, { fallbackMessage: 'Error al revocar sesión de reloj' });
+    }
+  });
+
+  app.get('/api/scoreboard/watch/v1/control/:token', async (req, res) => {
+    try {
+      const deviceId = String(req.query.device_id ?? '').trim();
+      const session = await resolveWatchSession(supabaseAdmin, req.params.token, deviceId);
+      const partido = await fetchPartido(supabaseAdmin, session.scoreboard_id);
+      return res.json({
+        accepted: true, duplicate: false, revision: Number(partido.revision ?? 0),
+        scoreboard: await enrichPartidoWithVenue(supabaseAdmin, partido),
+        server_time: new Date().toISOString(),
+      });
+    } catch (err) {
+      return sendHttpError(res, err, { fallbackMessage: 'Error al obtener marcador para reloj' });
+    }
+  });
+
+  app.post(
+    '/api/scoreboard/watch/v1/control/:token/commands',
+    scoreboardControlWriteRateLimit,
+    async (req, res) => {
+      try {
+        return res.json(await runAtomicWatchAction(req.params.token, req.body));
+      } catch (err) {
+        if (err.status === 409) {
+          return res.status(409).json({
+            accepted: false, duplicate: false, revision: Number(err.current_revision),
+            scoreboard: null, server_time: new Date().toISOString(), error: err.message,
+          });
+        }
+        return sendHttpError(res, err, { fallbackMessage: 'Error al aplicar comando del reloj' });
+      }
+    },
+  );
 
   app.post('/api/scoreboard/partidos/:id/revoke-control-token', async (req, res) => {
     try {
@@ -854,14 +1007,21 @@ export function mountScoreboardRoutes(app, {
 
       const { data, error } = await supabaseAdmin
         .from('scoreboard_partidos')
-        .update({ ...patch, updated_at: new Date().toISOString() })
+        .update({
+          ...patch,
+          revision: Number(partido.revision ?? 0) + 1,
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', partido.id)
+        .eq('revision', Number(partido.revision ?? 0))
         .select(SCOREBOARD_PARTIDO_SELECT)
         .limit(1);
 
       if (error) throw error;
       const updated = Array.isArray(data) ? data[0] : data;
-      if (!updated) return res.status(404).json({ error: 'Partido no encontrado' });
+      if (!updated) {
+        return res.status(409).json({ error: 'El marcador cambió en otro dispositivo; actualizá antes de reintentar' });
+      }
 
       const enriched = await enrichPartidoWithVenue(supabaseAdmin, updated);
       await emitScoreboardUpdate(io, updated.id, updated, supabaseAdmin);
