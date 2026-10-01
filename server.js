@@ -10,7 +10,6 @@ import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.
 import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
 import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
 import { createCrmLeadAutoAnalyzer } from './lib/crmLeadAutoAnalysis.js';
-import { validateAdminPushDestination } from './lib/adminPushNotifications.js';
 import { createCrmImapInboxSync, readCrmImapConfig } from './lib/crmImapInbound.js';
 import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
@@ -734,24 +733,6 @@ const crmFunnel = createCrmFunnel({
 registerCrmInboundRoutes(app, {
   crmService,
   leadAnalyzer: createCrmLeadAutoAnalyzer({ crmService }),
-  qaVerifier: runtime.staging ? async (sourceIds) => Promise.all(sourceIds.map(async (sourceId) => {
-    const countRows = async (table) => {
-      const { count, error } = await supabaseAdmin
-        .from(table)
-        .select('id', { count: 'exact', head: true })
-        .eq('source_ref', sourceId);
-      if (error) throw error;
-      return Number(count || 0);
-    };
-    return {
-      sourceId,
-      conversations: await countRows('crm_conversations'),
-      inboundEvents: await countRows('crm_inbound_events'),
-    };
-  })) : null,
-  qaDestinationVerifier: runtime.staging
-    ? (destination) => validateAdminPushDestination(supabaseAdmin, destination)
-    : null,
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
 });
 const crmImapInboxSync = createCrmImapInboxSync({
