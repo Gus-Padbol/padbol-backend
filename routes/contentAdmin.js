@@ -30,6 +30,7 @@ const VALID_AD_SLOTS = new Set([
   'hub_inline',
   'stadium_home',
   'competir_hub',
+  'signature_ticker',
 ]);
 const VALID_MEDIA_TYPES = new Set(['image', 'video']);
 const VALID_CONTENT_TYPES = new Set(['hub', 'ad']);
