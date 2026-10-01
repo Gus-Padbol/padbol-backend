@@ -8,6 +8,7 @@ const CARD_KEYS = [
   'rankings',
   'armar_partido',
   'comunidad',
+  'next_generation',
   'perfil',
   'mis_partidos',
 ];

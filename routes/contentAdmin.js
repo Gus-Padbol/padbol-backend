@@ -21,6 +21,7 @@ const VALID_CARD_KEYS = new Set([
   'rankings',
   'armar_partido',
   'comunidad',
+  'next_generation',
   'perfil',
   'mis_partidos',
 ]);
