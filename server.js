@@ -10,6 +10,7 @@ import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.
 import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
 import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
 import { createCrmLeadAutoAnalyzer } from './lib/crmLeadAutoAnalysis.js';
+import { validateAdminPushDestination } from './lib/adminPushNotifications.js';
 import { createCrmImapInboxSync, readCrmImapConfig } from './lib/crmImapInbound.js';
 import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
@@ -748,6 +749,9 @@ registerCrmInboundRoutes(app, {
       inboundEvents: await countRows('crm_inbound_events'),
     };
   })) : null,
+  qaDestinationVerifier: runtime.staging
+    ? (destination) => validateAdminPushDestination(supabaseAdmin, destination)
+    : null,
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
 });
 const crmImapInboxSync = createCrmImapInboxSync({
