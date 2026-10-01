@@ -733,6 +733,21 @@ const crmFunnel = createCrmFunnel({
 registerCrmInboundRoutes(app, {
   crmService,
   leadAnalyzer: createCrmLeadAutoAnalyzer({ crmService }),
+  qaVerifier: runtime.staging ? async (sourceIds) => Promise.all(sourceIds.map(async (sourceId) => {
+    const countRows = async (table) => {
+      const { count, error } = await supabaseAdmin
+        .from(table)
+        .select('id', { count: 'exact', head: true })
+        .eq('source_ref', sourceId);
+      if (error) throw error;
+      return Number(count || 0);
+    };
+    return {
+      sourceId,
+      conversations: await countRows('crm_conversations'),
+      inboundEvents: await countRows('crm_inbound_events'),
+    };
+  })) : null,
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
 });
 const crmImapInboxSync = createCrmImapInboxSync({
