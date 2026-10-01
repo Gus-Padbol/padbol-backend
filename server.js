@@ -1823,6 +1823,9 @@ app.delete('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
+    ...(process.env.RENDER_GIT_COMMIT
+      ? { release: process.env.RENDER_GIT_COMMIT.slice(0, 7) }
+      : {}),
     ...(runtime.staging ? { qaWhatsappManualSend: Boolean(whatsappQaCrmManualSenderFactory) } : {}),
   });
 });
