@@ -723,7 +723,12 @@ const crmAdminService = createCrmAdminService({
   sendWhatsappReply: whatsappQaCrmManualSenderFactory?.({ supabaseAdmin }) || null,
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
 });
-registerCrmAdminRoutes(app, { crmAdminService, authUserFromBearer, fetchUserRoleRow });
+registerCrmAdminRoutes(app, {
+  crmAdminService,
+  authUserFromBearer,
+  fetchUserRoleRow,
+  fetchUserRoleRowForAuthUser,
+});
 
 const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
 const crmFunnel = createCrmFunnel({
