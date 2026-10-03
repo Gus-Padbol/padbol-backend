@@ -52,6 +52,7 @@ import {
 } from './routes/partidos.js';
 import { reservaHoraInicioFromRow, reservaHoraFinFromRow, reservaMatchesSede } from './utils/reservasColumns.js';
 import { createClasesRouter } from './routes/clases.js';
+import { registerModuloClasesRoutes } from './lib/moduloClases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountSurgeRoutes } from './routes/surge.js';
 import { mountCanchasRoutes } from './routes/canchas.js';
@@ -1957,6 +1958,68 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
   serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel });
+
+function clasesCanchasConNumeroReserva(rows) {
+  const list = Array.isArray(rows) ? [...rows] : [];
+  list.sort((a, b) => Number(a.id) - Number(b.id));
+  return list.map((cancha, index) => {
+    const orden = Number(cancha?.orden);
+    return { ...cancha, numero_reserva: Number.isFinite(orden) && orden > 0 ? orden : index + 1 };
+  });
+}
+
+async function clasesAssertUsuarioPuedeAdministrarSede(req, sedeId) {
+  const scope = await releaseServices.adminListScopeFromRequest(req);
+  if (!scope) throw Object.assign(new Error('No autorizado'), { status: 401 });
+  if (scope.superA) return scope;
+  const allowed = await releaseServices.sedesPermitidasPorScope(scope);
+  if (!(allowed?.sedes || []).some((sede) => Number(sede.id) === Number(sedeId))) {
+    throw Object.assign(new Error('No tienes permiso para esta sede'), { status: 403 });
+  }
+  return scope;
+}
+
+async function clasesAssertSuperAdminReq(req) {
+  const scope = await releaseServices.adminListScopeFromRequest(req);
+  if (!scope?.superA) throw Object.assign(new Error('No autorizado'), { status: scope ? 403 : 401 });
+  return { ...scope, user: scope.user || { id: scope.authUserId, email: scope.email } };
+}
+
+function clasesMinutosDesdeHora(raw) {
+  const match = /^(\d{1,2}):(\d{2})/.exec(String(raw || '').split(' - ')[0].trim());
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+async function clasesAssertReservaSinSolape({ sede, fecha, hora, cancha, duracionMin, excludeId = null }) {
+  const inicio = clasesMinutosDesdeHora(hora);
+  if (inicio == null) throw Object.assign(new Error('Horario inválido'), { status: 400 });
+  let query = supabaseAdmin.from('reservas').select('id,hora,duracion,duracion_minutos,estado')
+    .eq('sede', sede).eq('fecha', fecha).eq('cancha', Number(cancha));
+  if (excludeId != null && String(excludeId).trim()) query = query.neq('id', excludeId);
+  const { data, error } = await query;
+  if (error) throw error;
+  const duracion = Number(duracionMin) > 0 ? Number(duracionMin) : 90;
+  const conflict = (data || []).some((row) => {
+    if (String(row.estado || '').toLowerCase() === 'cancelada') return false;
+    const otroInicio = clasesMinutosDesdeHora(row.hora);
+    if (otroInicio == null) return false;
+    const otraDuracion = Number(row.duracion_minutos || row.duracion) > 0
+      ? Number(row.duracion_minutos || row.duracion) : 90;
+    return inicio < otroInicio + otraDuracion && inicio + duracion > otroInicio;
+  });
+  if (conflict) throw Object.assign(new Error('Este horario se solapa con otra reserva'), { status: 409 });
+}
+
+registerModuloClasesRoutes(app, {
+  supabase: supabaseAdmin,
+  supabaseAdmin,
+  authUserFromBearer,
+  adminListScopeFromRequest: releaseServices.adminListScopeFromRequest,
+  assertUsuarioPuedeAdministrarSede: clasesAssertUsuarioPuedeAdministrarSede,
+  assertSuperAdminReq: clasesAssertSuperAdminReq,
+  canchasConNumeroReserva: clasesCanchasConNumeroReserva,
+  assertReservaSinSolapeBackend: clasesAssertReservaSinSolape,
+});
 
 app.post('/api/torneos', async (req, res) => {
   try {
