@@ -80,6 +80,12 @@ import {
 import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
 import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js';
+import {
+  RESERVA_RELEASE_PENDING_STATES,
+  assertReservaMatchesReleaseToken,
+  createReservaReleaseToken,
+  verifyReservaReleaseToken,
+} from './lib/reservaReleaseToken.js';
 import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
 import { mountStoreSedeConfigRoutes } from './routes/storeSedeConfig.js';
 import { mountStoreAdminRoutes } from './routes/storeAdmin.js';
@@ -304,6 +310,13 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const SUPABASE_SERVICE_ROLE_KEY = String(
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY ?? '',
 ).trim();
+const RESERVA_RELEASE_TOKEN_SECRET = String(
+  process.env.RESERVA_RELEASE_TOKEN_SECRET || SUPABASE_SERVICE_ROLE_KEY || '',
+).trim();
+const RESERVA_RELEASE_TOKEN_TTL_SECONDS = Number.parseInt(
+  String(process.env.RESERVA_RELEASE_TOKEN_TTL_SECONDS || ''),
+  10,
+);
 const SUPABASE_CLIENT_GLOBAL_OPTS = {
   global: { WebSocket: ws },
   realtime: { enabled: false },
@@ -1634,6 +1647,48 @@ app.get('/api/reservas', async (req, res) => {
     res.json((data || []).map((row) => mapReservaListDto(row, { isAdmin })));
   } catch (err) {
     sendHttpError(res, err);
+  }
+});
+
+// Capability endpoint: never resolves or deletes reservations from client-provided slot fields.
+app.post('/api/reservas/liberar-slot-pendiente', reservasWriteRateLimit, async (req, res) => {
+  try {
+    if (!pgPool) return res.status(503).json({ error: 'Base de datos no disponible' });
+    const claims = verifyReservaReleaseToken(req.body?.release_token, {
+      secret: RESERVA_RELEASE_TOKEN_SECRET,
+    });
+    const { rows } = await pgPool.query(
+      `SELECT id, sede, fecha::text AS fecha, hora::text AS hora, cancha::text AS cancha, estado
+         FROM reservas WHERE id = $1 LIMIT 1`,
+      [claims.reservationId],
+    );
+    const reserva = rows[0];
+    if (!reserva) return res.json({ ok: true, deleted: 0 });
+    assertReservaMatchesReleaseToken(reserva, claims);
+
+    // Slot and pending state are atomic preconditions on the exact signed id. They
+    // close the SELECT/DELETE race without turning the slot into a lookup key.
+    const deleted = await pgPool.query(
+      `DELETE FROM reservas
+        WHERE id = $1 AND sede = $2 AND fecha::text = $3 AND hora::text = $4
+          AND cancha::text = $5 AND estado = ANY($6::text[])
+        RETURNING id`,
+      [
+        claims.reservationId,
+        reserva.sede,
+        reserva.fecha,
+        reserva.hora,
+        reserva.cancha,
+        [...RESERVA_RELEASE_PENDING_STATES],
+      ],
+    );
+    return res.json({ ok: true, deleted: deleted.rowCount });
+  } catch (err) {
+    const status = Number.isFinite(Number(err?.status)) ? Number(err.status) : 500;
+    return res.status(status).json({
+      error: err?.message || 'No se pudo liberar la reserva',
+      ...(err?.code ? { code: err.code } : {}),
+    });
   }
 });
 
@@ -3441,6 +3496,9 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
         error: 'Configuración del servidor incompleta (SUPABASE_SERVICE_ROLE_KEY). Contactá soporte.',
       });
     }
+    if (!RESERVA_RELEASE_TOKEN_SECRET) {
+      return res.status(503).json({ error: 'Liberación segura de reservas no configurada' });
+    }
 
     const {
       titulo,
@@ -3517,6 +3575,7 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
     console.log('[POST /api/crear-preferencia] sede MP credentials loaded from pg');
 
     let reservaIdParaMp;
+    let reservaRelease;
     try {
       const pending = await ensureReservaPendienteParaMpPg(pgPool, req.body, {
         authUser: user,
@@ -3525,6 +3584,21 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
       });
       reservaIdParaMp = pending.reserva_id;
       console.log(`[POST /api/crear-preferencia] reserva pendiente id=${reservaIdParaMp} (created=${pending.created})`);
+      const pendingRow = await pgPool.query(
+        `SELECT id, sede, fecha::text AS fecha, hora::text AS hora, cancha::text AS cancha, estado
+           FROM reservas WHERE id = $1 LIMIT 1`,
+        [reservaIdParaMp],
+      );
+      if (!pendingRow.rows[0]) {
+        const err = new Error('No se pudo recuperar la reserva pendiente');
+        err.status = 500;
+        throw err;
+      }
+      reservaRelease = createReservaReleaseToken({
+        reserva: pendingRow.rows[0],
+        secret: RESERVA_RELEASE_TOKEN_SECRET,
+        ttlSeconds: RESERVA_RELEASE_TOKEN_TTL_SECONDS,
+      });
       await registerMembresiaUsoIncluidaIfNeeded({
         quote,
         user,
@@ -3576,6 +3650,8 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
       init_point: response.init_point,
       preference_id: response.id,
       reserva_id: reservaIdParaMp,
+      release_token: reservaRelease.token,
+      release_token_expires_at: reservaRelease.expiresAt,
       precio_esperado: quote.total,
       moneda: quote.moneda,
       pricing: quote.pricing,
