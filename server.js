@@ -69,6 +69,7 @@ import { mountSedesDuracionesRoutes } from './routes/sedesDuraciones.js';
 import { mountAdminJugadoresRoutes } from './routes/adminJugadores.js';
 import { mountAdminCoreRoutes } from './routes/adminCore.js';
 import { mountNextGenerationStatusRoutes } from './routes/nextGenerationStatus.js';
+import { registerNextGenerationAdminRoutes } from './lib/nextGenerationAdmin.js';
 import { mountAdminProfesoresRoutes } from './routes/adminProfesores.js';
 import { mountAdminTorneosResumenStatsRoutes } from './routes/adminTorneosResumenStats.js';
 import { mountSupportTicketsRoutes } from './routes/supportTickets.js';
@@ -678,6 +679,26 @@ async function fetchUserRoleRowForAuthUser(user) {
   return fetchUserRoleRow(user.email);
 }
 
+async function nextGenerationAdminScopeFromRequest(req) {
+  const { user } = await getAuthenticatedUser(req);
+  if (!user?.id) return null;
+
+  const email = String(user.email || '').trim().toLowerCase();
+  const row = await fetchUserRoleRowForAuthUser(user);
+  const configuredRole = String(row?.role || '').trim().toLowerCase();
+  const isLegacySuperAdmin = LEGACY_SUPER_ADMIN_EMAILS_API.includes(email);
+  const role = isLegacySuperAdmin ? 'super_admin' : configuredRole;
+  const sedeId = row?.sede_id == null || row.sede_id === '' ? null : Number(row.sede_id);
+
+  return {
+    email,
+    rol: role || null,
+    role: role || null,
+    sedeId: Number.isFinite(sedeId) ? sedeId : null,
+    superA: role === 'super_admin',
+  };
+}
+
 function buildMiRolJsonPayload(email, row) {
   const em = String(email || '').trim().toLowerCase();
   if (!row) {
@@ -1016,6 +1037,10 @@ mountAdminCoreRoutes(app, {
 mountNextGenerationStatusRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
+});
+registerNextGenerationAdminRoutes(app, {
+  supabaseAdmin,
+  adminListScopeFromRequest: nextGenerationAdminScopeFromRequest,
 });
 mountAdminProfesoresRoutes(app, {
   supabaseAdmin,
