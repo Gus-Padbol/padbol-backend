@@ -93,6 +93,8 @@ import { mountStorePublicRoutes } from './routes/storePublic.js';
 import { mountSedesDuracionesRoutes } from './routes/sedesDuraciones.js';
 import { mountAdminJugadoresRoutes } from './routes/adminJugadores.js';
 import { mountAdminCoreRoutes } from './routes/adminCore.js';
+import { mountNextGenerationStatusRoutes } from './routes/nextGenerationStatus.js';
+import { registerNextGenerationAdminRoutes } from './lib/nextGenerationAdmin.js';
 import { mountAdminProfesoresRoutes } from './routes/adminProfesores.js';
 import { mountAdminTorneosResumenStatsRoutes } from './routes/adminTorneosResumenStats.js';
 import { mountSupportTicketsRoutes } from './routes/supportTickets.js';
@@ -1112,6 +1114,14 @@ mountAdminCoreRoutes(app, {
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountNextGenerationStatusRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+});
+registerNextGenerationAdminRoutes(app, {
+  supabaseAdmin,
+  adminListScopeFromRequest: (req) => releaseServices.adminListScopeFromRequest(req),
 });
 mountAdminProfesoresRoutes(app, {
   supabaseAdmin,
