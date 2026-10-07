@@ -85,6 +85,35 @@ export function mountAdminValidationAndChannelsRoutes(app, {
     }
   });
 
+  // Contrato consumido por el panel actual (identifica la fila por el email
+  // mostrado en Validaciones). Es un cierre reversible de la solicitud: no
+  // elimina el jugador ni modifica su nivel vigente.
+  app.post('/api/admin/jugadores/validaciones/:email/rechazar', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, authDeps);
+      if (!auth) return;
+      const email = decodeURIComponent(String(req.params.email || '')).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: 'Email inválido' });
+      }
+      const motivo = req.body?.motivo == null ? 'Rechazada por administración' : cleanReason(req.body.motivo);
+      if (!motivo) return res.status(400).json({ error: 'El motivo debe tener entre 3 y 500 caracteres' });
+      const { data, error } = await supabaseAdmin
+        .from('jugadores_perfil')
+        .update({ pendiente_validacion: false })
+        .eq('email', email)
+        .eq('pendiente_validacion', true)
+        .select('user_id, email, nivel, pendiente_validacion')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'Validación pendiente no encontrada' });
+      return res.json({ validacion: data, resultado: 'rechazada', motivo });
+    } catch (error) {
+      console.error('❌ POST /api/admin/jugadores/validaciones/:email/rechazar:', error.message);
+      return res.status(500).json({ error: 'No se pudo rechazar la validación' });
+    }
+  });
+
   app.get('/api/admin/crm/channel-status', async (req, res) => {
     const auth = await requireSuperAdminUser(req, res, authDeps);
     if (!auth) return;

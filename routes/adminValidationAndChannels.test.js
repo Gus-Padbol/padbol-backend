@@ -20,6 +20,7 @@ test('V-01 registra endpoint seguro de rechazo y exige autenticación', async ()
   const routes = new Map();
   const app = {
     patch(path, handler) { routes.set(`PATCH ${path}`, handler); },
+    post(path, handler) { routes.set(`POST ${path}`, handler); },
     get(path, handler) { routes.set(`GET ${path}`, handler); },
   };
   mountAdminValidationAndChannelsRoutes(app, {
@@ -28,6 +29,7 @@ test('V-01 registra endpoint seguro de rechazo y exige autenticación', async ()
     fetchUserRoleRowForAuthUser: async () => null,
   });
   assert(routes.has('PATCH /api/admin/validaciones/:userId/rechazar'));
+  assert(routes.has('POST /api/admin/jugadores/validaciones/:email/rechazar'));
   assert(routes.has('GET /api/admin/crm/channel-status'));
   const response = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
   await routes.get('PATCH /api/admin/validaciones/:userId/rechazar')({ params: { userId: 'u1' }, body: { motivo: 'No corresponde' } }, response);
