@@ -128,6 +128,38 @@ export function mountAdminQaPanelRoutes(app, {
     }
   });
 
+  app.get('/api/hub-config/inicio-cards', async (_req, res) => {
+    try {
+      const rows = await optionalRows(supabaseAdmin.from('hub_config').select('*').in('id', [
+        'inicio_reservar', 'inicio_jugar', 'inicio_competir', 'inicio_clases',
+      ]));
+      return res.json(rows);
+    } catch (error) {
+      return res.status(500).json({ error: 'No se pudieron cargar las tarjetas de inicio', retryable: true });
+    }
+  });
+
+  app.patch('/api/hub-config/:id', async (req, res) => {
+    try {
+      const auth = await requireAdminUser(req, res, authDeps);
+      if (!auth) return;
+      const id = String(req.params?.id || '').trim();
+      if (!id || !/^[a-z0-9_-]{1,80}$/i.test(id)) return res.status(400).json({ error: 'Tarjeta inválida' });
+      const allowed = ['titulo', 'subtitulo', 'foto_url', 'chivi_imagen_url'];
+      const payload = { id };
+      for (const key of allowed) {
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) payload[key] = String(req.body[key] || '').trim();
+      }
+      if (Object.keys(payload).length === 1) return res.status(400).json({ error: 'No hay cambios para guardar' });
+      const { data, error } = await supabaseAdmin.from('hub_config')
+        .upsert(payload, { onConflict: 'id' }).select('*').single();
+      if (error) throw error;
+      return res.json(data);
+    } catch (error) {
+      return res.status(error?.status || 500).json({ error: error?.message || 'No se pudo guardar la tarjeta del Hub' });
+    }
+  });
+
   app.get('/api/hub-deporte-config', async (req, res) => {
     try {
       let query = supabaseAdmin.from('hub_deporte_config').select('*').order('deporte').order('card_key');
