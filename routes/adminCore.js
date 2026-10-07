@@ -131,7 +131,15 @@ export function mountAdminCoreRoutes(app, {
       const withSedeScope = (query) => (sedeId != null ? query.eq('sede_id', sedeId) : query);
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-      const [instructoresPendientes, sedesPendientes, pagosFallidos, cancelaciones24h] = await Promise.all([
+      const [
+        instructoresPendientes,
+        sedesPendientes,
+        pagosFallidos,
+        cancelaciones24h,
+        validacionesPendientes,
+        conversacionesPendientes,
+        canjesPendientes,
+      ] = await Promise.all([
         safeCount(() => withSedeScope(
           supabaseAdmin.from('profesores').select('id', { count: 'exact', head: true }).eq('estado', 'pendiente'),
         )),
@@ -148,6 +156,20 @@ export function mountAdminCoreRoutes(app, {
             .eq('estado', 'cancelada')
             .gte('updated_at', since),
         )),
+        safeCount(() => supabaseAdmin
+          .from('perfiles')
+          .select('id', { count: 'exact', head: true })
+          .eq('pendiente_validacion', true)),
+        safeCount(() => supabaseAdmin
+          .from('crm_conversations')
+          .select('id', { count: 'exact', head: true })
+          .in('status', ['new', 'open', 'pending'])),
+        safeCount(() => withSedeScope(
+          supabaseAdmin
+            .from('padcoins_canjes')
+            .select('id', { count: 'exact', head: true })
+            .eq('estado', 'pendiente'),
+        )),
       ]);
 
       return res.json({
@@ -157,6 +179,11 @@ export function mountAdminCoreRoutes(app, {
         sedes_pendientes: sedesPendientes,
         pagos_fallidos: pagosFallidos,
         cancelaciones_24h: cancelaciones24h,
+        validaciones_pendientes: validacionesPendientes,
+        conversaciones_pendientes: conversacionesPendientes,
+        canjes_pendientes: canjesPendientes,
+        total_pendientes: instructoresPendientes + sedesPendientes + pagosFallidos
+          + validacionesPendientes + conversacionesPendientes + canjesPendientes,
         updated_at: new Date().toISOString(),
       });
     } catch (error) {

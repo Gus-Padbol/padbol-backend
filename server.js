@@ -93,6 +93,7 @@ import { mountStorePublicRoutes } from './routes/storePublic.js';
 import { mountSedesDuracionesRoutes } from './routes/sedesDuraciones.js';
 import { mountAdminJugadoresRoutes } from './routes/adminJugadores.js';
 import { mountAdminCoreRoutes } from './routes/adminCore.js';
+import { mountAdminQaPanelRoutes } from './routes/adminQaPanel.js';
 import { mountNextGenerationStatusRoutes } from './routes/nextGenerationStatus.js';
 import { registerNextGenerationAdminRoutes } from './lib/nextGenerationAdmin.js';
 import { mountAdminProfesoresRoutes } from './routes/adminProfesores.js';
@@ -1110,6 +1111,12 @@ mountAdminJugadoresRoutes(app, {
 mountAdminCoreRoutes(app, {
   resolveTerritorialScope: (req) => releaseServices.adminListScopeFromRequest(req),
   sedesPermitidasPorScope: (scope) => releaseServices.sedesPermitidasPorScope(scope),
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountAdminQaPanelRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
