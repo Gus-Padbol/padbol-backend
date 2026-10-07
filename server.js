@@ -94,6 +94,8 @@ import { mountSedesDuracionesRoutes } from './routes/sedesDuraciones.js';
 import { mountAdminJugadoresRoutes } from './routes/adminJugadores.js';
 import { mountAdminCoreRoutes } from './routes/adminCore.js';
 import { mountAdminQaPanelRoutes } from './routes/adminQaPanel.js';
+import { mountAdminLegacyAliases } from './routes/adminLegacyAliases.js';
+import { mountAdminValidationAndChannelsRoutes } from './routes/adminValidationAndChannels.js';
 import { mountNextGenerationStatusRoutes } from './routes/nextGenerationStatus.js';
 import { registerNextGenerationAdminRoutes } from './lib/nextGenerationAdmin.js';
 import { mountAdminProfesoresRoutes } from './routes/adminProfesores.js';
@@ -1111,6 +1113,12 @@ mountAdminJugadoresRoutes(app, {
 mountAdminCoreRoutes(app, {
   resolveTerritorialScope: (req) => releaseServices.adminListScopeFromRequest(req),
   sedesPermitidasPorScope: (scope) => releaseServices.sedesPermitidasPorScope(scope),
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountAdminValidationAndChannelsRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
@@ -5295,6 +5303,8 @@ checkinRouter.post('/verificar', async (req, res) => {
 });
 
 app.use('/api/checkin', checkinRouter);
+
+mountAdminLegacyAliases(app);
 
 app.use((_req, res) => {
   res.status(404).json({ ok: false, error: 'Ruta no encontrada' });
