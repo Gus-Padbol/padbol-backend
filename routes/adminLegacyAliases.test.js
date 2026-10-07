@@ -17,18 +17,18 @@ test('registra todas las URLs exactas del QA con destino administrativo canónic
   }
 });
 
-test('reproduce query y devuelve el 401/403 de la ruta canónica, no un 404 del alias', () => {
-  let replayedUrl = null;
-  const app = {
-    handle(req, res) {
-      replayedUrl = req.url;
-      res.headersSent = true;
-      res.statusCode = 401;
+test('redirige con 307 y conserva la query hacia la ruta canónica', () => {
+  let status = null;
+  let location = null;
+  const app = {};
+  const req = { url: '/api/organizaciones?estado=pendiente' };
+  const res = {
+    redirect(code, target) {
+      status = code;
+      location = target;
     },
   };
-  const req = { url: '/api/organizaciones?estado=pendiente' };
-  const res = { headersSent: false, statusCode: 200 };
   replayOnCanonicalRoute(app, req, res, () => assert.fail('no debe continuar al 404'), '/api/admin/organizaciones');
-  assert.equal(replayedUrl, '/api/admin/organizaciones?estado=pendiente');
-  assert.equal(res.statusCode, 401);
+  assert.equal(status, 307);
+  assert.equal(location, '/api/admin/organizaciones?estado=pendiente');
 });

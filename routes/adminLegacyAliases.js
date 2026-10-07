@@ -13,15 +13,13 @@ export const ADMIN_LEGACY_GET_ALIASES = Object.freeze({
   '/api/torneos/resumen-stats': '/api/admin/torneos/resumen-stats',
 });
 
-export function replayOnCanonicalRoute(app, req, res, next, canonicalPath) {
+export function replayOnCanonicalRoute(_app, req, res, _next, canonicalPath) {
   const originalUrl = req.url;
   const query = originalUrl.includes('?') ? originalUrl.slice(originalUrl.indexOf('?')) : '';
-  req.url = `${canonicalPath}${query}`;
-  app.handle(req, res, (error) => {
-    req.url = originalUrl;
-    if (error) return next(error);
-    if (!res.headersSent) return next();
-  });
+  // A same-origin 307 keeps the GET method and Authorization header while
+  // avoiding Express' cached parsed URL. Re-entering app.handle() after
+  // mutating req.url can match the legacy route again and recurse to a 500.
+  return res.redirect(307, `${canonicalPath}${query}`);
 }
 
 export function mountAdminLegacyAliases(app) {
