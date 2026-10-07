@@ -35,12 +35,13 @@ async function rowsOrThrow(query) {
 
 export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date()) {
   const monthStart = startOfCurrentMonthIso(now);
-  const [profiles, activeVenues, tournaments, recentReservations, venues] = await Promise.all([
+  const [profiles, activeVenues, tournaments, recentReservations, venues, courts] = await Promise.all([
     rowsOrThrow(supabaseAdmin.from('perfiles').select('id,created_at')),
     rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,estado')),
     rowsOrThrow(supabaseAdmin.from('torneos').select('id,deporte,estado,fecha_fin')),
-    rowsOrThrow(supabaseAdmin.from('reservas').select('id,estado,cancelada,fecha,created_at')),
+    rowsOrThrow(supabaseAdmin.from('reservas').select('id,estado,cancelada,fecha,created_at,deporte,cancha_id')),
     rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,estado')),
+    optionalRows(supabaseAdmin.from('canchas').select('id,deporte')),
   ]);
 
   const newProfiles = profiles.filter((row) => String(row?.created_at || '') >= monthStart).length;
@@ -55,7 +56,13 @@ export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date())
     const state = String(row?.estado || '').toLowerCase();
     return created >= monthStart && row?.cancelada !== true && ACTIVE_RESERVATION_STATES.has(state);
   });
-  const sportRanking = countBy(tournaments, normalizedSport);
+  const courtSport = new Map(courts.map((court) => [String(court.id), normalizedSport(court)]));
+  const completedReservations = recentReservations.filter((row) =>
+    row?.cancelada !== true && ACTIVE_RESERVATION_STATES.has(String(row?.estado || '').toLowerCase()));
+  const sportRanking = countBy(completedReservations, (row) => {
+    const direct = String(row?.deporte || '').trim();
+    return direct ? normalizedSport(row) : courtSport.get(String(row?.cancha_id || '')) || 'padbol';
+  });
   const topSport = sportRanking[0] || [null, 0];
   const countries = countBy(venues, (row) => String(row?.pais || '').trim() || null)
     .slice(0, 5)
@@ -70,6 +77,9 @@ export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date())
     deporte_mas_popular: {
       deporte: topSport[0],
       label: sportLabel(topSport[0]),
+      reservas_realizadas: topSport[1],
+      // Alias temporal para clientes previos; el valor ya representa reservas,
+      // no torneos creados.
       torneos_creados: topSport[1],
     },
     sedes_por_pais_top5: countries,

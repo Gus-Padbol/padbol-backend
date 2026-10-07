@@ -30,11 +30,12 @@ test('analytics globales separa estados, mes, deportes y países', async () => {
       { id: 3, deporte: 'tenis', estado: 'en_curso', fecha_fin: '2026-09-01' },
     ],
     reservas: [
-      { id: 1, estado: 'confirmada', fecha: '2026-10-03', cancelada: false },
+      { id: 1, estado: 'confirmada', fecha: '2026-10-03', cancelada: false, deporte: 'tenis' },
       { id: 2, estado: 'cancelada', fecha: '2026-10-03', cancelada: true },
       { id: 3, estado: 'pendiente', fecha: '2026-10-03', cancelada: false },
-      { id: 4, estado: 'completada', fecha: '2026-09-30', cancelada: false },
+      { id: 4, estado: 'completada', fecha: '2026-09-30', cancelada: false, cancha_id: 99 },
     ],
+    canchas: [{ id: 99, deporte: 'tenis' }],
   };
   const supabase = { from(name) { return query(tables[name] || []); } };
   const result = await buildGlobalAdminAnalytics(supabase, new Date('2026-10-07T12:00:00Z'));
@@ -44,7 +45,9 @@ test('analytics globales separa estados, mes, deportes y países', async () => {
   assert.equal(result.sedes_activas_total, 2);
   assert.equal(result.torneos_finalizados_total, 2);
   assert.equal(result.reservas_ultimo_mes_total, 1);
-  assert.deepEqual(result.deporte_mas_popular, { deporte: 'padbol', label: 'Padbol', torneos_creados: 2 });
+  assert.deepEqual(result.deporte_mas_popular, {
+    deporte: 'tenis', label: 'Tenis', reservas_realizadas: 2, torneos_creados: 2,
+  });
   assert.deepEqual(result.sedes_por_pais_top5, [
     { pais: 'Argentina', sedes_total: 2 },
     { pais: 'España', sedes_total: 1 },

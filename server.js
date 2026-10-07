@@ -96,6 +96,7 @@ import { mountAdminCoreRoutes } from './routes/adminCore.js';
 import { mountAdminQaPanelRoutes } from './routes/adminQaPanel.js';
 import { mountAdminLegacyAliases } from './routes/adminLegacyAliases.js';
 import { mountAdminValidationAndChannelsRoutes } from './routes/adminValidationAndChannels.js';
+import { mountBuscaDuplaRoutes } from './routes/buscaDupla.js';
 import { mountNextGenerationStatusRoutes } from './routes/nextGenerationStatus.js';
 import { registerNextGenerationAdminRoutes } from './lib/nextGenerationAdmin.js';
 import { mountAdminProfesoresRoutes } from './routes/adminProfesores.js';
@@ -1124,6 +1125,7 @@ mountAdminValidationAndChannelsRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
+mountBuscaDuplaRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountAdminQaPanelRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
