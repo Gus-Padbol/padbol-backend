@@ -305,6 +305,9 @@ app.use(express.json({
 }));
 
 app.use(publicReadRateLimitIfMatch);
+// Legacy compatibility URLs must be registered before the generic
+// `/api/torneos/:id` route, otherwise Express treats `resumen-stats` as an id.
+mountAdminLegacyAliases(app);
 // Gate SDKs with their own HTTP transports before any payment persistence.
 app.use(['/api/crear-preferencia', '/api/crear-pago-stripe', '/api/pago-exitoso',
   '/api/pago-exitoso-stripe', '/api/webhooks/mercadopago', '/api/webhooks/stripe'],
@@ -2974,10 +2977,6 @@ mountAdminTorneosResumenStatsRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
-// Mount legacy admin aliases before the generic /api/torneos/:id routes.
-// Otherwise Express interprets "resumen-stats" as a tournament id and the
-// compatibility URL fails before it can redirect to the authenticated route.
-mountAdminLegacyAliases(app);
 mountSupportTicketsRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
