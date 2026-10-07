@@ -2972,6 +2972,10 @@ mountAdminTorneosResumenStatsRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
+// Mount legacy admin aliases before the generic /api/torneos/:id routes.
+// Otherwise Express interprets "resumen-stats" as a tournament id and the
+// compatibility URL fails before it can redirect to the authenticated route.
+mountAdminLegacyAliases(app);
 mountSupportTicketsRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
@@ -5303,8 +5307,6 @@ checkinRouter.post('/verificar', async (req, res) => {
 });
 
 app.use('/api/checkin', checkinRouter);
-
-mountAdminLegacyAliases(app);
 
 app.use((_req, res) => {
   res.status(404).json({ ok: false, error: 'Ruta no encontrada' });
