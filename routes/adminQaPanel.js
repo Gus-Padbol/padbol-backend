@@ -27,6 +27,10 @@ function countBy(rows, keyFn) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
 }
 
+function normalizedCountry(value) {
+  return String(value || '').replace(/^[\u{1F1E6}-\u{1F1FF}]+\s*/u, '').trim();
+}
+
 async function rowsOrThrow(query) {
   const { data, error } = await query;
   if (error) throw error;
@@ -64,9 +68,16 @@ export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date())
     return direct ? normalizedSport(row) : courtSport.get(String(row?.cancha_id || '')) || 'padbol';
   });
   const topSport = sportRanking[0] || [null, 0];
-  const countries = countBy(venues, (row) => String(row?.pais || '').trim() || null)
+  const countryLabels = new Map();
+  for (const venue of venues) {
+    const label = normalizedCountry(venue.pais);
+    const key = label.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (key && !countryLabels.has(key)) countryLabels.set(key, label);
+  }
+  const countries = countBy(venues, (row) => normalizedCountry(row.pais)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() || null)
     .slice(0, 5)
-    .map(([pais, sedes_total]) => ({ pais, sedes_total }));
+    .map(([key, sedes_total]) => ({ pais: countryLabels.get(key), cantidad: sedes_total, sedes_total }));
 
   return {
     jugadores_registrados_total: profiles.length,

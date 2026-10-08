@@ -21,7 +21,7 @@ test('analytics globales separa estados, mes, deportes y países', async () => {
     ],
     sedes: [
       { id: 1, pais: 'Argentina', estado: 'activa' },
-      { id: 2, pais: 'Argentina', estado: 'suspendida' },
+      { id: 2, pais: '🇦🇷 Argentina', estado: 'suspendida' },
       { id: 3, pais: 'España', estado: 'activa' },
     ],
     torneos: [
@@ -49,8 +49,8 @@ test('analytics globales separa estados, mes, deportes y países', async () => {
     deporte: 'tenis', label: 'Tenis', reservas_realizadas: 2, torneos_creados: 2,
   });
   assert.deepEqual(result.sedes_por_pais_top5, [
-    { pais: 'Argentina', sedes_total: 2 },
-    { pais: 'España', sedes_total: 1 },
+    { pais: 'Argentina', cantidad: 2, sedes_total: 2 },
+    { pais: 'España', cantidad: 1, sedes_total: 1 },
   ]);
 });
 
