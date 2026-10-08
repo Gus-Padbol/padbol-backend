@@ -25,6 +25,12 @@ create table if not exists public.organizaciones (
   )
 );
 
+-- The verified role lookup already selects this optional scope column.
+-- Leave every existing assignment unchanged while restoring that query.
+alter table public.user_roles
+  add column if not exists organizacion_id uuid
+  references public.organizaciones(id) on delete set null;
+
 alter table public.organizaciones enable row level security;
 revoke all on table public.organizaciones from public, anon, authenticated;
 grant all on table public.organizaciones to service_role;
