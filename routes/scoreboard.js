@@ -12,6 +12,7 @@ import {
   applyHistorialPuntoSnapshot,
 } from '../utils/scoreboardLogic.js';
 import { sendHttpError } from '../lib/httpErrors.js';
+import { assertScoreboardScoringSupported } from '../src/scoreboard/scoreboardSportGuard.js';
 import { scoreboardControlWriteRateLimit } from '../lib/rateLimit.js';
 import { mapScoreboardJugadoresTempPublic } from '../lib/scoreboardPublic.js';
 import {
@@ -28,6 +29,7 @@ import {
   SCOREBOARD_CANCHA_RESOLVER_SELECT,
 } from '../src/scoreboard/scoreboardCanchaResolver.js';
 import { syncScoreboardToTorneoPartido } from '../src/scoreboard/scoreboardTorneoSyncService.js';
+import { completeTournamentFromFinalScoreboard } from '../lib/torneos/tournamentCompletionService.js';
 import { onPartidoTorneoFinalizado } from '../lib/torneos/partidoTorneoFinalizadoEffectsService.js';
 import { advanceWinnerIfNeeded } from '../lib/torneos/bracketAdvanceService.js';
 import { ensureScoreboardForCompletedBracketPartido } from '../lib/torneos/bracketScoreboardService.js';
@@ -238,6 +240,13 @@ export async function maybeSyncTorneoAfterScoreboardTerminated(
             },
           );
 
+          if (effectsResult?.advance?.reason === 'no_destino') {
+            const complete = deps.completeTournamentFromFinalScoreboard ?? completeTournamentFromFinalScoreboard;
+            const closure = await complete(supabaseAdmin, { scoreboardId: saved.id, partidoId: saved.partido_torneo_id });
+            if (closure.status === 'completed') console.info('[torneo-cierre]', { torneo_id: closure.torneo_id, final_partido_id: closure.final_partido_id, status: closure.status });
+            if (closure.status === 'conflict') console.warn('[torneo-cierre]', closure.reason);
+          }
+
           if (effectsResult?.advance) {
             logBracketAdvanceResult(saved.id, saved.partido_torneo_id, effectsResult.advance);
           }
@@ -440,6 +449,7 @@ export function mountScoreboardRoutes(app, {
 
   async function handleRegistrarPunto(partido, equipo) {
     assertScoreboardMutable(partido);
+    await assertScoreboardScoringSupported(supabaseAdmin, partido);
     const estadoAntes = partido.estado;
     await insertHistorialPuntoBefore(supabaseAdmin, partido.id, partido, equipo);
     registrarPunto(partido, equipo);
@@ -452,6 +462,7 @@ export function mountScoreboardRoutes(app, {
 
   async function handleUndo(partido) {
     assertScoreboardMutable(partido);
+    await assertScoreboardScoringSupported(supabaseAdmin, partido);
     const entry = await fetchUltimoHistorialPunto(supabaseAdmin, partido.id);
     if (!entry) {
       const err = new Error('No hay puntos para deshacer');
@@ -465,18 +476,21 @@ export function mountScoreboardRoutes(app, {
 
   async function handleDeshacer(partido) {
     assertScoreboardMutable(partido);
+    await assertScoreboardScoringSupported(supabaseAdmin, partido);
     deshacerPunto(partido);
     return saveAndEmit(partido);
   }
 
   async function handleSaque(partido) {
     assertScoreboardMutable(partido);
+    await assertScoreboardScoringSupported(supabaseAdmin, partido);
     cambiarSaque(partido);
     return saveAndEmit(partido);
   }
 
   async function handleTiebreak(partido) {
     assertScoreboardMutable(partido);
+    await assertScoreboardScoringSupported(supabaseAdmin, partido);
     iniciarTiebreak(partido);
     return saveAndEmit(partido);
   }
@@ -488,6 +502,7 @@ export function mountScoreboardRoutes(app, {
     } else if (accion === 'pause') {
       pauseCronometro(partido);
     } else if (accion === 'reset') {
+      await assertScoreboardScoringSupported(supabaseAdmin, partido);
       resetPartidoCompleto(partido);
     }
     return saveAndEmit(partido);
@@ -850,6 +865,15 @@ export function mountScoreboardRoutes(app, {
 
       if (Object.keys(patch).length === 0) {
         return res.status(400).json({ error: 'Ningún campo reconocido para actualizar' });
+      }
+
+      // Check both persisted and proposed links: neither detaching Pickleball nor
+      // attaching it together with a serve change may bypass containment.
+      if (Object.hasOwn(patch, 'saque_actual') || Object.hasOwn(patch, 'torneo_id')) {
+        await assertScoreboardScoringSupported(supabaseAdmin, partido);
+        if (Object.hasOwn(patch, 'torneo_id') && patch.torneo_id !== partido.torneo_id) {
+          await assertScoreboardScoringSupported(supabaseAdmin, { ...partido, torneo_id: patch.torneo_id });
+        }
       }
 
       const { data, error } = await supabaseAdmin

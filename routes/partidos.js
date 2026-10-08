@@ -1,4 +1,6 @@
 import express from 'express';
+import { resolvePartidoSportFormat, resolvePartidoCourtContract } from '../lib/partidoSportFormat.js';
+import { enrichSedesWithCourtCatalog, normalizeAvailabilitySport, slotCourtMetadata } from '../lib/sedeCourtCatalog.js';
 import { notifyPartidoJugadorUnido, sendPushToUser } from '../utils/push.js';
 import { createNotificacion } from '../utils/notificaciones.js';
 import { MatchSummaryPayloadError } from '../src/partidos/matchSummaryPayload.js';
@@ -425,11 +427,15 @@ export function buildPartidoAbiertoInsertRow({
   nivel,
   estado = 'abierto',
   jugadoresConfirmados = 1,
-  jugadoresRequeridos = 4,
+  jugadoresRequeridos,
   deadlineCancel = null,
   duracionMinutos = null,
 }) {
   const sedeId = requirePositiveInt(sedeRow?.id, 'sede_id');
+  const format = resolvePartidoSportFormat({
+    ...body,
+    jugadores_requeridos: jugadoresRequeridos ?? body.jugadores_requeridos,
+  });
 
   const row = {
     ...capitanFields,
@@ -440,9 +446,9 @@ export function buildPartidoAbiertoInsertRow({
     hora: asText(hora),
     nivel: asText(nivel),
     estado: asText(estado),
-    deporte: (body.deporte || 'padbol').toLowerCase(),
+    deporte: format.deporte,
     jugadores_confirmados: requirePositiveInt(jugadoresConfirmados ?? 1, 'jugadores_confirmados'),
-    jugadores_requeridos: requirePositiveInt(jugadoresRequeridos ?? 4, 'jugadores_requeridos'),
+    jugadores_requeridos: format.jugadores_requeridos,
   };
 
   if (reservaId != null) {
@@ -612,12 +618,13 @@ function getHoraUnavailableInfo(
   blockingPartidos,
   nowMs,
   duracionMinutos = 90,
+  courtNumbers = null,
 ) {
   let reservaBlocked = false;
   let bestPartido = null;
   let bestLugares = -1;
 
-  for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
+  for (const cancha of courtNumbers ?? Array.from({ length: totalCourts }, (_, index) => index + 1)) {
     const partido = (blockingPartidos ?? []).find(
       (row) => isPartidoBlockingSlot(row, { hora, canchaNum: cancha, duracionMinutos }),
     );
@@ -685,11 +692,12 @@ function evaluateHoraCourts(
   blockingPartidos,
   nowMs,
   duracionMinutos = 90,
+  courtNumbers = null,
 ) {
   const freeCourts = [];
   const partidoSlots = [];
 
-  for (let cancha = 1; cancha <= totalCourts; cancha += 1) {
+  for (const cancha of courtNumbers ?? Array.from({ length: totalCourts }, (_, index) => index + 1)) {
     const info = slotBlockingInfo(
       { hora, canchaNum: cancha, duracionMinutos },
       blockingReservas,
@@ -760,15 +768,16 @@ function mergeSlotTimeCandidates(smartTimes, gridTimes, availabilityCtx) {
   const merged = new Set(smartTimes);
   for (const hora of gridTimes) {
     if (merged.has(hora)) continue;
-    const { canchasLibres } = evaluateHoraCourts(
+    const { canchasLibres, partidoSlots } = evaluateHoraCourts(
       hora,
       availabilityCtx.totalCourts,
       availabilityCtx.blockingReservas,
       availabilityCtx.blockingPartidos,
       availabilityCtx.nowMs,
       duracionMinutos,
+      availabilityCtx.courtNumbers,
     );
-    if (canchasLibres >= 1) {
+    if (canchasLibres >= 1 || partidoSlots.length > 0) {
       merged.add(hora);
     }
   }
@@ -828,8 +837,9 @@ export async function fetchDisponibilidadOccupancy(supabaseAdmin, { sedeId, sede
 
 export async function buildDisponibilidadSlots(
   supabaseAdmin,
-  { sedeId, fecha, duracionMinutos, expandCourts = false },
+  { sedeId, fecha, duracionMinutos, expandCourts = false, deporte = null },
 ) {
+  const sport = normalizeAvailabilitySport(deporte);
   const { data: sede, error: sedeErr } = await supabaseAdmin
     .from('sedes')
     .select(
@@ -841,10 +851,22 @@ export async function buildDisponibilidadSlots(
   if (sedeErr) throw sedeErr;
   if (!sede) return null;
 
-  const { reservas: blockingReservas, partidos: blockingPartidos } = await fetchDisponibilidadOccupancy(
+  const [catalog] = await enrichSedesWithCourtCatalog(supabaseAdmin, [sede]);
+  const courts = catalog.canchas_activas.filter(court => !sport || court.deporte === sport);
+  if (!courts.length) return [];
+  const courtNumbers = courts.map(court => court.numero);
+  const courtByNumber = new Map(courts.map(court => [court.numero, court]));
+  const occupancy = await fetchDisponibilidadOccupancy(
     supabaseAdmin,
     { sedeId, sedeNombre: sede.nombre, fecha },
   );
+  const blockingReservas = occupancy.reservas;
+  // Older matches may have saved a visible court name instead of "Cancha N".
+  const blockingPartidos = occupancy.partidos.map(row => {
+    if (parseCourtNumberFromStorage(row.cancha) != null) return row;
+    const matches = courts.filter(court => court.nombre === row.cancha);
+    return matches.length === 1 ? { ...row, cancha: String(matches[0].numero) } : row;
+  });
 
   const smartInicios = generarIniciosSmartSlots(
     sede,
@@ -857,7 +879,7 @@ export async function buildDisponibilidadSlots(
     ? smartInicios.map((m) => minutosAHoraReserva(m))
     : [];
   const gridTimes = generateSlotTimes(sede, null, duracionMinutos, fecha);
-  const totalCourts = sede.cantidad_canchas || 1;
+  const totalCourts = courts.length;
   const nowMs = Date.now();
   const availabilityCtx = {
     totalCourts,
@@ -865,6 +887,7 @@ export async function buildDisponibilidadSlots(
     blockingPartidos,
     nowMs,
     duracionMinutos,
+    courtNumbers,
   };
   const slotTimes = smartTimes.length > 0
     ? mergeSlotTimeCandidates(smartTimes, gridTimes, availabilityCtx)
@@ -879,11 +902,12 @@ export async function buildDisponibilidadSlots(
         blockingPartidos,
         nowMs,
         duracionMinutos,
+        courtNumbers,
       );
       const cards = [];
 
       for (const cancha of freeCourts) {
-        cards.push(buildAvailableSlot(hora, cancha, canchasLibres));
+        cards.push({ ...buildAvailableSlot(hora, cancha, canchasLibres), ...slotCourtMetadata(courtByNumber.get(cancha)) });
       }
 
       for (const { cancha, partido } of partidoSlots) {
@@ -894,6 +918,7 @@ export async function buildDisponibilidadSlots(
           canchas_libres: canchasLibres,
           motivo: 'partido_abierto',
           partido,
+          ...slotCourtMetadata(courtByNumber.get(cancha)),
         });
       }
 
@@ -905,6 +930,7 @@ export async function buildDisponibilidadSlots(
           blockingPartidos,
           nowMs,
           duracionMinutos,
+          courtNumbers,
         );
         return [buildUnavailableSlot(hora, unavailableInfo, null, 0)];
       }
@@ -921,22 +947,23 @@ export async function buildDisponibilidadSlots(
       blockingPartidos,
       nowMs,
       duracionMinutos,
+      courtNumbers,
     );
 
     if (canchasLibres > 0) {
-      return buildAvailableSlot(hora, freeCourts[0], canchasLibres);
+      return { ...buildAvailableSlot(hora, freeCourts[0], canchasLibres), ...slotCourtMetadata(courtByNumber.get(freeCourts[0])) };
     }
 
     if (partidoSlots.length > 0) {
       const bestPartido = partidoSlots.reduce(
         (best, current) => (current.lugaresLibres > best.lugaresLibres ? current : best),
       );
-      return buildUnavailableSlot(
+      return { ...buildUnavailableSlot(
         hora,
         { blocked: true, motivo: 'partido_abierto', partido: bestPartido.partido },
         bestPartido.cancha,
         0,
-      );
+      ), ...slotCourtMetadata(courtByNumber.get(bestPartido.cancha)) };
     }
 
     const info = getHoraUnavailableInfo(
@@ -946,6 +973,7 @@ export async function buildDisponibilidadSlots(
       blockingPartidos,
       nowMs,
       duracionMinutos,
+      courtNumbers,
     );
     return buildUnavailableSlot(hora, info, null, 0);
   });
@@ -1691,8 +1719,7 @@ export function createPartidosRouter({
 
       logPartidoCanchaBody(req.body, 'POST /api/partidos/crear-con-prereserva');
 
-      const canchaStorage = resolveReservaCanchaStorageText(req.body);
-      const canchaDisplay = resolvePartidoCanchaNombre(req.body);
+      const requestedCourtNumber = resolveReservaCanchaStorageText(req.body);
       const durationMinutes = parsePositiveInt(duracion_minutos ?? duracion);
 
       if (!fecha || !hora || !nivel) {
@@ -1703,6 +1730,12 @@ export function createPartidosRouter({
       if (!sedeRow) {
         return res.status(404).json({ error: 'Sede no encontrada' });
       }
+
+      const courtContract = await resolvePartidoCourtContract(supabaseAdmin, {
+        sede: sedeRow, body: req.body, legacyCourtNumber: requestedCourtNumber,
+      });
+      const canchaStorage = String(courtContract.numero);
+      const canchaDisplay = courtContract.nombre;
 
       const blocked = await isCourtBlocked(supabaseAdmin, {
         sedeNombre: sedeRow.nombre,
@@ -1740,7 +1773,7 @@ export function createPartidosRouter({
         hora_inicio: req.body.hora_inicio,
         hora_fin: req.body.hora_fin,
         canchaText: canchaStorage,
-        cancha_id: req.body.cancha_id,
+        cancha_id: courtContract.canchaId,
         nombre: contactNombre,
         email: contactEmail,
         telefono: contactWhatsapp,
@@ -1752,6 +1785,9 @@ export function createPartidosRouter({
         duracion_minutos: durationMinutes ?? 90,
         user_id: user.id,
       });
+      // This authenticated self-service route binds the reservation owner to user.id.
+      // Never accept an origin supplied by the caller; the DB also protects this column.
+      reservaInsert.origen_creacion = 'encuentro_jugador_v1';
       console.log('[DEBUG INSERT reservas]', {
         sede_id: sedeRow.id,
         fecha,
@@ -1777,9 +1813,9 @@ export function createPartidosRouter({
 
       const partidoInsert = buildPartidoAbiertoInsertRow({
         sedeRow,
-        body: req.body,
+        body: { ...req.body, deporte: courtContract.deporte },
         reservaId: reserva.id,
-        canchaNombre: canchaDisplay,
+        canchaNombre: `Cancha ${courtContract.numero}`,
         capitanFields: await buildCapitanFields(supabaseAdmin, user, { email: contactEmail }),
         fecha,
         hora,
@@ -1787,6 +1823,7 @@ export function createPartidosRouter({
         estado: 'abierto',
         deadlineCancel,
         duracionMinutos: durationMinutes,
+        jugadoresRequeridos: courtContract.jugadores_requeridos,
       });
       console.log('[DEBUG partidos_abiertos INSERT]', {
         reserva_id: reserva.id,
@@ -1822,6 +1859,9 @@ export function createPartidosRouter({
         fecha,
         hora: formatHora(hora),
         nivel,
+        deporte: courtContract.deporte,
+        formato_juego: courtContract.formato_juego,
+        jugadores_requeridos: courtContract.jugadores_requeridos,
       });
     } catch (err) {
       console.error('❌ Error POST /api/partidos/crear-con-prereserva:', err.message);

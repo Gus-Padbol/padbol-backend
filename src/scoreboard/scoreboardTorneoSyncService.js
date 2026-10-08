@@ -176,7 +176,7 @@ export async function syncScoreboardToTorneoPartido(supabaseAdmin, scoreboardId)
 
   if (partidoHasFinalResult(partido)) {
     if (isAlreadySyncedMatch(scoreboard, partido, resultado, ganadorEquipoId)) {
-      await markScoreboardSyncStatus(supabaseAdmin, sid, 'synced');
+      // A retry must not move an already recorded sporting result into a new month.
       return {
         ok: true,
         status: 'synced',

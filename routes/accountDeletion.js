@@ -17,8 +17,13 @@ function isMissingDeletionTableError(error) {
 export function mountAccountDeletionRoutes(router, {
   supabaseAdmin,
   getAuthenticatedUser,
+  requestDeletion = null,
 } = {}) {
   router.post('/eliminacion-cuenta', async (req, res) => {
+    if (requestDeletion) {
+      req.body = { ...req.body, confirmation: String(req.body?.confirmation || '').trim().toUpperCase(), source: normalizeDeletionSource(req.body?.source) };
+      return requestDeletion(req, res);
+    }
     try {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) {

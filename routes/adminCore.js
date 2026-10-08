@@ -1,19 +1,10 @@
 import { requireAdminUser, requireSuperAdminUser } from '../lib/authAccess.js';
 
-const SENSITIVE_SEDE_KEYS = new Set([
-  'mp_access_token',
-  'mp_public_key',
-  'stripe_secret_key',
-  'stripe_webhook_secret',
-  'password',
-  'secret',
-]);
+import { redactSedePaymentValues } from '../utils/sedePublicSelect.js';
 
 export function sanitizeAdminSede(row) {
   if (!row || typeof row !== 'object') return null;
-  return Object.fromEntries(
-    Object.entries(row).filter(([key]) => !SENSITIVE_SEDE_KEYS.has(String(key).toLowerCase())),
-  );
+  return redactSedePaymentValues(row);
 }
 
 export function mapAdminRoleRow(row, sedesById = new Map()) {
@@ -37,6 +28,7 @@ export function mapAdminRoleRow(row, sedesById = new Map()) {
     rol: role,
     alcance: alcance || null,
     sede_id: sedeId,
+    organizacion_id: row?.organizacion_id || null,
     sede_nombre: sedeId != null ? sedesById.get(sedeId) || null : null,
     pais: row?.pais || null,
     provincia: row?.provincia || null,
@@ -60,6 +52,8 @@ export function mountAdminCoreRoutes(app, {
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails = [],
+  resolveTerritorialScope = null,
+  sedesPermitidasPorScope = null,
 }) {
   const adminDeps = {
     getAuthenticatedUser,
@@ -82,6 +76,17 @@ export function mountAdminCoreRoutes(app, {
 
   app.get('/api/admin/sedes-alcance', async (req, res) => {
     try {
+      if (resolveTerritorialScope && sedesPermitidasPorScope) {
+        const scope = await resolveTerritorialScope(req);
+        if (!scope) return res.status(401).json({ error: 'No autorizado' });
+        if (!['super_admin', 'admin_nacional', 'admin_cadena', 'admin_club', 'empleado'].includes(scope.rol)) {
+          return res.status(403).json({ error: 'No autorizado' });
+        }
+        const allowed = await sedesPermitidasPorScope(scope);
+        return res.json({ rol: scope.rol, alcance: scope.alcance, sede_id: scope.sedeId,
+          organizacion_id: scope.organizacionId, pais: scope.pais, provincia: scope.provincia,
+          ciudad: scope.ciudad, sedes: (allowed.sedes || []).map(sanitizeAdminSede).filter(Boolean) });
+      }
       const auth = await requireAdminUser(req, res, adminDeps);
       if (!auth) return;
       let query = supabaseAdmin.from('sedes').select('*').order('nombre');
@@ -126,7 +131,15 @@ export function mountAdminCoreRoutes(app, {
       const withSedeScope = (query) => (sedeId != null ? query.eq('sede_id', sedeId) : query);
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-      const [instructoresPendientes, sedesPendientes, pagosFallidos, cancelaciones24h] = await Promise.all([
+      const [
+        instructoresPendientes,
+        sedesPendientes,
+        pagosFallidos,
+        cancelaciones24h,
+        validacionesPendientes,
+        conversacionesPendientes,
+        canjesPendientes,
+      ] = await Promise.all([
         safeCount(() => withSedeScope(
           supabaseAdmin.from('profesores').select('id', { count: 'exact', head: true }).eq('estado', 'pendiente'),
         )),
@@ -143,6 +156,20 @@ export function mountAdminCoreRoutes(app, {
             .eq('estado', 'cancelada')
             .gte('updated_at', since),
         )),
+        safeCount(() => supabaseAdmin
+          .from('perfiles')
+          .select('id', { count: 'exact', head: true })
+          .eq('pendiente_validacion', true)),
+        safeCount(() => supabaseAdmin
+          .from('crm_conversations')
+          .select('id', { count: 'exact', head: true })
+          .in('status', ['new', 'open', 'pending'])),
+        safeCount(() => withSedeScope(
+          supabaseAdmin
+            .from('padcoins_canjes')
+            .select('id', { count: 'exact', head: true })
+            .eq('estado', 'pendiente'),
+        )),
       ]);
 
       return res.json({
@@ -152,6 +179,11 @@ export function mountAdminCoreRoutes(app, {
         sedes_pendientes: sedesPendientes,
         pagos_fallidos: pagosFallidos,
         cancelaciones_24h: cancelaciones24h,
+        validaciones_pendientes: validacionesPendientes,
+        conversaciones_pendientes: conversacionesPendientes,
+        canjes_pendientes: canjesPendientes,
+        total_pendientes: instructoresPendientes + sedesPendientes + pagosFallidos
+          + validacionesPendientes + conversacionesPendientes + canjesPendientes,
         updated_at: new Date().toISOString(),
       });
     } catch (error) {

@@ -1,0 +1,52 @@
+[
+  {
+    "id": "court",
+    "label": "Quiero una cancha Padbol",
+    "questions": [
+      { "id": "court_count", "field": "court_count", "prompt": "¿Cuántas canchas estás evaluando?", "options": ["1 cancha", "2 a 3 canchas", "4 o más canchas", "Aún no está definido"] },
+      { "id": "organization_type", "field": "organization_type", "prompt": "¿Para qué uso sería la cancha?", "options": ["Uso privado", "Club o complejo deportivo", "Alquiler comercial", "Institución o municipio", "A definir"] },
+      { "id": "space_status", "field": "space_status", "prompt": "¿Cómo está hoy el espacio?", "options": ["Sí, propiedad propia", "Sí, propiedad alquilada", "Estoy buscando una ubicación", "Aún no está definido"] }
+    ]
+  },
+  {
+    "id": "club",
+    "label": "Quiero sumar Padbol a mi club",
+    "questions": [
+      { "id": "court_count", "field": "court_count", "prompt": "¿Cuántas canchas quieres sumar?", "options": ["1 cancha", "2 canchas", "3 canchas", "4 o más canchas"] },
+      { "id": "space_status", "field": "space_status", "prompt": "¿En qué situación está el espacio?", "options": ["Ya contamos con el espacio", "Debemos adaptar un sector", "Estamos buscando una ubicación"] }
+    ]
+  },
+  {
+    "id": "point",
+    "label": "Quiero abrir un Punto Padbol exclusivo",
+    "questions": [
+      { "id": "court_count", "field": "court_count", "prompt": "Un Punto Padbol se proyecta con 4 canchas o más. ¿Cuántas imaginás?", "options": ["4 canchas", "5 canchas", "6 canchas", "7 o más canchas"] },
+      { "id": "organization_type", "field": "organization_type", "prompt": "¿Cómo está resuelta la ubicación?", "options": ["Ya tengo una propiedad", "Club o complejo deportivo", "Tengo una opción de alquiler", "Estoy buscando ubicación", "Aún no está definido"] },
+      { "id": "initial_investment", "field": "initial_investment", "prompt": "¿Cuál es tu capital estimado de inversión?", "options": ["USD 50.000 a 100.000", "USD 100.000 a 250.000", "Más de USD 250.000", "Prefiero conversarlo"] }
+    ]
+  },
+  {
+    "id": "regional",
+    "label": "Quiero representar Padbol en mi ciudad o región",
+    "questions": [
+      { "id": "requested_territory", "field": "requested_territory", "prompt": "¿Qué ciudad o región te interesa desarrollar?", "options": [] },
+      { "id": "organization_type", "field": "organization_type", "prompt": "¿Cuál es tu perfil actual?", "options": ["Club o complejo deportivo", "Empresa o inversor", "Gestor deportivo", "Institución pública", "Otro"] },
+      { "id": "local_network", "field": "local_network", "prompt": "¿Con qué red local cuentas hoy?", "options": ["Ya tengo clubes o espacios interesados", "Tengo contactos para desarrollar", "Comenzaría desde cero"] }
+    ]
+  },
+  {
+    "id": "national",
+    "label": "Quiero representar Padbol en mi país",
+    "questions": [
+      { "id": "requested_country", "field": "requested_country", "prompt": "¿Qué país te interesa representar?", "options": [] },
+      { "id": "organization_type", "field": "organization_type", "prompt": "¿Qué tipo de organización eres?", "options": ["Club o complejo deportivo", "Empresa", "Federación o asociación", "Grupo inversor", "Institución", "Proyecto en formación"] },
+      { "id": "territorial_capacity", "field": "territorial_capacity", "prompt": "¿Con qué capacidad cuentas hoy para desarrollar el país?", "options": ["Equipo y red nacional disponibles", "Alianzas en varias ciudades", "Capital y equipo por conformar", "Primera etapa de planificación"] },
+      { "id": "initial_investment", "field": "initial_investment", "prompt": "¿Cuál es la inversión inicial prevista para este modelo nacional?", "options": ["USD 60.000 a 100.000", "USD 100.000 a 250.000", "Más de USD 250.000"] }
+    ]
+  },
+  {
+    "id": "other",
+    "label": "Quiero hacer otra consulta",
+    "questions": []
+  }
+]

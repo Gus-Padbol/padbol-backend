@@ -1,7 +1,9 @@
 import { MercadoPagoConfig, Payment } from 'mercadopago';
+import crypto from 'node:crypto';
 import { mapPagoExitosoPollDto } from '../lib/dto/reservaDto.js';
 import { resolveHttpStatus } from '../lib/httpErrors.js';
 import { safeQueryLog, summarizeError } from '../lib/safeLog.js';
+import { mercadoPagoWebhookRateLimit } from '../lib/rateLimit.js';
 
 /** Tolerancia mínima ARS entre monto MP y precio_esperado (redondeos MP). */
 export const PAYMENT_AMOUNT_TOLERANCE = 1;
@@ -11,6 +13,8 @@ export const MP_WEBHOOK_INVALID_PAYLOAD_ERROR = 'Solicitud de webhook inválida'
 export const MP_WEBHOOK_VERIFY_UNAVAILABLE_ERROR = 'No se pudo verificar el pago en este momento';
 
 const ALLOWED_PRE_CONFIRM_ESTADOS = new Set(['pendiente', 'prereserva']);
+const MP_SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000;
+const mpReplayCache = new Map();
 
 const RESERVA_CONFIRM_SELECT = `
   id, estado, pago_estado, sede, fecha, hora, cancha, whatsapp, telefono,
@@ -20,6 +24,50 @@ const RESERVA_CONFIRM_SELECT = `
 function jsonError(res, status, message, extra = {}) {
   if (res.headersSent) return;
   return res.status(status).json({ ok: false, error: message, ...extra });
+}
+
+function parseSignatureHeader(value) {
+  const parts = Object.fromEntries(String(value || '').split(',').map((part) => part.trim().split('=', 2)));
+  return { ts: parts.ts || '', v1: parts.v1 || '' };
+}
+
+export function verifyMercadoPagoWebhookSignature(req, {
+  env = process.env,
+  now = Date.now(),
+} = {}) {
+  const mode = String(env.BACKEND_RUNTIME_MODE || '').trim().toLowerCase();
+  const secret = String(env.MERCADOPAGO_WEBHOOK_SECRET || '').trim();
+  const signature = parseSignatureHeader(req.headers?.['x-signature']);
+  const requestId = String(req.headers?.['x-request-id'] || '').trim();
+  const dataId = String(extractMercadoPagoPaymentId(req) || '').trim().toLowerCase();
+  if (!secret) {
+    if (mode === 'development' || mode === 'test') return { ok: true, compatibilityUnsigned: true };
+    return { ok: false, status: 503, code: 'MP_WEBHOOK_SIGNATURE_NOT_CONFIGURED' };
+  }
+  if (!signature.ts || !/^[a-f0-9]{64}$/i.test(signature.v1) || !requestId || !dataId) {
+    return { ok: false, status: 401, code: 'MP_WEBHOOK_SIGNATURE_INVALID' };
+  }
+  const rawTs = Number(signature.ts);
+  const timestampMs = rawTs < 1e12 ? rawTs * 1000 : rawTs;
+  if (!Number.isFinite(timestampMs) || timestampMs > now + 60_000 || now - timestampMs > MP_SIGNATURE_MAX_AGE_MS) {
+    return { ok: false, status: 401, code: 'MP_WEBHOOK_SIGNATURE_EXPIRED' };
+  }
+  const manifest = `id:${dataId};request-id:${requestId};ts:${signature.ts};`;
+  const expected = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
+  const provided = Buffer.from(signature.v1.toLowerCase(), 'utf8');
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  if (provided.length !== expectedBuffer.length || !crypto.timingSafeEqual(provided, expectedBuffer)) {
+    return { ok: false, status: 401, code: 'MP_WEBHOOK_SIGNATURE_INVALID' };
+  }
+  const replayKey = `${requestId}:${signature.ts}:${signature.v1.toLowerCase()}`;
+  const replayState = mpReplayCache.get(replayKey);
+  if (replayState?.state === 'done') return { ok: true, replay: true };
+  if (replayState?.state === 'processing') return { ok: true, inFlight: true };
+  if (mpReplayCache.size > 1000) {
+    const cutoff = now - MP_SIGNATURE_MAX_AGE_MS;
+    for (const [key, entry] of mpReplayCache) if (entry.at < cutoff) mpReplayCache.delete(key);
+  }
+  return { ok: true, replay: false, replayKey };
 }
 
 export function buildMercadoPagoWebhookClientError(err, { invalidPayload = false } = {}) {
@@ -85,6 +133,7 @@ export function parseReservaIdFromExternalReference(raw) {
 
 export function extractMercadoPagoPaymentId(req) {
   const q = req.query || {};
+  if (q['data.id']) return String(q['data.id']).trim();
   if (String(q.topic || '').toLowerCase() === 'payment' && q.id) {
     return String(q.id).trim();
   }
@@ -579,7 +628,8 @@ async function handlePagoExitosoReadOnly(req, res, pgPool, deps) {
   }
 }
 
-async function handleMercadoPagoWebhook(req, res, pgPool, deps) {
+async function handleMercadoPagoWebhook(req, res, pgPool, deps, replayKey = null) {
+  let completed = false;
   try {
     if (!pgPool) {
       const err = new Error('pgPool no disponible');
@@ -600,11 +650,15 @@ async function handleMercadoPagoWebhook(req, res, pgPool, deps) {
     }
 
     const result = await procesarPagoMercadoPago(pgPool, paymentId, deps);
+    if (replayKey) mpReplayCache.set(replayKey, { state: 'done', at: Date.now() });
+    completed = true;
     return res.status(200).json(result);
   } catch (err) {
     logMercadoPagoWebhookError(err);
     const { status, body } = buildMercadoPagoWebhookClientError(err);
     return res.status(status).json(body);
+  } finally {
+    if (!completed && replayKey) mpReplayCache.delete(replayKey);
   }
 }
 
@@ -618,8 +672,13 @@ export function mountMercadoPagoWebhookRoutes(app, deps) {
   });
 
   /** Notificación IPN de Mercado Pago — único endpoint que confirma reservas */
-  app.post('/api/webhooks/mercadopago', (req, res) => {
-    void handleMercadoPagoWebhook(req, res, pgPool, handlerDeps);
+  app.post('/api/webhooks/mercadopago', mercadoPagoWebhookRateLimit, (req, res) => {
+    const verification = verifyMercadoPagoWebhookSignature(req);
+    if (!verification.ok) return res.status(verification.status).json({ ok: false, error: 'Webhook no autorizado', code: verification.code });
+    if (verification.replay) return res.status(200).json({ ok: true, idempotent: true });
+    if (verification.inFlight) return res.status(202).json({ ok: true, processing: true });
+    if (verification.replayKey) mpReplayCache.set(verification.replayKey, { state: 'processing', at: Date.now() });
+    void handleMercadoPagoWebhook(req, res, pgPool, handlerDeps, verification.replayKey);
   });
 
   /**

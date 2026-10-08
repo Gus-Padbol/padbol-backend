@@ -1,3 +1,4 @@
+import { sendPushToUser } from '../utils/push.js';
 import express from 'express';
 import { maskEmail } from '../lib/safeLog.js';
 import {
@@ -41,7 +42,7 @@ async function resolvePlayerProfile({ email, userId }, supabaseAdmin) {
 
   const { data } = await supabaseAdmin
     .from('jugadores_perfil')
-    .select('nombre, apellido, apodo, email, user_id, foto_url, expo_push_token, nivel')
+    .select('nombre, apellido, apodo, email, user_id, foto_url, nivel')
     .or(filters.join(','))
     .maybeSingle();
 
@@ -111,21 +112,14 @@ async function sendTeamInvitationPush({
     });
   }
 
-  if (perfil?.expo_push_token) {
+  if (perfil?.user_id) {
     try {
-      await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Accept-encoding': 'gzip, deflate',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          to: perfil.expo_push_token,
-          title: 'Invitación a equipo',
-          body: `${capitanNombre} te invitó a unirte a ${equipo.nombre}`,
-          data: { type: 'invitacion_equipo', equipo_id: String(equipo.id) },
-          sound: 'default',
+      await sendPushToUser(supabaseAdmin, perfil.user_id, {
+        title: 'Invitación a equipo',
+        body: `${capitanNombre} te invitó a unirte a ${equipo.nombre}`,
+        data: { type: 'invitacion_equipo', equipo_id: String(equipo.id) },
+        idempotencyKey: buildEquipoNotificacionDedupeKey('invitacion_equipo_recibida', {
+          equipoId: equipo.id, memberId, userId: perfil.user_id,
         }),
       });
     } catch (error) {

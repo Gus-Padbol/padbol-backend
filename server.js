@@ -1,15 +1,33 @@
+import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
+import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
+import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.js';
+import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
+import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
+import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
+import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, registerWhatsappAdminRoutes } from './lib/whatsappAdmin.js';
+import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
+import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
+import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
+import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
+import { createCrmLeadAutoAnalyzer } from './lib/crmLeadAutoAnalysis.js';
+import { createCrmImapInboxSync, readCrmImapConfig } from './lib/crmImapInbound.js';
+import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
+import { mountReleaseRoutes } from './lib/releaseServices.js';
+import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
 import http from 'http';
 import ws from 'ws';
 import express from 'express';
 import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
 import { createClient } from '@supabase/supabase-js';
+import { buildCrearTorneoPayload } from './lib/torneos/crearTorneoPayload.js';
+import { enrichSedesWithCourtCatalog, normalizeAvailabilitySport } from './lib/sedeCourtCatalog.js';
 import pg from 'pg';
 import twilio from 'twilio';
 import dotenv from 'dotenv';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
 import Stripe from 'stripe';
-import cron from 'node-cron';
+import cronLibrary from 'node-cron';
 import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
 import { createContentAdminRouter } from './routes/contentAdmin.js';
@@ -34,10 +52,12 @@ import {
 } from './routes/partidos.js';
 import { reservaHoraInicioFromRow, reservaHoraFinFromRow, reservaMatchesSede } from './utils/reservasColumns.js';
 import { createClasesRouter } from './routes/clases.js';
+import { registerModuloClasesRoutes } from './lib/moduloClases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountSurgeRoutes } from './routes/surge.js';
 import { mountCanchasRoutes } from './routes/canchas.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
+import { mountFipaOfficialRankingRoutes } from './routes/fipaOfficialRanking.js';
 import { mountResenasRoutes } from './routes/resenas.js';
 import {
   mountReputacionRoutes,
@@ -58,9 +78,14 @@ import {
   validateCiudad,
 } from './src/jugador/jugadorPerfilFichaService.js';
 import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
-import { mountFipaOfficialRankingRoutes } from './routes/fipaOfficialRanking.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
 import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js';
+import {
+  RESERVA_RELEASE_PENDING_STATES,
+  assertReservaMatchesReleaseToken,
+  createReservaReleaseToken,
+  verifyReservaReleaseToken,
+} from './lib/reservaReleaseToken.js';
 import { mountSedeExtrasRoutes } from './routes/sedeExtras.js';
 import { mountStoreSedeConfigRoutes } from './routes/storeSedeConfig.js';
 import { mountStoreAdminRoutes } from './routes/storeAdmin.js';
@@ -68,7 +93,12 @@ import { mountStorePublicRoutes } from './routes/storePublic.js';
 import { mountSedesDuracionesRoutes } from './routes/sedesDuraciones.js';
 import { mountAdminJugadoresRoutes } from './routes/adminJugadores.js';
 import { mountAdminCoreRoutes } from './routes/adminCore.js';
+import { mountAdminQaPanelRoutes } from './routes/adminQaPanel.js';
+import { mountAdminLegacyAliases } from './routes/adminLegacyAliases.js';
+import { mountAdminValidationAndChannelsRoutes } from './routes/adminValidationAndChannels.js';
+import { mountBuscaDuplaRoutes } from './routes/buscaDupla.js';
 import { mountNextGenerationStatusRoutes } from './routes/nextGenerationStatus.js';
+import { registerNextGenerationAdminRoutes } from './lib/nextGenerationAdmin.js';
 import { mountAdminProfesoresRoutes } from './routes/adminProfesores.js';
 import { mountAdminTorneosResumenStatsRoutes } from './routes/adminTorneosResumenStats.js';
 import { mountSupportTicketsRoutes } from './routes/supportTickets.js';
@@ -78,7 +108,7 @@ import { mountListaEsperaGeneralRoutes } from './routes/listaEsperaGeneral.js';
 import { mountLogrosPremiosRoutes } from './routes/logrosPremios.js';
 import { mountLigasPremiosRoutes } from './routes/ligasPremios.js';
 import { enrichSedeWithHeroPhoto } from './utils/sedeHero.js';
-import { SEDE_APP_SELECT } from './utils/sedePublicSelect.js';
+import { SEDE_PAYMENT_STATUS_SELECT, pickPublicSedeWithPaymentStatus } from './utils/sedePublicSelect.js';
 import { mountMercadoPagoWebhookRoutes } from './routes/mercadopagoWebhook.js';
 import { mountStripeWebhookRoutes } from './routes/stripeWebhook.js';
 import {
@@ -130,6 +160,9 @@ import {
 } from './lib/torneos/knockoutBracketService.js';
 import { generarKnockoutDesdeGrupos } from './lib/torneos/generarKnockoutDesdeGruposService.js';
 import { cargarResultadoManualPartidoTorneo } from './lib/torneos/cargarResultadoManualPartidoTorneoService.js';
+import { mountManualPlayedDateRoutes } from './lib/torneos/manualPlayedDateService.js';
+import { MANUAL_PLAYED_DATE_CAPABILITY } from './lib/torneos/manualPlayedDateCapability.js';
+import { mountManualPlayedDateCapabilityRoute } from './lib/torneos/manualPlayedDateCapabilityService.js';
 import {
   handleGetTorneoPermisos,
   resolveTorneoAdminAccess,
@@ -202,44 +235,67 @@ import {
 globalThis.WebSocket = ws;
 
 dotenv.config();
+assertStagingIsolation();
+const runtime = backendRuntime();
+// Capture the original fetch for the two narrowly scoped QA senders, then guard all other outbound traffic.
+const runWhatsappMetaQaStartupCheck = createWhatsappMetaQaStartupCheck();
+const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
+const whatsappQaCrmManualSenderFactory = createWhatsappQaCrmManualSender();
+installStagingFetchGuard();
+const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
+const configuredOrigins = String(process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || '').split(',').map(value => value.trim()).filter(Boolean);
 const app = express();
 configureRateLimitTrustProxy(app);
 const httpServer = http.createServer(app);
 const io = new SocketIOServer(httpServer, {
   cors: {
     origin: [
+      ...configuredOrigins,
       'https://padbolmatch.com',
       'https://www.padbolmatch.com',
       'http://localhost:3000',
       'http://localhost:3001',
+      'http://localhost:18080',
+      'http://127.0.0.1:18080',
       'http://localhost:8081',
       'https://padbol-match.netlify.app',
       'https://padbol-match-9abn.vercel.app',
+      'https://padbol-match-9abn-klwz8xz8w-padbol1.vercel.app',
+      'https://dev.padbol.com',
     ],
     methods: ['GET', 'POST'],
     credentials: true,
   },
 });
-const PORT = 3001;
+const PORT = Number(process.env.PORT || 3001);
 
 // CORS
 app.use(cors({
   origin: [
+    ...configuredOrigins,
     'https://padbolmatch.com',
     'https://www.padbolmatch.com',
     'http://localhost:3000',
     'http://localhost:3001',
+    'http://localhost:18080',
+    'http://127.0.0.1:18080',
     'http://localhost:8081',
     'exp://192.168.0.19:8081',
     'https://expo.dev',
     'https://padbol-match.netlify.app',
     'https://padbol-match-9abn.vercel.app',
+    'https://padbol-match-9abn-klwz8xz8w-padbol1.vercel.app',
+    'https://dev.padbol.com',
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   credentials: true,
 }));
 applySecurityHeaders(app);
+app.use(WHATSAPP_CLOUD_WEBHOOK_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (req, _res, next) => {
+  if (Buffer.isBuffer(req.body)) req.rawBody = req.body;
+  next();
+});
 app.use(express.json({
   verify: (req, _res, buf) => {
     if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe') {
@@ -249,6 +305,13 @@ app.use(express.json({
 }));
 
 app.use(publicReadRateLimitIfMatch);
+// Legacy compatibility URLs must be registered before the generic
+// `/api/torneos/:id` route, otherwise Express treats `resumen-stats` as an id.
+mountAdminLegacyAliases(app);
+// Gate SDKs with their own HTTP transports before any payment persistence.
+app.use(['/api/crear-preferencia', '/api/crear-pago-stripe', '/api/pago-exitoso',
+  '/api/pago-exitoso-stripe', '/api/webhooks/mercadopago', '/api/webhooks/stripe'],
+  externalOperationsGate(runtime));
 
 // Supabase (desde .env)
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -256,6 +319,13 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const SUPABASE_SERVICE_ROLE_KEY = String(
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY ?? '',
 ).trim();
+const RESERVA_RELEASE_TOKEN_SECRET = String(
+  process.env.RESERVA_RELEASE_TOKEN_SECRET || SUPABASE_SERVICE_ROLE_KEY || '',
+).trim();
+const RESERVA_RELEASE_TOKEN_TTL_SECONDS = Number.parseInt(
+  String(process.env.RESERVA_RELEASE_TOKEN_TTL_SECONDS || ''),
+  10,
+);
 const SUPABASE_CLIENT_GLOBAL_OPTS = {
   global: { WebSocket: ws },
   realtime: { enabled: false },
@@ -492,6 +562,7 @@ async function createMercadoPagoPreferenceInternal({
   extras = [],
   pricing,
 }) {
+  assertOutboundDeliveryEnabled(runtime);
   const client = await resolveMercadoPagoClient(sedeId);
   const paymentExtras = extras ?? reservaData?.extras ?? [];
   const paymentPricing = pricing ?? {
@@ -615,15 +686,16 @@ if (!process.env.FRONTEND_URL) {
 const TWILIO_ACCOUNT_SID   = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN    = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
-const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+const twilioTransport = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+const twilioClient = new Proxy(twilioTransport, {
+  get(target, property, receiver) {
+    if (property === 'messages' && !runtime.outboundDeliveryEnabled) return { create: async () => ({ disabled: true }) };
+    return Reflect.get(target, property, receiver);
+  },
+});
 
 // ─── JWT + user_roles (mi-rol para panel /admin) ─────────────────────────────
-const LEGACY_SUPER_ADMIN_EMAILS_API = [
-  'padbolinternacional@gmail.com',
-  'admin@padbol.com',
-  'sm@padbol.com',
-  'juanpablo@padbol.com',
-];
+const LEGACY_SUPER_ADMIN_EMAILS_API = [];
 
 async function authUserFromBearer(req) {
   const auth = String(req.headers.authorization || '');
@@ -642,7 +714,7 @@ async function fetchUserRoleRow(email) {
   // supabaseAdmin: bypass RLS (el client anon puede no ver user_roles).
   let q = await supabaseAdmin
     .from('user_roles')
-    .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
+    .select('role, alcance, organizacion_id, provincia, ciudad, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
     .eq('email', em)
     .maybeSingle();
   if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
@@ -656,26 +728,54 @@ async function fetchUserRoleRow(email) {
   return q.data;
 }
 
+const whatsappOperators = new Set(
+  String(process.env.WHATSAPP_ASSISTANT_OPERATORS ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
+);
+const whatsappSuperAdminEmails = new Set(LEGACY_SUPER_ADMIN_EMAILS_API);
+
+const whatsappAdminService = createWhatsappAdminService({
+  repository: createSupabaseWhatsappAdminRepository(supabaseAdmin),
+  operators: whatsappOperators,
+  superAdminEmails: whatsappSuperAdminEmails,
+});
+registerWhatsappAdminRoutes(app, { whatsappAdminService, authUserFromBearer, fetchUserRoleRow });
+
+const crmAdminService = createCrmAdminService({
+  repository: createSupabaseCrmRepository(supabaseAdmin),
+  operators: whatsappOperators,
+  superAdminEmails: whatsappSuperAdminEmails,
+  sendWhatsappReply: whatsappQaCrmManualSenderFactory?.({ supabaseAdmin }) || null,
+  superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
+});
+registerCrmAdminRoutes(app, {
+  crmAdminService,
+  authUserFromBearer,
+  fetchUserRoleRow,
+  fetchUserRoleRowForAuthUser,
+});
+
+const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
+const crmFunnel = createCrmFunnel({
+  crmService,
+  paths: parseCrmFunnelPaths(process.env.CRM_WHATSAPP_FUNNEL_PATHS_JSON),
+});
+registerCrmInboundRoutes(app, {
+  crmService,
+  leadAnalyzer: createCrmLeadAutoAnalyzer({ crmService }),
+  emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
+});
+const crmImapInboxSync = createCrmImapInboxSync({
+  crmService,
+  config: readCrmImapConfig(process.env),
+});
+crmImapInboxSync.start();
+
 /** Rol autenticado: `user_id` (JWT) primero, luego email. Service role bypass RLS. */
 async function fetchUserRoleRowForAuthUser(user) {
-  if (!user?.email) return null;
-  const uid = user.id ? String(user.id).trim() : '';
-  if (uid) {
-    let q = await supabaseAdmin
-      .from('user_roles')
-      .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados')
-      .eq('user_id', uid)
-      .maybeSingle();
-    if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
-      q = await supabaseAdmin
-        .from('user_roles')
-        .select('role, sede_id, nombre, pais, email')
-        .eq('user_id', uid)
-        .maybeSingle();
-    }
-    if (!q.error && q.data) return q.data;
-  }
-  return fetchUserRoleRow(user.email);
+  return resolveStoredRoleForVerifiedUser(supabaseAdmin, user);
 }
 
 function buildMiRolJsonPayload(email, row) {
@@ -705,6 +805,10 @@ function buildMiRolJsonPayload(email, row) {
     role: rol,
     sede_id: Number.isFinite(sedeIdNum) ? sedeIdNum : null,
     sedeId: Number.isFinite(sedeIdNum) ? sedeIdNum : null,
+    alcance: row.alcance || null,
+    organizacion_id: row.organizacion_id || null,
+    provincia: row.provincia || null,
+    ciudad: row.ciudad || null,
     nombre: row.nombre ?? null,
     pais: row.pais ?? null,
     torneosOficialesHabilitados: Boolean(row.torneos_oficiales_habilitados),
@@ -717,7 +821,7 @@ async function fetchUserRoleRowByJwtUserId(userId) {
   if (!uid) return { data: null, error: null };
   let q = await supabaseAdmin
     .from('user_roles')
-    .select('role, sede_id, nombre, pais, email, torneos_oficiales_habilitados, user_id')
+    .select('role, alcance, organizacion_id, provincia, ciudad, sede_id, nombre, pais, email, torneos_oficiales_habilitados, user_id')
     .eq('user_id', uid)
     .maybeSingle();
   if (q.error && /colum|column/i.test(String(q.error.message || ''))) {
@@ -755,7 +859,8 @@ async function handleGetMiRol(req, res) {
 
     console.log('[mi-rol] lookup:', { userId });
 
-    const { data: row, error: roleError } = await fetchUserRoleRowByJwtUserId(userId);
+    const row = await fetchUserRoleRowForAuthUser(authUser);
+    const roleError = null;
 
     console.log('[mi-rol] user_roles query result:', {
       userId,
@@ -911,10 +1016,11 @@ function reservaBelongsToUser(reserva, user, qrUserId) {
 // GET sedes
 app.get('/api/sedes', async (req, res) => {
   try {
+    const sport = normalizeAvailabilitySport(req.query.deporte);
     console.log('📡 GET /api/sedes - Conectando a Supabase...');
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('sedes')
-      .select(SEDE_APP_SELECT);
+      .select(SEDE_PAYMENT_STATUS_SELECT);
 
     if (error) {
       console.error('❌ Error Supabase GET /api/sedes:', summarizeError(error));
@@ -922,7 +1028,8 @@ app.get('/api/sedes', async (req, res) => {
     }
 
     console.log(`✓ GET /api/sedes — ${(data || []).length} sede(s)`);
-    res.json(data || []);
+    const sedes = await enrichSedesWithCourtCatalog(supabaseAdmin, (data || []).map(pickPublicSedeWithPaymentStatus));
+    res.json(sport ? sedes.filter(sede => sede.deportes_disponibles.includes(sport)) : sedes);
   } catch (err) {
     console.error('❌ Error GET /api/sedes:', err.message);
     sendHttpError(res, err);
@@ -1008,6 +1115,21 @@ mountAdminJugadoresRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
 mountAdminCoreRoutes(app, {
+  resolveTerritorialScope: (req) => releaseServices.adminListScopeFromRequest(req),
+  sedesPermitidasPorScope: (scope) => releaseServices.sedesPermitidasPorScope(scope),
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountAdminValidationAndChannelsRoutes(app, {
+  supabaseAdmin,
+  getAuthenticatedUser,
+  fetchUserRoleRowForAuthUser,
+  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountBuscaDuplaRoutes(app, { supabaseAdmin, getAuthenticatedUser });
+mountAdminQaPanelRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
@@ -1016,6 +1138,10 @@ mountAdminCoreRoutes(app, {
 mountNextGenerationStatusRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
+});
+registerNextGenerationAdminRoutes(app, {
+  supabaseAdmin,
+  adminListScopeFromRequest: (req) => releaseServices.adminListScopeFromRequest(req),
 });
 mountAdminProfesoresRoutes(app, {
   supabaseAdmin,
@@ -1028,6 +1154,7 @@ mountLicenseRequestRoutes(app, {
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+  crmService,
 });
 mountScoreboardRoutes(app, {
   supabaseAdmin,
@@ -1081,6 +1208,7 @@ mountStripeWebhookRoutes(app, {
   sendWhatsAppConfirmation,
 });
 mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
+mountFipaOfficialRankingRoutes(app);
 mountArenaRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountComunidadRoutes(app, {
   supabaseAdmin,
@@ -1104,7 +1232,7 @@ app.get('/api/sedes/:id', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('sedes')
-      .select(SEDE_APP_SELECT)
+      .select(SEDE_PAYMENT_STATUS_SELECT)
       .eq('id', sedeId)
       .maybeSingle();
 
@@ -1113,7 +1241,8 @@ app.get('/api/sedes/:id', async (req, res) => {
       return res.status(404).json({ error: 'Sede no encontrada' });
     }
 
-    res.json(enrichSedeWithHeroPhoto(data));
+    const [withCatalog] = await enrichSedesWithCourtCatalog(supabaseAdmin, [pickPublicSedeWithPaymentStatus(data)]);
+    res.json(enrichSedeWithHeroPhoto(withCatalog));
   } catch (err) {
     console.error('❌ Error GET /api/sedes/:id:', err.message);
     sendHttpError(res, err);
@@ -1178,6 +1307,7 @@ app.get('/api/disponibilidad', async (req, res) => {
       fecha,
       duracionMinutos,
       expandCourts,
+      deporte: req.query.deporte,
     });
 
     if (!slots) {
@@ -1550,6 +1680,48 @@ app.get('/api/reservas', async (req, res) => {
   }
 });
 
+// Capability endpoint: never resolves or deletes reservations from client-provided slot fields.
+app.post('/api/reservas/liberar-slot-pendiente', reservasWriteRateLimit, async (req, res) => {
+  try {
+    if (!pgPool) return res.status(503).json({ error: 'Base de datos no disponible' });
+    const claims = verifyReservaReleaseToken(req.body?.release_token, {
+      secret: RESERVA_RELEASE_TOKEN_SECRET,
+    });
+    const { rows } = await pgPool.query(
+      `SELECT id, sede, fecha::text AS fecha, hora::text AS hora, cancha::text AS cancha, estado
+         FROM reservas WHERE id = $1 LIMIT 1`,
+      [claims.reservationId],
+    );
+    const reserva = rows[0];
+    if (!reserva) return res.json({ ok: true, deleted: 0 });
+    assertReservaMatchesReleaseToken(reserva, claims);
+
+    // Slot and pending state are atomic preconditions on the exact signed id. They
+    // close the SELECT/DELETE race without turning the slot into a lookup key.
+    const deleted = await pgPool.query(
+      `DELETE FROM reservas
+        WHERE id = $1 AND sede = $2 AND fecha::text = $3 AND hora::text = $4
+          AND cancha::text = $5 AND estado = ANY($6::text[])
+        RETURNING id`,
+      [
+        claims.reservationId,
+        reserva.sede,
+        reserva.fecha,
+        reserva.hora,
+        reserva.cancha,
+        [...RESERVA_RELEASE_PENDING_STATES],
+      ],
+    );
+    return res.json({ ok: true, deleted: deleted.rowCount });
+  } catch (err) {
+    const status = Number.isFinite(Number(err?.status)) ? Number(err.status) : 500;
+    return res.status(status).json({
+      error: err?.message || 'No se pudo liberar la reserva',
+      ...(err?.code ? { code: err.code } : {}),
+    });
+  }
+});
+
 // GET /api/reservas/mis-reservas — authenticated user's reservations (JWT required)
 app.get('/api/reservas/mis-reservas', async (req, res) => {
   try {
@@ -1744,7 +1916,13 @@ app.delete('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({
+    status: 'ok',
+    ...(process.env.RENDER_GIT_COMMIT
+      ? { release: process.env.RENDER_GIT_COMMIT.slice(0, 7) }
+      : {}),
+    ...(runtime.staging ? { qaWhatsappManualSend: Boolean(whatsappQaCrmManualSenderFactory) } : {}),
+  });
 });
 
 // ===== GENERADORES DE PARTIDOS =====
@@ -1867,35 +2045,83 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 }
 
 mountTorneosFinalizadosRoutes(app, { pgPool });
-mountFipaOfficialRankingRoutes(app);
-mountPushRoutes(app, {
+const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel });
+
+function clasesCanchasConNumeroReserva(rows) {
+  const list = Array.isArray(rows) ? [...rows] : [];
+  list.sort((a, b) => Number(a.id) - Number(b.id));
+  return list.map((cancha, index) => {
+    const orden = Number(cancha?.orden);
+    return { ...cancha, numero_reserva: Number.isFinite(orden) && orden > 0 ? orden : index + 1 };
+  });
+}
+
+async function clasesAssertUsuarioPuedeAdministrarSede(req, sedeId) {
+  const scope = await releaseServices.adminListScopeFromRequest(req);
+  if (!scope) throw Object.assign(new Error('No autorizado'), { status: 401 });
+  if (scope.superA) return scope;
+  const allowed = await releaseServices.sedesPermitidasPorScope(scope);
+  if (!(allowed?.sedes || []).some((sede) => Number(sede.id) === Number(sedeId))) {
+    throw Object.assign(new Error('No tienes permiso para esta sede'), { status: 403 });
+  }
+  return scope;
+}
+
+async function clasesAssertSuperAdminReq(req) {
+  const scope = await releaseServices.adminListScopeFromRequest(req);
+  if (!scope?.superA) throw Object.assign(new Error('No autorizado'), { status: scope ? 403 : 401 });
+  return { ...scope, user: scope.user || { id: scope.authUserId, email: scope.email } };
+}
+
+function clasesMinutosDesdeHora(raw) {
+  const match = /^(\d{1,2}):(\d{2})/.exec(String(raw || '').split(' - ')[0].trim());
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+async function clasesAssertReservaSinSolape({ sede, fecha, hora, cancha, duracionMin, excludeId = null }) {
+  const inicio = clasesMinutosDesdeHora(hora);
+  if (inicio == null) throw Object.assign(new Error('Horario inválido'), { status: 400 });
+  let query = supabaseAdmin.from('reservas').select('id,hora,duracion,duracion_minutos,estado')
+    .eq('sede', sede).eq('fecha', fecha).eq('cancha', Number(cancha));
+  if (excludeId != null && String(excludeId).trim()) query = query.neq('id', excludeId);
+  const { data, error } = await query;
+  if (error) throw error;
+  const duracion = Number(duracionMin) > 0 ? Number(duracionMin) : 90;
+  const conflict = (data || []).some((row) => {
+    if (String(row.estado || '').toLowerCase() === 'cancelada') return false;
+    const otroInicio = clasesMinutosDesdeHora(row.hora);
+    if (otroInicio == null) return false;
+    const otraDuracion = Number(row.duracion_minutos || row.duracion) > 0
+      ? Number(row.duracion_minutos || row.duracion) : 90;
+    return inicio < otroInicio + otraDuracion && inicio + duracion > otroInicio;
+  });
+  if (conflict) throw Object.assign(new Error('Este horario se solapa con otra reserva'), { status: 409 });
+}
+
+registerModuloClasesRoutes(app, {
+  supabase: supabaseAdmin,
   supabaseAdmin,
-  getAuthenticatedUser,
-  fetchUserRoleRowForAuthUser,
-  legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+  authUserFromBearer,
+  adminListScopeFromRequest: releaseServices.adminListScopeFromRequest,
+  assertUsuarioPuedeAdministrarSede: clasesAssertUsuarioPuedeAdministrarSede,
+  assertSuperAdminReq: clasesAssertSuperAdminReq,
+  canchasConNumeroReserva: clasesCanchasConNumeroReserva,
+  assertReservaSinSolapeBackend: clasesAssertReservaSinSolape,
 });
 
 app.post('/api/torneos', async (req, res) => {
   try {
-    const { nombre, sede_id, nivel_torneo, tipo_torneo, fecha_inicio, fecha_fin, cantidad_equipos, es_multisede, created_by } = req.body;
-    const targetSedeId = sede_id != null && sede_id !== '' ? Number(sede_id) : null;
+    const { sede_id } = req.body;
+    const targetSedeId = req.body.es_multisede === true ? null : (sede_id != null && sede_id !== '' ? Number(sede_id) : null);
     const auth = await requireTorneoAdminForSede(req, res, targetSedeId);
     if (!auth) return;
 
-    const { data, error } = await supabase
+    const payload = buildCrearTorneoPayload(req.body, auth.user.id);
+    // The JWT/role/sede guard above authorizes this write; the anon client has no user JWT.
+    const { data, error } = await supabaseAdmin
       .from('torneos')
-      .insert([{
-        nombre,
-        sede_id: sede_id || null,
-        nivel_torneo,
-        tipo_torneo,
-        estado: 'planificacion',
-        fecha_inicio,
-        fecha_fin,
-        cantidad_equipos,
-        es_multisede,
-        created_by,
-      }])
+      .insert([payload])
       .select();
 
     if (error) throw error;
@@ -2013,19 +2239,14 @@ app.put('/api/torneos/:id', async (req, res) => {
 
     const { nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin } = req.body;
 
-    const { data, error } = await supabase
-      .from('torneos')
-      .update({
-        nombre,
-        nivel_torneo,
-        tipo_torneo,
-        estado,
-        fecha_inicio,
-        fecha_fin,
-        updated_at: new Date(),
-      })
-      .eq('id', id)
-      .select();
+    const { patch, torneo: current } = await prepareTournamentUpdate(supabaseAdmin, id, {
+      nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin,
+    });
+    let mutation = supabase.from('torneos').update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id).eq('estado', current.estado);
+    mutation = current.updated_at == null ? mutation.is('updated_at', null) : mutation.eq('updated_at', current.updated_at);
+    const { data, error } = await mutation.select();
+    if (!error && !data?.length) return res.status(409).json({ code: 'TORNEO_CHANGED_RETRY', error: 'El torneo cambió. Actualiza antes de volver a guardar.' });
 
     if (error) throw error;
     res.json(data);
@@ -2382,6 +2603,11 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       });
     }
 
+    const closureEvidence = getTournamentCompletionEvidence(torneo, partidos || [], equipos || []);
+    if (!closureEvidence.verified) return res.status(409).json({
+      code: 'TORNEO_CLOSURE_UNVERIFIED', error: 'Completa los resultados y la definición del campeón antes de cerrar el torneo.',
+    });
+
     const { rankingRows, source } = buildFinalRankingForTorneo({
       equipos: equipos || [],
       partidos: partidos || [],
@@ -2416,13 +2642,13 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
     );
 
     // Mark torneo as finalizado
-    const { data: torneoFinal, error: errFinal } = await supabase
-      .from('torneos')
-      .update({ estado: 'finalizado', updated_at: new Date() })
-      .eq('id', id)
-      .select()
-      .single();
+    let closeMutation = supabase.from('torneos')
+      .update({ estado: 'finalizado', fecha_fin: torneo.estado === 'finalizado' ? torneo.fecha_fin : new Date().toISOString().slice(0, 10), updated_at: new Date() })
+      .eq('id', id).eq('estado', torneo.estado);
+    closeMutation = torneo.updated_at == null ? closeMutation.is('updated_at', null) : closeMutation.eq('updated_at', torneo.updated_at);
+    const { data: torneoFinal, error: errFinal } = await closeMutation.select().maybeSingle();
     if (errFinal) throw errFinal;
+    if (!torneoFinal) return res.status(409).json({ code: 'TORNEO_CHANGED_RETRY', error: 'El torneo cambió. Actualiza antes de volver a cerrar.' });
 
     const jugadorUserIds = collectUserIdsFromEquipos(equipos);
     await Promise.all(
@@ -2862,6 +3088,9 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
   }
 });
 
+mountManualPlayedDateCapabilityRoute(app, { supabaseAdmin, getAuthenticatedUser, capabilities: MANUAL_PLAYED_DATE_CAPABILITY });
+mountManualPlayedDateRoutes(app, { supabaseAdmin, requireTorneoAdminByTorneoId, enabled: MANUAL_PLAYED_DATE_CAPABILITY.writeEnabled });
+
 app.post('/api/torneos/:torneoId/partidos/:partidoId/resultado', async (req, res) => {
   try {
     const { torneoId, partidoId } = req.params;
@@ -3297,6 +3526,9 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
         error: 'Configuración del servidor incompleta (SUPABASE_SERVICE_ROLE_KEY). Contactá soporte.',
       });
     }
+    if (!RESERVA_RELEASE_TOKEN_SECRET) {
+      return res.status(503).json({ error: 'Liberación segura de reservas no configurada' });
+    }
 
     const {
       titulo,
@@ -3373,6 +3605,7 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
     console.log('[POST /api/crear-preferencia] sede MP credentials loaded from pg');
 
     let reservaIdParaMp;
+    let reservaRelease;
     try {
       const pending = await ensureReservaPendienteParaMpPg(pgPool, req.body, {
         authUser: user,
@@ -3381,6 +3614,21 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
       });
       reservaIdParaMp = pending.reserva_id;
       console.log(`[POST /api/crear-preferencia] reserva pendiente id=${reservaIdParaMp} (created=${pending.created})`);
+      const pendingRow = await pgPool.query(
+        `SELECT id, sede, fecha::text AS fecha, hora::text AS hora, cancha::text AS cancha, estado
+           FROM reservas WHERE id = $1 LIMIT 1`,
+        [reservaIdParaMp],
+      );
+      if (!pendingRow.rows[0]) {
+        const err = new Error('No se pudo recuperar la reserva pendiente');
+        err.status = 500;
+        throw err;
+      }
+      reservaRelease = createReservaReleaseToken({
+        reserva: pendingRow.rows[0],
+        secret: RESERVA_RELEASE_TOKEN_SECRET,
+        ttlSeconds: RESERVA_RELEASE_TOKEN_TTL_SECONDS,
+      });
       await registerMembresiaUsoIncluidaIfNeeded({
         quote,
         user,
@@ -3432,6 +3680,8 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
       init_point: response.init_point,
       preference_id: response.id,
       reserva_id: reservaIdParaMp,
+      release_token: reservaRelease.token,
+      release_token_expires_at: reservaRelease.expiresAt,
       precio_esperado: quote.total,
       moneda: quote.moneda,
       pricing: quote.pricing,
@@ -3783,8 +4033,10 @@ async function runPartidoAutoCancelCron() {
   }
 }
 
-setInterval(runPartidoAutoCancelCron, PARTIDO_AUTO_CANCEL_MS);
-runPartidoAutoCancelCron();
+if (runtime.backgroundJobsEnabled) {
+  setInterval(runPartidoAutoCancelCron, PARTIDO_AUTO_CANCEL_MS);
+  runPartidoAutoCancelCron();
+}
 
 // ===== USUARIOS =====
 
@@ -4657,35 +4909,21 @@ mountJugadorHistorialRoutes(jugadorRouter, { supabaseAdmin, getAuthenticatedUser
 
 const usuariosRouter = express.Router();
 
-// POST /api/usuarios/push-token — Save Expo push token on jugadores_perfil
+// Legacy URL uses the same private installation registry as current clients.
 usuariosRouter.post('/push-token', pushTokensRateLimit, async (req, res) => {
   try {
     const { user, status, error: authError } = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(status).json({ error: authError });
-    }
-
-    const pushToken = req.body?.push_token ?? req.body?.expo_push_token ?? null;
-    if (!pushToken) {
-      return res.status(400).json({ error: 'push_token es requerido' });
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('jugadores_perfil')
-      .update({ push_token: pushToken, expo_push_token: pushToken })
-      .eq('user_id', user.id)
-      .select('id');
-
-    if (error) throw error;
-    if (!data?.length) {
-      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
-    }
-
-    console.log(`✓ POST /api/usuarios/push-token — token guardado para ${user.id}`);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('❌ Error POST /api/usuarios/push-token:', err.message);
-    sendHttpError(res, err);
+    if (!user) return res.status(status || 401).json({ error: authError || 'No autorizado' });
+    const result = await releaseServices.pushService.registerToken({
+      userId: user.id,
+      token: req.body?.token ?? req.body?.push_token ?? req.body?.expo_push_token,
+      platform: req.body?.platform,
+      deviceId: req.body?.deviceId,
+      language: req.body?.language,
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    return res.status(error.status || 503).json({ error: error.message, code: error.code });
   }
 });
 
@@ -4887,6 +5125,7 @@ usuariosRouter.post('/perfil', async (req, res) => {
 usuariosRouter.put('/perfil', handlePutAuthenticatedPerfil);
 
 mountAccountDeletionRoutes(usuariosRouter, {
+  requestDeletion: releaseServices.accountDeletionHandler,
   supabaseAdmin,
   getAuthenticatedUser,
 });
@@ -5085,6 +5324,7 @@ app.use((err, _req, res, _next) => {
 (async () => {
   await verifyPgPoolConnection();
   httpServer.listen(PORT, () => {
+    void runWhatsappMetaQaStartupCheck();
     console.log(`🚀 Padbol Match API running on port ${PORT}`);
     console.log('✅ Rutas rol: GET /api/auth/mi-rol');
     console.log('✅ Rutas rol: GET /api/usuarios/mi-rol');
@@ -5131,3 +5371,4 @@ app.use((err, _req, res, _next) => {
     console.log('✅ Torneos: GET /api/torneos/:torneoId/permisos');
   });
 })();
+

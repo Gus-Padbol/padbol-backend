@@ -1,0 +1,226 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:padbol:whatsapp:response-draft:1",
+  "title": "Borrador local de respuestas WhatsApp — versión 1",
+  "description": "Contrato de edición/vista previa. No contiene una autorización de envío. La validación del módulo también comprueba IDs únicos, referencias y contexto.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "tenantId",
+    "draftId",
+    "revision",
+    "status",
+    "enabled",
+    "locale",
+    "contentStatus",
+    "greeting",
+    "topics",
+    "savedReplies",
+    "fallback",
+    "humanHandoff"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "tenantId": {
+      "$ref": "#/definitions/uuid"
+    },
+    "draftId": {
+      "$ref": "#/definitions/uuid"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "status": {
+      "const": "draft"
+    },
+    "enabled": {
+      "const": false
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(-[A-Z]{2})?(?![\\s\\S])"
+    },
+    "contentStatus": {
+      "enum": [
+        "synthetic",
+        "unapproved"
+      ]
+    },
+    "greeting": {
+      "$ref": "#/definitions/nullableText"
+    },
+    "fallback": {
+      "$ref": "#/definitions/nullableText"
+    },
+    "humanHandoff": {
+      "$ref": "#/definitions/nullableText"
+    },
+    "topics": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/definitions/topic"
+      }
+    },
+    "savedReplies": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/definitions/savedReply"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "contentStatus": {
+            "const": "synthetic"
+          }
+        },
+        "required": [
+          "contentStatus"
+        ]
+      },
+      "then": {
+        "properties": {
+          "greeting": {
+            "$ref": "#/definitions/syntheticNullableText"
+          },
+          "fallback": {
+            "$ref": "#/definitions/syntheticNullableText"
+          },
+          "humanHandoff": {
+            "$ref": "#/definitions/syntheticNullableText"
+          },
+          "topics": {
+            "items": {
+              "properties": {
+                "label": {
+                  "$ref": "#/definitions/syntheticMarker"
+                }
+              }
+            }
+          },
+          "savedReplies": {
+            "items": {
+              "properties": {
+                "text": {
+                  "$ref": "#/definitions/syntheticMarker"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])"
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}(?![\\s\\S])"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "\\S"
+    },
+    "syntheticMarker": {
+      "type": "string",
+      "pattern": "^\\[SINTÉTICO\\] [\\s\\S]*\\S"
+    },
+    "textObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "$ref": "#/definitions/text"
+        }
+      }
+    },
+    "nullableText": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/definitions/textObject"
+        }
+      ]
+    },
+    "syntheticNullableText": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "$ref": "#/definitions/syntheticMarker"
+            }
+          }
+        }
+      ]
+    },
+    "topic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "savedReplyId"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/key"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "\\S"
+        },
+        "savedReplyId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/key"
+            }
+          ]
+        }
+      }
+    },
+    "savedReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "text"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/key"
+        },
+        "text": {
+          "$ref": "#/definitions/text"
+        }
+      }
+    }
+  }
+}
