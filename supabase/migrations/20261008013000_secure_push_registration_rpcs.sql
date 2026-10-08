@@ -64,14 +64,14 @@ begin
       (user_id, device_id, platform, token_fingerprint, action, reason)
     values
       (p_user_id, v_device_id, v_platform,
-       encode(digest(coalesce(v_existing.expo_push_token, ''), 'sha256'), 'hex'),
+       encode(extensions.digest(coalesce(v_existing.expo_push_token, ''), 'sha256'), 'hex'),
        'rotated', 'token_rotation');
   end if;
 
   insert into public.push_token_audit
     (user_id, device_id, platform, token_fingerprint, action, reason)
   select user_id, device_id, platform,
-         encode(digest(coalesce(expo_push_token, ''), 'sha256'), 'hex'),
+         encode(extensions.digest(coalesce(expo_push_token, ''), 'sha256'), 'hex'),
          'reassigned', 'token_claimed_by_authenticated_installation'
     from public.push_tokens
    where expo_push_token = v_token
@@ -99,7 +99,7 @@ begin
   insert into public.push_token_audit
     (user_id, device_id, platform, token_fingerprint, action, reason)
   values
-    (p_user_id, v_device_id, v_platform, encode(digest(v_token, 'sha256'), 'hex'),
+    (p_user_id, v_device_id, v_platform, encode(extensions.digest(v_token, 'sha256'), 'hex'),
      'registered', case when v_existing.id is null then 'new_installation' else 'refresh' end);
 
   insert into public.push_notification_preferences (user_id)
@@ -137,7 +137,7 @@ begin
     insert into public.push_token_audit
       (user_id, device_id, platform, token_fingerprint, action, reason)
     select user_id, device_id, platform,
-           encode(digest(coalesce(expo_push_token, ''), 'sha256'), 'hex'),
+           encode(extensions.digest(coalesce(expo_push_token, ''), 'sha256'), 'hex'),
            'revoked', 'authenticated_user_request'
       from candidates
     returning 1
