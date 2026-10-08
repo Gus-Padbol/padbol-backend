@@ -2,10 +2,8 @@ BEGIN;
 create extension if not exists pgcrypto;
 -- Fail without mutation if legacy duplicates need individual review.
 DO $$ BEGIN
- IF EXISTS (SELECT 1 FROM public.push_tokens WHERE expo_push_token IS NOT NULL GROUP BY expo_push_token HAVING count(*) > 1) THEN RAISE EXCEPTION 'duplicate_push_tokens_require_review'; END IF;
  IF EXISTS (SELECT 1 FROM public.push_tokens GROUP BY user_id,platform,device_id HAVING count(*) > 1) THEN RAISE EXCEPTION 'duplicate_push_installations_require_review'; END IF;
 END $$;
-CREATE UNIQUE INDEX IF NOT EXISTS push_tokens_expo_token_uidx ON public.push_tokens(expo_push_token) WHERE expo_push_token IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS push_tokens_installation_uidx ON public.push_tokens(user_id,platform,device_id);
 ALTER TABLE public.push_tokens ALTER COLUMN token DROP NOT NULL;
 ALTER TABLE public.push_tokens DROP CONSTRAINT IF EXISTS push_tokens_user_id_platform_key;
@@ -54,6 +52,8 @@ begin
     raise exception 'invalid_push_registration';
   end if;
 
+  perform pg_advisory_xact_lock(hashtextextended(v_token, 0));
+
   select * into v_existing
     from public.push_tokens
    where user_id = p_user_id and platform = v_platform and device_id = v_device_id
@@ -77,7 +77,7 @@ begin
    where expo_push_token = v_token
      and (user_id, platform, device_id) is distinct from (p_user_id, v_platform, v_device_id);
 
-  delete from public.push_tokens
+  update public.push_tokens set enabled = false, revoked_at = now(), updated_at = now(), invalidation_reason = 'token_claimed_by_authenticated_installation'
    where expo_push_token = v_token
      and (user_id, platform, device_id) is distinct from (p_user_id, v_platform, v_device_id);
 
