@@ -8,6 +8,8 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS push_tokens_expo_token_uidx ON public.push_tokens(expo_push_token) WHERE expo_push_token IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS push_tokens_installation_uidx ON public.push_tokens(user_id,platform,device_id);
 ALTER TABLE public.push_tokens ALTER COLUMN token DROP NOT NULL;
+ALTER TABLE public.push_tokens DROP CONSTRAINT IF EXISTS push_tokens_user_id_platform_key;
+ALTER TABLE public.push_tokens DROP CONSTRAINT IF EXISTS push_tokens_user_id_expo_push_token_key;
 create table if not exists public.push_token_audit (
   id bigserial primary key,
   user_id uuid references auth.users(id) on delete set null,
@@ -194,7 +196,7 @@ CREATE OR REPLACE FUNCTION public.register_mobile_push_token_v2(p_user_id uuid,p
 RETURNS public.push_tokens LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $$
 DECLARE v_row public.push_tokens;
 BEGIN
- IF p_language NOT IN ('es','en','it','ro','cs','de','fr','pt-BR','pt-PT','ar','fa','nl-BE','nl-NL','hu','sv','af','el','he','pl','uk') THEN RAISE EXCEPTION 'invalid_push_language'; END IF;
+ IF p_language IS NULL OR p_language NOT IN ('es','en','it','ro','cs','de','fr','pt-BR','pt-PT','ar','fa','nl-BE','nl-NL','hu','sv','af','el','he','pl','uk') THEN RAISE EXCEPTION 'invalid_push_language'; END IF;
  v_row := public.register_mobile_push_token(p_user_id,p_token,p_platform,p_device_id);
  UPDATE public.push_tokens SET language=p_language WHERE id=v_row.id RETURNING * INTO v_row;
  RETURN v_row;
