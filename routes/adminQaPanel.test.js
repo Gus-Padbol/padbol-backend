@@ -20,9 +20,9 @@ test('analytics globales separa estados, mes, deportes y países', async () => {
       { id: 2, created_at: '2026-09-02T10:00:00Z' },
     ],
     sedes: [
-      { id: 1, pais: 'Argentina', estado: 'activa' },
+      { id: 1, pais: 'Argentina', estado: 'activa', licencia_activa: true, numero_licencia: 'AR-001' },
       { id: 2, pais: '🇦🇷 Argentina', estado: 'suspendida' },
-      { id: 3, pais: 'España', estado: 'activa' },
+      { id: 3, pais: 'España', estado: 'activa', licencia_activa: true, numero_licencia: 'ES-001' },
     ],
     torneos: [
       { id: 1, deporte: 'padbol', estado: 'finalizado', fecha_fin: '2026-09-01' },
@@ -57,7 +57,7 @@ test('analytics globales separa estados, mes, deportes y países', async () => {
 test('analytics usa las tablas y columnas existentes en producción', async () => {
   const columns = {
     jugadores_perfil: new Set(['id', 'created_at']),
-    sedes: new Set(['id', 'pais', 'estado']),
+    sedes: new Set(['id', 'pais', 'estado', 'licencia_activa', 'numero_licencia']),
     torneos: new Set(['id', 'deporte', 'estado', 'fecha_fin']),
     reservas: new Set(['id', 'estado', 'fecha', 'created_at', 'deporte', 'cancha_id']),
     canchas: new Set(['id', 'deporte']),
@@ -76,4 +76,12 @@ test('analytics usa las tablas y columnas existentes en producción', async () =
   const result = await buildGlobalAdminAnalytics(supabase);
   assert.equal(result.jugadores_registrados_total, 0);
   assert.equal(result.reservas_ultimo_mes_total, 0);
+});
+
+
+test('sedes activas exige licencia vigente con número y no infiere vigencia de estado vacío', async () => {
+ const rows=[{id:1,estado:'',licencia_activa:true,numero_licencia:'AR-1'},{id:2,estado:'activa',licencia_activa:false,numero_licencia:'AR-2'},{id:3,estado:'',licencia_activa:true,numero_licencia:'  '},{id:4,estado:'activa'}];
+ const db={from(table){return query(table==='sedes'?rows:[]);}};
+ const result=await buildGlobalAdminAnalytics(db);
+ assert.equal(result.sedes_activas_total,1);
 });

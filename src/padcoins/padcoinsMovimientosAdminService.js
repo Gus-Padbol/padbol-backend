@@ -167,13 +167,14 @@ async function fetchJugadorMap(supabaseAdmin, userIds) {
 
   const { data, error } = await supabaseAdmin
     .from('jugadores_perfil')
-    .select('user_id, nombre, apellido, email')
+    .select('user_id, nombre, apellido, apodo, alias, email')
     .in('user_id', unique);
 
   if (error) throw error;
 
   return new Map((data ?? []).map((row) => {
-    const nombre = [row.nombre, row.apellido].filter(Boolean).join(' ').trim() || null;
+    const nombre = [row.nombre, row.apellido].map(value => String(value ?? '').trim()).filter(Boolean).join(' ')
+      || String(row.apodo ?? '').trim() || String(row.alias ?? '').trim() || null;
     return [row.user_id, {
       user_id: row.user_id,
       nombre,
@@ -214,6 +215,7 @@ export function mapPadcoinsMovimientoAdminRow(row, jugadorMap, sedeMap) {
     referencia_id: row.referencia_id ?? null,
     saldo_resultante: row.saldo_despues != null ? Number(row.saldo_despues) : null,
     created_by: row.created_by ?? null,
+    creado_por: row.created_by ? jugadorMap.get(row.created_by) ?? null : null,
   };
 }
 
@@ -292,7 +294,7 @@ export async function listPadcoinsMovimientosAdmin(supabaseAdmin, {
   if (error) throw error;
 
   const rows = data ?? [];
-  const jugadorMap = await fetchJugadorMap(supabaseAdmin, rows.map((row) => row.user_id));
+  const jugadorMap = await fetchJugadorMap(supabaseAdmin, rows.flatMap((row) => [row.user_id, row.created_by]));
   const sedeMap = await fetchSedeMap(supabaseAdmin, rows.map((row) => row.sede_id));
 
   return {

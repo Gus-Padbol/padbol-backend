@@ -41,7 +41,7 @@ export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date())
   const monthStart = startOfCurrentMonthIso(now);
   const [profiles, activeVenues, tournaments, recentReservations, venues, courts] = await Promise.all([
     rowsOrThrow(supabaseAdmin.from('jugadores_perfil').select('id,created_at')),
-    rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,estado')),
+    rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,licencia_activa,numero_licencia')),
     rowsOrThrow(supabaseAdmin.from('torneos').select('id,deporte,estado,fecha_fin')),
     rowsOrThrow(supabaseAdmin.from('reservas').select('id,estado,fecha,created_at,deporte,cancha_id')),
     rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,estado')),
@@ -49,7 +49,7 @@ export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date())
   ]);
 
   const newProfiles = profiles.filter((row) => String(row?.created_at || '') >= monthStart).length;
-  const activeVenueRows = activeVenues.filter((row) => !['inactiva', 'suspendida', 'rechazada'].includes(String(row?.estado || '').toLowerCase()));
+  const activeVenueRows = activeVenues.filter((row) => row.licencia_activa === true && String(row.numero_licencia ?? '').trim() !== '');
   const finishedTournaments = tournaments.filter((row) => {
     const state = String(row?.estado || '').toLowerCase();
     return ['finalizado', 'finalizada', 'completado', 'completada'].includes(state)
