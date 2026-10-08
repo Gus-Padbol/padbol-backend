@@ -36,10 +36,10 @@ async function rowsOrThrow(query) {
 export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date()) {
   const monthStart = startOfCurrentMonthIso(now);
   const [profiles, activeVenues, tournaments, recentReservations, venues, courts] = await Promise.all([
-    rowsOrThrow(supabaseAdmin.from('perfiles').select('id,created_at')),
+    rowsOrThrow(supabaseAdmin.from('jugadores_perfil').select('id,created_at')),
     rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,estado')),
     rowsOrThrow(supabaseAdmin.from('torneos').select('id,deporte,estado,fecha_fin')),
-    rowsOrThrow(supabaseAdmin.from('reservas').select('id,estado,cancelada,fecha,created_at,deporte,cancha_id')),
+    rowsOrThrow(supabaseAdmin.from('reservas').select('id,estado,fecha,created_at,deporte,cancha_id')),
     rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,estado')),
     optionalRows(supabaseAdmin.from('canchas').select('id,deporte')),
   ]);

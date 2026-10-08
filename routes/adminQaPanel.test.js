@@ -15,7 +15,7 @@ function query(rows) {
 
 test('analytics globales separa estados, mes, deportes y países', async () => {
   const tables = {
-    perfiles: [
+    jugadores_perfil: [
       { id: 1, created_at: '2026-10-02T10:00:00Z' },
       { id: 2, created_at: '2026-09-02T10:00:00Z' },
     ],
@@ -52,4 +52,28 @@ test('analytics globales separa estados, mes, deportes y países', async () => {
     { pais: 'Argentina', sedes_total: 2 },
     { pais: 'España', sedes_total: 1 },
   ]);
+});
+
+test('analytics usa las tablas y columnas existentes en producción', async () => {
+  const columns = {
+    jugadores_perfil: new Set(['id', 'created_at']),
+    sedes: new Set(['id', 'pais', 'estado']),
+    torneos: new Set(['id', 'deporte', 'estado', 'fecha_fin']),
+    reservas: new Set(['id', 'estado', 'fecha', 'created_at', 'deporte', 'cancha_id']),
+    canchas: new Set(['id', 'deporte']),
+  };
+  const supabase = { from(name) {
+    assert.ok(columns[name], `La tabla ${name} no existe`);
+    const builder = query([]);
+    builder.select = function (selected) {
+      for (const column of selected.split(',')) {
+        assert.ok(columns[name].has(column), `La columna ${name}.${column} no existe`);
+      }
+      return this;
+    };
+    return builder;
+  } };
+  const result = await buildGlobalAdminAnalytics(supabase);
+  assert.equal(result.jugadores_registrados_total, 0);
+  assert.equal(result.reservas_ultimo_mes_total, 0);
 });
