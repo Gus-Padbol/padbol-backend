@@ -194,7 +194,7 @@ CREATE OR REPLACE FUNCTION public.register_mobile_push_token_v2(p_user_id uuid,p
 RETURNS public.push_tokens LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $$
 DECLARE v_row public.push_tokens;
 BEGIN
- IF p_language NOT IN ('es','en','pt','fr','it','de','ar','ro') THEN RAISE EXCEPTION 'invalid_push_language'; END IF;
+ IF p_language NOT IN ('es','en','it','ro','cs','de','fr','pt-BR','pt-PT','ar','fa','nl-BE','nl-NL','hu','sv','af','el','he','pl','uk') THEN RAISE EXCEPTION 'invalid_push_language'; END IF;
  v_row := public.register_mobile_push_token(p_user_id,p_token,p_platform,p_device_id);
  UPDATE public.push_tokens SET language=p_language WHERE id=v_row.id RETURNING * INTO v_row;
  RETURN v_row;
