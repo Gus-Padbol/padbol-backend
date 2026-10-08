@@ -24,7 +24,7 @@ create table if not exists public.push_delivery_jobs (
 create table if not exists public.push_delivery_attempts (
   id bigserial primary key,
   job_id uuid not null references public.push_delivery_jobs(id) on delete cascade,
-  push_token_id bigint references public.push_tokens(id) on delete set null,
+  push_token_id integer references public.push_tokens(id) on delete set null,
   user_id uuid references auth.users(id) on delete set null,
   token_fingerprint text not null,
   expo_ticket_id text,
