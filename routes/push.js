@@ -114,7 +114,8 @@ function normalizeAdminPushSegment(raw = {}) {
 
 function isMissingAdminPushTable(error) {
   return error?.code === '42P01'
-    || String(error?.message || '').toLowerCase().includes(ADMIN_PUSH_HISTORY_TABLE);
+    || (error?.code === 'PGRST205'
+      && String(error?.message || '').toLowerCase().includes(ADMIN_PUSH_HISTORY_TABLE));
 }
 
 async function requirePushAdmin(req, res, {
@@ -518,8 +519,10 @@ export function mountPushRoutes(app, {
       const title = String(req.body?.title || '').trim().slice(0, 50);
       const body = String(req.body?.body || '').trim().slice(0, 150);
       const segment = normalizeAdminPushSegment(req.body?.segment);
+      const destination = normalizeAdminPushDestination(req.body?.destination);
       const segmentError = assertSegmentAllowed(auth, segment);
       if (segmentError) return res.status(400).json({ error: segmentError });
+      if (!destination) return res.status(400).json({ error: 'Destino inválido' });
       if (!title || !body) return res.status(400).json({ error: 'Título y mensaje son obligatorios' });
 
       const quota = await readAdminPushQuota(supabaseAdmin, auth);
