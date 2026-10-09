@@ -1,3 +1,4 @@
+import { createCrmEmailSender } from './lib/crmEmailSender.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
 import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.js';
@@ -743,11 +744,13 @@ const whatsappAdminService = createWhatsappAdminService({
 });
 registerWhatsappAdminRoutes(app, { whatsappAdminService, authUserFromBearer, fetchUserRoleRow });
 
+const crmEmailSender = createCrmEmailSender({ runtime });
 const crmAdminService = createCrmAdminService({
   repository: createSupabaseCrmRepository(supabaseAdmin),
   operators: whatsappOperators,
   superAdminEmails: whatsappSuperAdminEmails,
   sendWhatsappReply: whatsappQaCrmManualSenderFactory?.({ supabaseAdmin }) || null,
+  sendEmailReply: crmEmailSender,
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
 });
 registerCrmAdminRoutes(app, {

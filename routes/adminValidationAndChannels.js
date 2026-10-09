@@ -1,3 +1,4 @@
+import { buildCrmEmailCapability } from '../lib/crmEmailSender.js';
 import { requireSuperAdminUser } from '../lib/authAccess.js';
 
 const truthy = (value) => String(value || '').trim().toLowerCase() === 'true';
@@ -13,19 +14,9 @@ export function buildCrmChannelStatus(env = {}) {
     || present(env.WHATSAPP_META_TOKEN_TEST);
   if (!whatsappTokenReady) whatsappMissing.push('WHATSAPP_META_ACCESS_TOKEN');
 
-  const emailProvider = present(env.CRM_OUTBOUND_EMAIL_PROVIDER)
-    ? String(env.CRM_OUTBOUND_EMAIL_PROVIDER).trim().toLowerCase()
-    : null;
-  const emailMissing = [];
-  if (!emailProvider) emailMissing.push('CRM_OUTBOUND_EMAIL_PROVIDER');
-  if (!present(env.CRM_OUTBOUND_EMAIL_FROM)) emailMissing.push('CRM_OUTBOUND_EMAIL_FROM');
-  if (!present(env.CRM_OUTBOUND_EMAIL_API_KEY) && !present(env.SMTP_URL)) {
-    emailMissing.push('CRM_OUTBOUND_EMAIL_API_KEY_OR_SMTP_URL');
-  }
-
+  const emailCapability = buildCrmEmailCapability(env);
   const deliveryEnabled = truthy(env.OUTBOUND_DELIVERY_ENABLED);
   const whatsappConfigured = whatsappMissing.length === 0;
-  const emailConfigured = emailMissing.length === 0;
   return {
     outbound_delivery_enabled: deliveryEnabled,
     whatsapp: {
@@ -34,12 +25,9 @@ export function buildCrmChannelStatus(env = {}) {
       missing: whatsappMissing,
     },
     email: {
-      configured: emailConfigured,
-      enabled: deliveryEnabled && truthy(env.CRM_OUTBOUND_EMAIL_ENABLED) && emailConfigured,
-      provider: emailProvider,
-      missing: emailMissing,
+      ...emailCapability,
     },
-    human_action_required: !deliveryEnabled || !whatsappConfigured || !emailConfigured,
+    human_action_required: !deliveryEnabled || !whatsappConfigured || !emailCapability.configured,
   };
 }
 
