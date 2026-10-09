@@ -769,6 +769,7 @@ registerCrmInboundRoutes(app, {
   crmService,
   leadAnalyzer: createCrmLeadAutoAnalyzer({ crmService }),
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
+  formInboundSecret: process.env.CRM_INBOUND_FORM_SECRET || '',
 });
 const crmImapInboxSync = createCrmImapInboxSync({
   crmService,
