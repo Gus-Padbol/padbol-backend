@@ -153,29 +153,20 @@ export async function getPadcoinsSedeConfig(supabaseAdmin, sedeId, { now = new D
 }
 
 export async function listPadcoinsSedeConfig(supabaseAdmin, { now = new Date() } = {}) {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('padcoins_sede_config')
-      .select(`${SEDE_CONFIG_SELECT}, sedes ( id, nombre )`)
-      .order('sede_id', { ascending: true });
-
-    if (error) {
-      if (isMissingTable(error)) return [];
-      throw error;
-    }
-
-    return (data ?? []).map((row) => {
-      const config = normalizeSedeConfigRow(row, now);
-      const sede = row.sedes ?? null;
-      return {
-        ...config,
-        sede_nombre: sede?.nombre ?? null,
-      };
-    });
-  } catch (err) {
-    if (isMissingTable(err)) return [];
-    throw err;
-  }
+  // Listing is read-only: absence of an opt-in row must not hide a real venue.
+  const { data: venues, error: venueError } = await supabaseAdmin
+    .from('sedes').select('id, nombre').order('id', { ascending: true });
+  if (venueError) throw venueError;
+  const { data: configs, error: configError } = await supabaseAdmin
+    .from('padcoins_sede_config').select(SEDE_CONFIG_SELECT).order('sede_id', { ascending: true });
+  if (configError) throw configError;
+  const bySede = new Map((configs ?? []).map(row => [Number(row.sede_id), row]));
+  return (venues ?? []).map(venue => ({
+    ...(bySede.has(Number(venue.id))
+      ? normalizeSedeConfigRow(bySede.get(Number(venue.id)), now)
+      : defaultSedeConfig(Number(venue.id))),
+    sede_nombre: venue.nombre ?? null,
+  }));
 }
 
 export async function upsertPadcoinsSedeConfig(supabaseAdmin, {
