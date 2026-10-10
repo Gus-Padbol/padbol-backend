@@ -744,6 +744,8 @@ const whatsappAdminService = createWhatsappAdminService({
 });
 registerWhatsappAdminRoutes(app, { whatsappAdminService, authUserFromBearer, fetchUserRoleRow });
 
+const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
+const crmLeadAnalyzer = createCrmLeadAutoAnalyzer({ crmService });
 const crmEmailSender = createCrmEmailSender({ runtime });
 const crmAdminService = createCrmAdminService({
   repository: createSupabaseCrmRepository(supabaseAdmin),
@@ -751,6 +753,7 @@ const crmAdminService = createCrmAdminService({
   superAdminEmails: whatsappSuperAdminEmails,
   sendWhatsappReply: whatsappQaCrmManualSenderFactory?.({ supabaseAdmin }) || null,
   sendEmailReply: crmEmailSender,
+  leadAnalyzer: crmLeadAnalyzer,
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
 });
 registerCrmAdminRoutes(app, {
@@ -760,14 +763,13 @@ registerCrmAdminRoutes(app, {
   fetchUserRoleRowForAuthUser,
 });
 
-const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
 const crmFunnel = createCrmFunnel({
   crmService,
   paths: parseCrmFunnelPaths(process.env.CRM_WHATSAPP_FUNNEL_PATHS_JSON),
 });
 registerCrmInboundRoutes(app, {
   crmService,
-  leadAnalyzer: createCrmLeadAutoAnalyzer({ crmService }),
+  leadAnalyzer: crmLeadAnalyzer,
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
   formInboundSecret: process.env.CRM_INBOUND_FORM_SECRET || '',
 });
