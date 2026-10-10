@@ -136,6 +136,9 @@ BEGIN
     IF NOT NEW.creador_id=ANY(ids) OR (NEW.inscripcion_estado='confirmado' AND cardinality(ids)<4) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Four players required for competition'; END IF;
    END IF;
    IF TG_OP='UPDATE' AND (OLD.jugadores IS DISTINCT FROM NEW.jugadores OR OLD.creador_id IS DISTINCT FROM NEW.creador_id OR OLD.torneo_id IS DISTINCT FROM NEW.torneo_id) AND EXISTS(SELECT 1 FROM public.torneo_partido_alineaciones WHERE equipo_id=OLD.id) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Roster referenced by declared lineup'; END IF;
+  ELSE
+   -- These new metadata fields are derived from the actual tournament, not client-controlled.
+   IF TG_OP<>'DELETE' THEN NEW.modalidad_plantel:='dobles'; NEW.participantes_ranking:=NULL; END IF;
   END IF;
  ELSIF TG_TABLE_NAME='torneo_partido_alineaciones' THEN
   SELECT * INTO m FROM public.partidos WHERE id=NEW.partido_id;
