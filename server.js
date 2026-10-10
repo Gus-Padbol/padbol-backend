@@ -1,3 +1,5 @@
+import { isNationalRoster, rankingPlayersForTeam, rankingPlayerKey, closeNationalTournament } from './lib/nationalTeamLineup.js';
+import { mountNationalTeamRoutes } from './routes/nationalTeams.js';
 import { createCrmEmailSender } from './lib/crmEmailSender.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
@@ -2050,6 +2052,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
   return null;
 }
 
+mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
   serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel });
@@ -2479,7 +2482,7 @@ app.get('/api/rankings', async (req, res) => {
     const equipoIds = [...new Set(puntos.map(p => p.equipo_id))];
     const { data: equipos, error: errE } = await supabase
       .from('equipos')
-      .select('id, nombre, jugadores')
+      .select('id, nombre, jugadores,modalidad_plantel,participantes_ranking')
       .in('id', equipoIds);
     if (errE) throw errE;
 
@@ -2492,9 +2495,9 @@ app.get('/api/rankings', async (req, res) => {
     puntos.forEach(p => {
       const equipo = equipoMap[p.equipo_id];
       if (!equipo) return;
-      const jugadores = Array.isArray(equipo.jugadores) ? equipo.jugadores : [];
+      const jugadores = rankingPlayersForTeam(equipo);
 
-      if (jugadores.length === 0) {
+      if (jugadores.length === 0 && !isNationalRoster(equipo)) {
         // Fallback: team-level entry when no individual player data
         const key = `equipo:${equipo.id}`;
         if (!playerMap[key]) {
@@ -2504,7 +2507,7 @@ app.get('/api/rankings', async (req, res) => {
         playerMap[key].torneos_count += 1;
       } else {
         jugadores.forEach(j => {
-          const key = j.email || j.nombre;
+          const key = rankingPlayerKey(equipo,j);
           if (!key) return;
           if (!playerMap[key]) {
             playerMap[key] = { nombre: j.nombre || key, email: j.email || null, pais: null, foto_url: null, nivel: null, sede_id: null, equipo_nombre: equipo.nombre, puntos_total: 0, torneos_count: 0 };
@@ -2524,7 +2527,7 @@ app.get('/api/rankings', async (req, res) => {
         .in('email', emails);
 
       (perfiles || []).forEach(perfil => {
-        const entry = playerMap[perfil.email];
+        const entry = playerMap[perfil.email] ?? Object.values(playerMap).find(p=>p.email===perfil.email);
         if (!entry) return;
         entry.foto_url = perfil.foto_url || null;
         entry.pais     = perfil.pais     || null;
@@ -2634,6 +2637,12 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       basePoints: base,
       posicionMult: POSICION_MULT,
     });
+
+    if (isNationalRoster(torneo)) {
+      const closed=await closeNationalTournament(supabaseAdmin,{torneo,equipos,puntosData,actorId:auth.user.id});
+      await Promise.all(collectUserIdsFromEquipos(closed.equipos).map(userId=>actualizarRango(supabaseAdmin,userId).catch(()=>{})));
+      return res.json({torneo:closed.torneo,clasificacion:puntosData,status:closed.status,participacion:'alineacion_convocada'});
+    }
 
     // Delete previous entries for this torneo (idempotent), then insert
     await supabase.from('tabla_puntos').delete().eq('torneo_id', parseInt(id));
@@ -4272,7 +4281,7 @@ async function getRankingEntryForEmail(email) {
   const equipoIds = [...new Set(puntos.map((p) => p.equipo_id))];
   const { data: equipos, error: errE } = await supabase
     .from('equipos')
-    .select('id, nombre, jugadores')
+    .select('id, nombre, jugadores,modalidad_plantel,participantes_ranking')
     .in('id', equipoIds);
 
   if (errE) throw errE;
@@ -4284,9 +4293,9 @@ async function getRankingEntryForEmail(email) {
   puntos.forEach((p) => {
     const equipo = equipoMap[p.equipo_id];
     if (!equipo) return;
-    const jugadores = Array.isArray(equipo.jugadores) ? equipo.jugadores : [];
+    const jugadores = rankingPlayersForTeam(equipo);
 
-    if (jugadores.length === 0) {
+    if (jugadores.length === 0 && !isNationalRoster(equipo)) {
       const key = `equipo:${equipo.id}`;
       if (!playerMap[key]) {
         playerMap[key] = {
@@ -4303,7 +4312,7 @@ async function getRankingEntryForEmail(email) {
     }
 
     jugadores.forEach((j) => {
-      const key = j.email || j.nombre;
+      const key = rankingPlayerKey(equipo,j);
       if (!key) return;
       if (!playerMap[key]) {
         playerMap[key] = {
@@ -4327,7 +4336,7 @@ async function getRankingEntryForEmail(email) {
       .in('email', emails);
 
     (perfiles || []).forEach((perfil) => {
-      const entry = playerMap[perfil.email];
+      const entry = playerMap[perfil.email] ?? Object.values(playerMap).find(p=>p.email===perfil.email);
       if (!entry) return;
       entry.nombre = perfil.nombre || entry.nombre;
       entry.nivel = perfil.nivel || entry.nivel;

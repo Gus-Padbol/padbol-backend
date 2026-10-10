@@ -1,3 +1,4 @@
+import { rankingPlayersForTeam } from '../../lib/nationalTeamLineup.js';
 import { RANGOS, XP_TIPO_SUBIDA_RANGO } from './rangosConfig.js';
 import { sumarXP } from '../xp/xpService.js';
 
@@ -206,7 +207,7 @@ export function collectUserIdsFromEquipos(equipos) {
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   for (const eq of equipos ?? []) {
-    const jugadores = Array.isArray(eq.jugadores) ? eq.jugadores : [];
+    const jugadores = rankingPlayersForTeam(eq);
     for (const jugador of jugadores) {
       const uid = jugador?.user_id ?? jugador?.id ?? null;
       if (uid && uuidRe.test(String(uid))) {
