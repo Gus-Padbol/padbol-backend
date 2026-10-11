@@ -2257,9 +2257,12 @@ app.put('/api/torneos/:id', async (req, res) => {
     const { patch, torneo: current } = await prepareTournamentUpdate(supabaseAdmin, id, {
       nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin,
     });
-    const eventMode=await supabaseAdmin.from('torneos').select('plan_nations').eq('id',id).maybeSingle();if(eventMode.error)throw eventMode.error;
-    let mutation = (eventMode.data?.plan_nations?supabaseAdmin:supabase).from('torneos').update({ ...patch, updated_at: new Date().toISOString() })
+    const currentAccess=resolveTorneoAdminAccess(auth,current.sede_id);
+    if(!currentAccess.allowed){sendTorneoAdminForbidden(res,auth,currentAccess.reason);return;}
+    // JWT, stored role and current persisted venue scope are verified for every format.
+    let mutation = supabaseAdmin.from('torneos').update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', id).eq('estado', current.estado);
+    mutation=current.sede_id==null?mutation.is('sede_id',null):mutation.eq('sede_id',current.sede_id);
     mutation = current.updated_at == null ? mutation.is('updated_at', null) : mutation.eq('updated_at', current.updated_at);
     const { data, error } = await mutation.select();
     if (!error && !data?.length) return res.status(409).json({ code: 'TORNEO_CHANGED_RETRY', error: 'El torneo cambió. Actualiza antes de volver a guardar.' });
@@ -2277,15 +2280,19 @@ app.delete('/api/torneos/:id', async (req, res) => {
     const auth = await requireTorneoAdminByTorneoId(req, res, id);
     if (!auth) return;
 
-    const event=await supabaseAdmin.from('torneos').select('id,plan_nations').eq('id',id).maybeSingle();if(event.error)throw event.error;
+    const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,updated_at').eq('id',id).maybeSingle();if(event.error)throw event.error;
+    if(!event.data)return res.status(404).json({error:'Torneo no encontrado'});
+    const currentAccess=resolveTorneoAdminAccess(auth,event.data.sede_id);
+    if(!currentAccess.allowed){sendTorneoAdminForbidden(res,auth,currentAccess.reason);return;}
     if(rejectConfiguredNationsDeletion(res,event.data))return;
-    const { error } = await supabase
-      .from('torneos')
-      .delete()
-      .eq('id', id);
-
-    if (error) throw error;
-    res.json({ mensaje: 'Torneo eliminado' });
+    let deletion=supabaseAdmin.from('torneos').delete().eq('id',id).is('plan_nations',null);
+    deletion=event.data.updated_at==null?deletion.is('updated_at',null):deletion.eq('updated_at',event.data.updated_at);
+    deletion=event.data.sede_id==null?deletion.is('sede_id',null):deletion.eq('sede_id',event.data.sede_id);
+    const {data,error}=await deletion.select('id');
+    if(error)throw error;
+    if(!data?.length)return res.status(409).json({code:'TORNEO_CHANGED_RETRY',error:'El torneo cambió o ya no está disponible. Actualiza antes de volver a eliminar.'});
+    if(data.length!==1||Number(data[0].id)!==Number(id))throw Object.assign(new Error('No se pudo confirmar la eliminación del torneo.'),{status:503});
+    res.json({mensaje:'Torneo eliminado',id:Number(data[0].id)});
   } catch (err) {
     sendHttpError(res, err);
   }
