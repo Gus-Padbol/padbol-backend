@@ -49,6 +49,7 @@ BEGIN
   IF TG_OP='UPDATE' AND OLD.plan_nations IS DISTINCT FROM NEW.plan_nations OR TG_OP='INSERT' AND NEW.plan_nations IS NOT NULL THEN
    IF current_user NOT IN('service_role','postgres','supabase_admin') OR current_setting('padbol.nations_rpc',true) IS DISTINCT FROM '1' THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Use Nations event API'; END IF;
   END IF;
+  IF TG_OP='UPDATE' AND OLD.plan_nations->>'status' IN('groups','knockout','finalized') AND (OLD.fecha_inicio IS DISTINCT FROM NEW.fecha_inicio OR OLD.horas_revelar_equipos IS DISTINCT FROM NEW.horas_revelar_equipos) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Public reveal clock is frozen after the draw'; END IF;
   IF TG_OP='UPDATE' AND OLD.plan_nations->>'status' IN('groups','knockout','finalized') AND NEW.estado NOT IN('en_curso','cancelado','suspendido','finalizado') THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Nations registration is frozen after the draw'; END IF;
   IF TG_OP='UPDATE' AND OLD.plan_nations IS NOT NULL AND (OLD.tipo_torneo IS DISTINCT FROM NEW.tipo_torneo OR OLD.modalidad_plantel IS DISTINCT FROM NEW.modalidad_plantel OR OLD.deporte IS DISTINCT FROM NEW.deporte OR OLD.sede_id IS DISTINCT FROM NEW.sede_id OR (NEW.estado='finalizado' AND OLD.estado IS DISTINCT FROM NEW.estado)) AND current_setting('padbol.nations_rpc',true) IS DISTINCT FROM '1' THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Nations structure is event-managed'; END IF;
  ELSE
