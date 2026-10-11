@@ -283,4 +283,19 @@ REVOKE ALL ON FUNCTION public.puede_leer_games_nations(bigint) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.puede_leer_games_nations(bigint) TO anon,authenticated,service_role;
 DROP POLICY IF EXISTS nations_games_read_guard ON public.games;
 CREATE POLICY nations_games_read_guard ON public.games AS RESTRICTIVE FOR SELECT TO anon,authenticated USING(public.puede_leer_games_nations(partido_id));
+-- A child's tournament claim is not authoritative: derive its event from its actual team FK.
+CREATE OR REPLACE FUNCTION public.puede_leer_equipo_nations(p_equipo_id bigint) RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=public,pg_temp AS $$
+DECLARE e public.equipos;
+BEGIN
+ IF p_equipo_id IS NULL THEN RETURN true; END IF;
+ SELECT * INTO e FROM public.equipos WHERE id=p_equipo_id;
+ IF NOT FOUND THEN RETURN false; END IF;
+ RETURN public.puede_leer_nations(e.torneo_id,e.id,NULL);
+END $$;
+REVOKE ALL ON FUNCTION public.puede_leer_equipo_nations(bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.puede_leer_equipo_nations(bigint) TO anon,authenticated,service_role;
+DROP POLICY IF EXISTS nations_ranking_jugadores_read_guard ON public.ranking_jugadores;
+CREATE POLICY nations_ranking_jugadores_read_guard ON public.ranking_jugadores AS RESTRICTIVE FOR SELECT TO anon,authenticated USING(public.puede_leer_equipo_nations(equipo_id));
+DROP POLICY IF EXISTS nations_clasificaciones_read_guard ON public.clasificaciones;
+CREATE POLICY nations_clasificaciones_read_guard ON public.clasificaciones AS RESTRICTIVE FOR SELECT TO anon,authenticated USING(public.puede_leer_equipo_nations(equipo_id));
 COMMIT;
