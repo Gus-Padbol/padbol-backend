@@ -1,4 +1,5 @@
-SELECT EXISTS(SELECT 1 FROM pg_policies WHERE tablename='ranking_jugadores' AND policyname='nations_ranking_jugadores_read_guard' AND permissive='RESTRICTIVE') AS ranking_child_privacy_guard,
+SELECT position('OLD.nivel_torneo IS DISTINCT FROM NEW.nivel_torneo' in pg_get_functiondef('public.proteger_plan_nations()'::regprocedure))>0 AS points_level_freeze_guard,
+ EXISTS(SELECT 1 FROM pg_policies WHERE tablename='ranking_jugadores' AND policyname='nations_ranking_jugadores_read_guard' AND permissive='RESTRICTIVE') AS ranking_child_privacy_guard,
  EXISTS(SELECT 1 FROM pg_policies WHERE tablename='clasificaciones' AND policyname='nations_clasificaciones_read_guard' AND permissive='RESTRICTIVE') AS classification_child_privacy_guard,
  EXISTS(SELECT 1 FROM pg_policies WHERE tablename='games' AND policyname='nations_games_read_guard' AND permissive='RESTRICTIVE') AS games_privacy_guard,
  EXISTS(SELECT 1 FROM pg_policies WHERE tablename='scoreboard_partidos' AND policyname='nations_scoreboard_read_guard' AND permissive='RESTRICTIVE') AS scoreboard_privacy_guard,

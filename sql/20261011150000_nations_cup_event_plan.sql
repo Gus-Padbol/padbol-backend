@@ -45,6 +45,7 @@ CREATE OR REPLACE FUNCTION public.proteger_plan_nations() RETURNS trigger LANGUA
 DECLARE t public.torneos; sets jsonb; sa integer; sb integer; detail jsonb; a integer; b integer;
 BEGIN
  IF TG_TABLE_NAME='torneos' THEN
+  IF TG_OP='UPDATE' AND OLD.plan_nations IS NOT NULL AND OLD.nivel_torneo IS DISTINCT FROM NEW.nivel_torneo THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Event points level is frozen once Nations is configured'; END IF;
   IF TG_OP='UPDATE' AND OLD.plan_nations IS NOT NULL AND current_user NOT IN('service_role','postgres','supabase_admin') THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Use scoped Nations event API'; END IF;
   IF TG_OP='UPDATE' AND OLD.plan_nations IS DISTINCT FROM NEW.plan_nations OR TG_OP='INSERT' AND NEW.plan_nations IS NOT NULL THEN
    IF current_user NOT IN('service_role','postgres','supabase_admin') OR current_setting('padbol.nations_rpc',true) IS DISTINCT FROM '1' THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Use Nations event API'; END IF;
