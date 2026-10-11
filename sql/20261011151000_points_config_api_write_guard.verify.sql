@@ -1,0 +1,10 @@
+SELECT NOT has_table_privilege('anon','public.config_puntos','INSERT') AS anon_insert_denied,
+ NOT has_table_privilege('anon','public.config_puntos','UPDATE') AS anon_update_denied,
+ NOT has_table_privilege('anon','public.config_puntos','DELETE') AS anon_delete_denied,
+ NOT has_table_privilege('anon','public.config_puntos','TRUNCATE') AS anon_truncate_denied,
+ NOT has_table_privilege('authenticated','public.config_puntos','INSERT') AS authenticated_insert_denied,
+ NOT has_table_privilege('authenticated','public.config_puntos','UPDATE') AS authenticated_update_denied,
+ NOT has_table_privilege('authenticated','public.config_puntos','DELETE') AS authenticated_delete_denied,
+ NOT has_table_privilege('authenticated','public.config_puntos','TRUNCATE') AS authenticated_truncate_denied,
+ has_table_privilege('authenticated','public.config_puntos','SELECT') AS public_read_preserved,
+ has_table_privilege('service_role','public.config_puntos','INSERT,UPDATE,DELETE') AS service_writes_preserved;

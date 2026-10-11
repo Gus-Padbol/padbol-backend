@@ -1,3 +1,4 @@
+import {assertNationsScoreboardAudience,safeNationsScoreboardProjection} from '../lib/torneos/nationsPublicAccess.js';
 import {
   registrarPunto,
   deshacerPunto,
@@ -390,7 +391,7 @@ async function loadVenueContext(supabaseAdmin, sedeId) {
 
 async function enrichPartidoWithVenue(supabaseAdmin, partido) {
   const ctx = await loadVenueContext(supabaseAdmin, partido?.sede_id);
-  return enrichPartidoResponse(partido, ctx);
+  return enrichPartidoResponse(await safeNationsScoreboardProjection(supabaseAdmin,partido), ctx);
 }
 
 async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null) {
@@ -401,7 +402,7 @@ async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null
       sedeNombre: partido?.sede_nombre ?? null,
       canchas: [],
     };
-  const payload = enrichPartidoResponse(partido, ctx);
+  const payload = enrichPartidoResponse(supabaseAdmin?await safeNationsScoreboardProjection(supabaseAdmin,partido):partido, ctx);
   io.to(`scoreboard:${partidoId}`).emit('scoreboard:update', payload);
 }
 
@@ -441,6 +442,7 @@ export function mountScoreboardRoutes(app, {
   legacySuperAdminEmails = [],
   io = null,
 }) {
+  const assertNationsScoreboardRead=(req,row)=>assertNationsScoreboardAudience(req,row,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRole(user,{fetchUserRoleRowForAuthUser,legacySuperAdminEmails})});
   async function saveAndEmit(partido) {
     const saved = await savePartido(supabaseAdmin, partido);
     await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
@@ -821,7 +823,7 @@ export function mountScoreboardRoutes(app, {
       if (error) throw error;
 
       const partidos = await Promise.all(
-        (data ?? []).map((row) => enrichPartidoWithVenue(supabaseAdmin, row)),
+        (data ?? []).map(async(row) => {await assertNationsScoreboardRead(req,row);return enrichPartidoWithVenue(supabaseAdmin,row);}),
       );
       return res.json({ partidos });
     } catch (err) {
@@ -833,6 +835,7 @@ export function mountScoreboardRoutes(app, {
   app.get('/api/scoreboard/partidos/:id', async (req, res) => {
     try {
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
+      await assertNationsScoreboardRead(req,partido);
       return res.json(await enrichPartidoWithVenue(supabaseAdmin, partido));
     } catch (err) {
       const st = err.status || 500;
@@ -912,15 +915,18 @@ export function mountScoreboardRoutes(app, {
         return res.json({ activo: false });
       }
 
+      await assertNationsScoreboardRead(req,partido);
       const jugadores = mapScoreboardJugadoresTempPublic(
         await fetchJugadoresTempByPartido(supabaseAdmin, partido.id),
       );
+      const safeRow=await safeNationsScoreboardProjection(supabaseAdmin,partido);
+      const publicPlayers=safeRow===partido?jugadores:jugadores.map(p=>Object.fromEntries(['nombre','apellido','jersey','numero','equipo'].filter(k=>p[k]!=null).map(k=>[k,p[k]])));
 
       return res.json({
         partido_id: partido.id,
         nombre_a: partido.equipo_a_nombre,
         nombre_b: partido.equipo_b_nombre,
-        jugadores,
+        jugadores:publicPlayers,
       });
     } catch (err) {
       const st = err.status || 500;
@@ -992,10 +998,13 @@ export function mountScoreboardRoutes(app, {
         return res.status(400).json({ error: 'partidoId inválido' });
       }
 
+      const row=await fetchPartido(supabaseAdmin,partidoId);
+      await assertNationsScoreboardRead(req,row);
       const jugadores = mapScoreboardJugadoresTempPublic(
         await fetchJugadoresTempByPartido(supabaseAdmin, partidoId),
       );
-      return res.json({ jugadores });
+      const projected=await safeNationsScoreboardProjection(supabaseAdmin,row);
+      return res.json({ jugadores:projected===row?jugadores:jugadores.map(p=>Object.fromEntries(['nombre','apellido','jersey','numero','equipo'].filter(k=>p[k]!=null).map(k=>[k,p[k]]))) });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/jugadores-temp/:partidoId:', err.message);
       return sendHttpError(res, err, { fallbackMessage: 'Error al obtener jugadores temporales' });
@@ -1017,6 +1026,7 @@ export function mountScoreboardRoutes(app, {
         return res.json({ partido: null });
       }
 
+      await assertNationsScoreboardRead(req,partido);
       return res.json({
         partido: await enrichPartidoWithVenue(supabaseAdmin, partido),
       });
@@ -1057,6 +1067,7 @@ export function mountScoreboardRoutes(app, {
         return res.status(400).json({ error: 'partidoId inválido' });
       }
 
+      await assertNationsScoreboardRead(req,await fetchPartido(supabaseAdmin,partidoId));
       const historial = await fetchHistorialPuntos(supabaseAdmin, partidoId);
       return res.json({ historial });
     } catch (err) {
@@ -1181,10 +1192,11 @@ export function mountScoreboardRoutes(app, {
   });
 }
 
-export function initScoreboardSocket(io) {
+export function initScoreboardSocket(io,access=null) {
   io.on('connection', (socket) => {
-    socket.on('scoreboard:join', ({ partidoId }) => {
+    socket.on('scoreboard:join', async ({ partidoId }) => {
       if (!partidoId) return;
+      if(access){try{const row=await fetchPartido(access.supabaseAdmin,partidoId);const token=socket.handshake?.auth?.token;const req={headers:token?{authorization:`Bearer ${token}`}:{}};await assertNationsScoreboardAudience(req,row,{db:access.supabaseAdmin,getAuthenticatedUser:access.getAuthenticatedUser,getRole:access.getRole});}catch(error){socket.emit('scoreboard:access-denied',{code:error.code??'SCOREBOARD_NOT_AVAILABLE'});return;}}
       socket.join(`scoreboard:${partidoId}`);
     });
 

@@ -1,3 +1,8 @@
+import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
+import { isNationsPublicRevealed, resolveNationsReadAudience } from './lib/torneos/nationsPublicAccess.js';
+import { mountPointsConfigRoutes } from './routes/pointsConfig.js';
+import { loadPointsPolicy, buildPointsRows } from './lib/torneos/pointsPolicyService.js';
+import { mountNationsCupRoutes } from './routes/nationsCup.js';
 import { isNationalRoster, rankingPlayersForTeam, rankingPlayerKey, closeNationalTournament } from './lib/nationalTeamLineup.js';
 import { mountNationalTeamRoutes } from './routes/nationalTeams.js';
 import { createCrmEmailSender } from './lib/crmEmailSender.js';
@@ -1171,7 +1176,7 @@ mountScoreboardRoutes(app, {
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
   io,
 });
-initScoreboardSocket(io);
+initScoreboardSocket(io,{supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)});
 mountTorneoInteresRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
@@ -2052,6 +2057,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
   return null;
 }
 
+mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
@@ -2251,7 +2257,8 @@ app.put('/api/torneos/:id', async (req, res) => {
     const { patch, torneo: current } = await prepareTournamentUpdate(supabaseAdmin, id, {
       nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin,
     });
-    let mutation = supabase.from('torneos').update({ ...patch, updated_at: new Date().toISOString() })
+    const eventMode=await supabaseAdmin.from('torneos').select('plan_nations').eq('id',id).maybeSingle();if(eventMode.error)throw eventMode.error;
+    let mutation = (eventMode.data?.plan_nations?supabaseAdmin:supabase).from('torneos').update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', id).eq('estado', current.estado);
     mutation = current.updated_at == null ? mutation.is('updated_at', null) : mutation.eq('updated_at', current.updated_at);
     const { data, error } = await mutation.select();
@@ -2319,6 +2326,7 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
       return res.status(400).json({ error: 'El torneo ya tiene partidos generados' });
     }
 
+    if (torneo.plan_nations) return res.status(409).json({code:'NATIONS_ATOMIC_DRAW_REQUIRED',error:'Usa el sorteo de Nations Cup para conservar las tres zonas y sus reglas.'});
     let partidosData;
     switch (torneo.tipo_torneo) {
       case 'round_robin':
@@ -2441,6 +2449,15 @@ function mapLegacyRankingPublicRow(entry) {
   };
 }
 
+app.get('/api/jugadores/:userId/torneos-puntos',async(req,res)=>{try{const items=await loadPublishedNationalPoints(supabaseAdmin,{userId:req.params.userId,isRevealed:isNationsPublicRevealed});res.json({ok:true,jugador_id:req.params.userId,items});}catch(error){sendHttpError(res,error);}});
+
+async function assertNationsLegacyEventRead(req,torneoId,{roster=false}={}) {
+ const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneoId)).maybeSingle();if(event.error)throw event.error;if(!event.data?.plan_nations)return;
+ const audience=await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},event.data);
+ if(audience.admin||!roster&&audience.revealed)return;
+ throw Object.assign(new Error(roster?'Consulta los planteles mediante su acceso autorizado.':'El sorteo todavía no está publicado.'),{status:403,code:'NATIONS_PRIVATE_DATA'});
+}
+
 // GET /api/rankings?scope=local|nacional|internacional&sede_id=X&categoria=Y
 app.get('/api/rankings', async (req, res) => {
   const { scope = 'internacional', sede_id, categoria } = req.query;
@@ -2454,9 +2471,9 @@ app.get('/api/rankings', async (req, res) => {
     };
     const nivelesPermitidos = SCOPE_NIVELES[scope] || SCOPE_NIVELES.internacional;
 
-    let torneosQuery = supabase
+    let torneosQuery = supabaseAdmin
       .from('torneos')
-      .select('id, sede_id, nivel_torneo, nombre')
+      .select('id,sede_id,nivel_torneo,nombre,plan_nations,fecha_inicio,horas_revelar_equipos')
       .eq('estado', 'finalizado')
       .in('nivel_torneo', nivelesPermitidos);
 
@@ -2468,10 +2485,11 @@ app.get('/api/rankings', async (req, res) => {
     if (errT) throw errT;
     if (!torneos?.length) return res.json([]);
 
-    const torneoIds = torneos.map(t => t.id);
+    const torneoIds = torneos.filter(t=>isNationsPublicRevealed(t)).map(t => t.id);
+    if(!torneoIds.length)return res.json([]);
 
     // 2. Load tabla_puntos for those torneos
-    const { data: puntos, error: errP } = await supabase
+    const { data: puntos, error: errP } = await supabaseAdmin
       .from('tabla_puntos')
       .select('torneo_id, equipo_id, posicion, puntos')
       .in('torneo_id', torneoIds);
@@ -2480,7 +2498,7 @@ app.get('/api/rankings', async (req, res) => {
 
     // 3. Load equipos
     const equipoIds = [...new Set(puntos.map(p => p.equipo_id))];
-    const { data: equipos, error: errE } = await supabase
+    const { data: equipos, error: errE } = await supabaseAdmin
       .from('equipos')
       .select('id, nombre, jugadores,modalidad_plantel,participantes_ranking')
       .in('id', equipoIds);
@@ -2510,7 +2528,7 @@ app.get('/api/rankings', async (req, res) => {
           const key = rankingPlayerKey(equipo,j);
           if (!key) return;
           if (!playerMap[key]) {
-            playerMap[key] = { nombre: j.nombre || key, email: j.email || null, pais: null, foto_url: null, nivel: null, sede_id: null, equipo_nombre: equipo.nombre, puntos_total: 0, torneos_count: 0 };
+            playerMap[key] = { nombre: j.nombre || key, email: isNationalRoster(equipo)?null:(j.email || null), pais: j.pais??null, foto_url: null, nivel: null, sede_id: null, equipo_nombre: equipo.nombre, puntos_total: 0, torneos_count: 0 };
           }
           playerMap[key].puntos_total += p.puntos;
           playerMap[key].torneos_count += 1;
@@ -2521,7 +2539,7 @@ app.get('/api/rankings', async (req, res) => {
     // 5. Enrich with jugadores_perfil where emails are known
     const emails = Object.values(playerMap).map(p => p.email).filter(Boolean);
     if (emails.length > 0) {
-      const { data: perfiles } = await supabase
+      const { data: perfiles } = await supabaseAdmin
         .from('jugadores_perfil')
         .select('email, nombre, apellido, pais, foto_url, sede_id, nivel')
         .in('email', emails);
@@ -2596,6 +2614,7 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       .from('torneos').select('*').eq('id', id).single();
     if (errTorneo) throw errTorneo;
 
+    if(torneo.plan_nations) return res.status(409).json({code:'NATIONS_ATOMIC_CLOSURE_REQUIRED',error:'Finaliza desde Nations Cup para conservar la siembra y las posiciones aprobadas.'});
     // Load equipos & partidos
     const [{ data: equipos, error: errEq }, { data: partidos, error: errPart }] = await Promise.all([
       supabase.from('equipos').select('*').eq('torneo_id', parseInt(id)),
@@ -2631,12 +2650,15 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       });
     }
 
-    const base = BASE_PUNTOS[torneo.nivel_torneo] ?? 10;
-    const puntosData = buildTablaPuntosFromRankingRows(rankingRows, {
-      torneoId: parseInt(id, 10),
-      basePoints: base,
-      posicionMult: POSICION_MULT,
-    });
+    // Already closed ledgers are immutable: a later global policy edit is not retroactive.
+    if(torneo.estado==='finalizado') {
+      const {data:saved,error:savedError}=await supabaseAdmin.from('tabla_puntos').select('torneo_id,equipo_id,posicion,puntos').eq('torneo_id',Number(id));
+      if(savedError)throw savedError;
+      if(!Array.isArray(saved)||saved.length!==equipos.length||new Set(saved.map(p=>Number(p.equipo_id))).size!==equipos.length||saved.some(p=>!equipos.some(e=>Number(e.id)===Number(p.equipo_id))))return res.status(409).json({code:'TORNEO_HISTORICAL_LEDGER_INCOMPLETE',error:'El cierre histórico no tiene una tabla completa confirmada. No se recalcularán sus puntos.'});
+      return res.json({torneo,clasificacion:saved,status:'idempotent',source:'historical_ledger'});
+    }
+    const pointsPolicy=await loadPointsPolicy(supabaseAdmin);
+    const puntosData = buildPointsRows(pointsPolicy,{torneoId:Number(id),nivel:torneo.nivel_torneo,rankingRows:rankingRows.map((row,index)=>({...row,posicion:index+1}))});
 
     if (isNationalRoster(torneo)) {
       const closed=await closeNationalTournament(supabaseAdmin,{torneo,equipos,puntosData,actorId:auth.user.id});
@@ -2690,6 +2712,7 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
 
 app.get('/api/torneos/:id/tabla', async (req, res) => {
   try {
+    await assertNationsLegacyEventRead(req,req.params.id,{roster:false});
     const torneoId = parseInt(req.params.id, 10);
     if (!Number.isFinite(torneoId)) {
       return res.status(400).json({ ok: false, error: 'ID de torneo inválido' });
@@ -2753,6 +2776,7 @@ app.get('/api/torneos/:id/tabla', async (req, res) => {
 
 app.get('/api/torneos/:id/tabla-puntos', async (req, res) => {
   try {
+    await assertNationsLegacyEventRead(req,req.params.id,{roster:false});
     const torneoId = Number(req.params.id);
 
     if (!Number.isFinite(torneoId)) {
@@ -2875,6 +2899,7 @@ app.post('/api/torneos/:torneo_id/jugadores', async (req, res) => {
 
 app.get('/api/torneos/:torneo_id/jugadores', async (req, res) => {
   try {
+    await assertNationsLegacyEventRead(req,req.params.torneo_id,{roster:true});
     const { torneo_id } = req.params;
 
     const { data, error } = await supabaseAdmin
@@ -2898,6 +2923,10 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
     const tid = parseInt(torneo_id, 10);
+    const eventRead = await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',tid).maybeSingle();
+    if(eventRead.error)throw eventRead.error;
+    const audience=eventRead.data?.plan_nations?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
+    if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
 
     const [
       { data: equipos, error: errE },
@@ -2939,7 +2968,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     const result = (equipos || []).map((eq) =>
       mapEquipoTorneoPublicRow(eq, grupoMap[eq.id] || null, posicionMap[eq.id] ?? null),
     );
-    res.json(result);
+    res.json(audience&&!audience.admin?result.map(eq=>audience.captainIds.includes(Number(eq.id))?eq:{id:eq.id,nombre:eq.nombre,grupo:eq.grupo,posicion:eq.posicion}).filter(eq=>audience.revealed||audience.captainIds.includes(Number(eq.id))):result);
   } catch (err) {
     sendHttpError(res, err);
   }
@@ -3075,7 +3104,10 @@ app.post('/api/notificaciones/zona-interes', async (req, res) => {
 app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
-
+    const eventRead=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneo_id)).maybeSingle();
+    if(eventRead.error)throw eventRead.error;
+    const audience=eventRead.data?.plan_nations?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
+    if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.memberIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
     const { data, error } = await supabaseAdmin
       .from('partidos')
       .select(PARTIDO_TORNEO_PUBLIC_SELECT)
@@ -3084,7 +3116,8 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
 
     if (error) throw error;
 
-    const partidos = data || [];
+    const partidos = (data || []).filter(m=>!audience||audience.admin||audience.revealed||[...audience.captainIds,...audience.memberIds].some(id=>[Number(m.equipo_a_id),Number(m.equipo_b_id)].includes(id)));
+    if(audience&&!audience.admin)return res.json(partidos.map(m=>Object.fromEntries(['id','torneo_id','equipo_a_id','equipo_b_id','grupo','bracket_round','bracket_position','estado','fecha_hora','cancha','cancha_id','resultado','ganador_equipo_id','next_partido_id','next_slot'].map(k=>[k,m[k]??null]))));
     const scoreboardMap = await resolveScoreboardsMapForTorneoPartidos(
       supabaseAdmin,
       partidos.map((partido) => partido.id),
@@ -3152,6 +3185,7 @@ app.get('/api/partidos/:partido_id/games', async (req, res) => {
   try {
     const { partido_id } = req.params;
 
+    const parent=await supabaseAdmin.from('partidos').select('torneo_id').eq('id',Number(partido_id)).maybeSingle();if(parent.error)throw parent.error;if(parent.data?.torneo_id)await assertNationsLegacyEventRead(req,parent.data.torneo_id);
     const { data, error } = await supabase
       .from('games')
       .select('*')
@@ -3179,56 +3213,7 @@ app.put('/api/games/:id', (req, res) => legacyWriteDisabled(res, 'PUT /api/games
 //   ('niveles', '{"club_no_oficial":10,"club_oficial":30,"nacional":100,"internacional":300,"mundial":1000}'),
 //   ('posiciones', '{"1":100,"2":60,"3":40,"4":25,"5":15,"6":10,"7":5,"8":5,"9":5,"10":5}');
 
-const CONFIG_DEFAULTS = {
-  niveles:      { club_no_oficial: 10, club_oficial: 30, nacional: 100, internacional: 300, mundial: 1000 },
-  posiciones:   { 1: 100, 2: 60, 3: 40, 4: 25, 5: 15, 6: 10, 7: 5, 8: 5, 9: 5, 10: 5 },
-  tipos_custom: [],
-};
-
-app.get('/api/config/puntos', async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('config_puntos').select('clave, valor');
-    if (error) throw error;
-    if (!data?.length) return res.json(CONFIG_DEFAULTS);
-    const result = { ...CONFIG_DEFAULTS };
-    data.forEach(row => { result[row.clave] = row.valor; });
-    res.json(result);
-  } catch (err) {
-    console.error('❌ Error GET /api/config/puntos:', err.message);
-    res.json(CONFIG_DEFAULTS); // always return usable defaults
-  }
-});
-
-app.put('/api/config/puntos', async (req, res) => {
-  try {
-    const auth = await requireAdminUser(req, res, {
-      getAuthenticatedUser,
-      fetchUserRoleRowForAuthUser,
-      legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
-    });
-    if (!auth) return;
-
-    if (auth.role.rol !== 'super_admin') {
-      return res.status(403).json({ error: 'No tenés permiso para modificar la configuración de puntos' });
-    }
-
-    const { niveles, posiciones, tipos_custom } = req.body;
-    const rows = [];
-    if (niveles)                    rows.push({ clave: 'niveles',      valor: niveles,      updated_at: new Date() });
-    if (posiciones)                 rows.push({ clave: 'posiciones',   valor: posiciones,   updated_at: new Date() });
-    if (tipos_custom !== undefined) rows.push({ clave: 'tipos_custom', valor: tipos_custom, updated_at: new Date() });
-    if (!rows.length) return res.status(400).json({ error: 'No data provided' });
-
-    const { error } = await supabase
-      .from('config_puntos')
-      .upsert(rows, { onConflict: 'clave' });
-    if (error) throw error;
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('❌ Error PUT /api/config/puntos:', err.message);
-    sendHttpError(res, err);
-  }
-});
+mountPointsConfigRoutes(app,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)});
 
 // POST /api/cancelar-reserva — Cancellation with optional credit (JWT + dueño o admin)
 app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {

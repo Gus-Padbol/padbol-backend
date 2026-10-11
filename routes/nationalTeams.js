@@ -1,3 +1,4 @@
+import {isNationsPublicRevealed} from '../lib/torneos/nationsPublicAccess.js';
 import { isNationalRoster, nationalError, rosterPlayers, validateNationalLineup, validateNationalRoster, validateRevision, lineupDto } from '../lib/nationalTeamLineup.js';
 import { resolveTorneoAdminAccess } from '../lib/torneos/torneoAdminAccessService.js';
 const numeric = v => Number.isSafeInteger(Number(v))&&Number(v)>0?Number(v):null;
@@ -8,7 +9,7 @@ export function mountNationalTeamRoutes(app,{db,getAuthenticatedUser,getRole}) {
  async function context(req,{team=false,match=false}={}) {
   const result=await getAuthenticatedUser(req);if(!result.user)throw nationalError('Inicia sesión.',result.status??401,'AUTH_REQUIRED');
   const tid=numeric(req.params.id);if(!tid)throw nationalError('Torneo inválido.');
-  const torneo=await read(db,'torneos','id,sede_id,deporte,modalidad_plantel,estado,costo_inscripcion,inscripcion_monto',tid);
+  const torneo=await read(db,'torneos','id,sede_id,deporte,modalidad_plantel,estado,costo_inscripcion,inscripcion_monto,plan_nations,fecha_inicio,horas_revelar_equipos',tid);
   const equipo=team?await read(db,'equipos','id,torneo_id,creador_id,nombre,jugadores,solicitudes,cupo_maximo,equipo_abierto,plantel_revision,inscripcion_estado',numeric(req.params.equipoId)):null;
   if(equipo&&Number(equipo.torneo_id)!==tid)throw nationalError('Equipo de otro torneo.',404);
   const captain=equipo?.creador_id===result.user.id;
@@ -34,7 +35,7 @@ export function mountNationalTeamRoutes(app,{db,getAuthenticatedUser,getRole}) {
  }catch(error){return sendError(res,error);}}
  app.post('/api/torneos/:id/selecciones',(req,res)=>changeTeam(req,res,'crear'));
  app.post('/api/torneos/:id/selecciones/:equipoId/confirmar',(req,res)=>changeTeam(req,res,'confirmar'));
- app.get('/api/torneos/:id/selecciones',async(req,res)=>{try{const c=await context(req);if(!isNationalRoster(c.torneo))throw nationalError('El torneo no usa selecciones.',409);const {data,error}=await db.from('equipos').select('id,nombre,cupo_maximo,equipo_abierto,creador_id,jugadores,inscripcion_estado,plantel_revision').eq('torneo_id',c.torneo.id).order('id');if(error)throw error;return res.json({ok:true,torneo_id:Number(c.torneo.id),equipos:(data??[]).map(e=>({id:e.id,nombre:e.nombre,can_manage:Boolean(c.admin||e.creador_id===c.user.id),cupo_maximo:e.cupo_maximo,equipo_abierto:e.equipo_abierto===true,creador_id:e.creador_id,inscripcion_estado:e.inscripcion_estado,plantel_revision:e.plantel_revision,jugadores:rosterPlayers(e)}))});}catch(e){return sendError(res,e);}});
+ app.get('/api/torneos/:id/selecciones',async(req,res)=>{try{const c=await context(req);if(!isNationalRoster(c.torneo))throw nationalError('El torneo no usa selecciones.',409);const {data,error}=await db.from('equipos').select('id,nombre,cupo_maximo,equipo_abierto,creador_id,jugadores,inscripcion_estado,plantel_revision').eq('torneo_id',c.torneo.id).order('id');if(error)throw error;return res.json({ok:true,torneo_id:Number(c.torneo.id),equipos:(data??[]).filter(e=>!c.torneo.plan_nations||c.admin||e.creador_id===c.user.id||isNationsPublicRevealed(c.torneo)).map(e=>({id:e.id,nombre:e.nombre,can_manage:Boolean(c.admin||e.creador_id===c.user.id),cupo_maximo:e.cupo_maximo,equipo_abierto:e.equipo_abierto===true,creador_id:c.torneo.plan_nations&&!c.admin&&e.creador_id!==c.user.id?null:e.creador_id,inscripcion_estado:e.inscripcion_estado,plantel_revision:e.plantel_revision,jugadores:c.torneo.plan_nations&&!c.admin&&e.creador_id!==c.user.id?[]:rosterPlayers(e)}))});}catch(e){return sendError(res,e);}});
  app.post('/api/torneos/:id/selecciones/:equipoId/solicitudes',(req,res)=>changeTeam(req,res,'solicitar'));
  app.put('/api/torneos/:id/selecciones/:equipoId/plantel',(req,res)=>changeTeam(req,res,'plantel'));
  app.get('/api/torneos/:id/selecciones/:equipoId',async(req,res)=>{try{const c=await context(req,{team:true});if(!c.captain&&!c.admin)throw nationalError('Sin permiso para consultar el plantel.',403);return res.json(teamDto(c,c.equipo));}catch(e){return sendError(res,e);}});
