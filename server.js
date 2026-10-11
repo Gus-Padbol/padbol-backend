@@ -1,5 +1,5 @@
 import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
-import { isNationsPublicRevealed, resolveNationsReadAudience, projectNationsMatch, rejectLegacyNationsStandings } from './lib/torneos/nationsPublicAccess.js';
+import { isNationsPublicRevealed, resolveNationsReadAudience, projectNationsMatch, rejectLegacyNationsStandings, rejectConfiguredNationsDeletion } from './lib/torneos/nationsPublicAccess.js';
 import { mountPointsConfigRoutes } from './routes/pointsConfig.js';
 import { loadPointsPolicy, buildPointsRows } from './lib/torneos/pointsPolicyService.js';
 import { mountNationsCupRoutes } from './routes/nationsCup.js';
@@ -2277,6 +2277,8 @@ app.delete('/api/torneos/:id', async (req, res) => {
     const auth = await requireTorneoAdminByTorneoId(req, res, id);
     if (!auth) return;
 
+    const event=await supabaseAdmin.from('torneos').select('id,plan_nations').eq('id',id).maybeSingle();if(event.error)throw event.error;
+    if(rejectConfiguredNationsDeletion(res,event.data))return;
     const { error } = await supabase
       .from('torneos')
       .delete()
