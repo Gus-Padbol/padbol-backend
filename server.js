@@ -1,5 +1,5 @@
 import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
-import { isNationsPublicRevealed, resolveNationsReadAudience, projectNationsMatch } from './lib/torneos/nationsPublicAccess.js';
+import { isNationsPublicRevealed, resolveNationsReadAudience, projectNationsMatch, rejectLegacyNationsStandings } from './lib/torneos/nationsPublicAccess.js';
 import { mountPointsConfigRoutes } from './routes/pointsConfig.js';
 import { loadPointsPolicy, buildPointsRows } from './lib/torneos/pointsPolicyService.js';
 import { mountNationsCupRoutes } from './routes/nationsCup.js';
@@ -2454,7 +2454,7 @@ app.get('/api/jugadores/:userId/torneos-puntos',async(req,res)=>{try{const items
 async function assertNationsLegacyEventRead(req,torneoId,{roster=false}={}) {
  const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneoId)).maybeSingle();if(event.error)throw event.error;if(!event.data?.plan_nations)return;
  const audience=await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},event.data);
- if(audience.admin||!roster&&audience.revealed)return;
+ if(audience.admin||!roster&&audience.revealed)return {event:event.data,audience};
  throw Object.assign(new Error(roster?'Consulta los planteles mediante su acceso autorizado.':'El sorteo todavía no está publicado.'),{status:403,code:'NATIONS_PRIVATE_DATA'});
 }
 
@@ -2712,7 +2712,8 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
 
 app.get('/api/torneos/:id/tabla', async (req, res) => {
   try {
-    await assertNationsLegacyEventRead(req,req.params.id,{roster:false});
+    const eventContext=await assertNationsLegacyEventRead(req,req.params.id,{roster:false});
+    if(rejectLegacyNationsStandings(res,eventContext))return;
     const torneoId = parseInt(req.params.id, 10);
     if (!Number.isFinite(torneoId)) {
       return res.status(400).json({ ok: false, error: 'ID de torneo inválido' });
