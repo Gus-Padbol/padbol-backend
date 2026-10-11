@@ -270,4 +270,17 @@ DROP POLICY IF EXISTS nations_puntos_read_guard ON public.tabla_puntos;
 CREATE POLICY nations_puntos_read_guard ON public.tabla_puntos AS RESTRICTIVE FOR SELECT TO anon,authenticated USING(public.puede_leer_nations(torneo_id,equipo_id,NULL));
 DROP POLICY IF EXISTS nations_scoreboard_read_guard ON public.scoreboard_partidos;
 CREATE POLICY nations_scoreboard_read_guard ON public.scoreboard_partidos AS RESTRICTIVE FOR SELECT TO anon,authenticated USING(partido_torneo_id IS NULL OR EXISTS(SELECT 1 FROM public.partidos m WHERE m.id=partido_torneo_id AND public.puede_leer_nations(m.torneo_id,NULL,m.id)));
+-- games inherits the sports-match audience; a public child policy must not bypass its parent.
+CREATE OR REPLACE FUNCTION public.puede_leer_games_nations(p_partido_id bigint) RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=public,pg_temp AS $$
+DECLARE m public.partidos;
+BEGIN
+ IF p_partido_id IS NULL THEN RETURN true; END IF;
+ SELECT * INTO m FROM public.partidos WHERE id=p_partido_id;
+ IF NOT FOUND THEN RETURN false; END IF;
+ RETURN public.puede_leer_nations(m.torneo_id,NULL,m.id);
+END $$;
+REVOKE ALL ON FUNCTION public.puede_leer_games_nations(bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.puede_leer_games_nations(bigint) TO anon,authenticated,service_role;
+DROP POLICY IF EXISTS nations_games_read_guard ON public.games;
+CREATE POLICY nations_games_read_guard ON public.games AS RESTRICTIVE FOR SELECT TO anon,authenticated USING(public.puede_leer_games_nations(partido_id));
 COMMIT;

@@ -1,4 +1,5 @@
-SELECT EXISTS(SELECT 1 FROM pg_policies WHERE tablename='scoreboard_partidos' AND policyname='nations_scoreboard_read_guard' AND permissive='RESTRICTIVE') AS scoreboard_privacy_guard,
+SELECT EXISTS(SELECT 1 FROM pg_policies WHERE tablename='games' AND policyname='nations_games_read_guard' AND permissive='RESTRICTIVE') AS games_privacy_guard,
+ EXISTS(SELECT 1 FROM pg_policies WHERE tablename='scoreboard_partidos' AND policyname='nations_scoreboard_read_guard' AND permissive='RESTRICTIVE') AS scoreboard_privacy_guard,
  NOT has_table_privilege('anon','public.torneo_nations_planes','SELECT') AS private_plan_anon_denied,
  NOT has_table_privilege('authenticated','public.torneo_nations_planes','SELECT') AS private_plan_client_denied,
  EXISTS(SELECT 1 FROM pg_policies WHERE tablename='equipos' AND policyname='nations_equipos_read_guard' AND permissive='RESTRICTIVE') AS roster_privacy_guard,

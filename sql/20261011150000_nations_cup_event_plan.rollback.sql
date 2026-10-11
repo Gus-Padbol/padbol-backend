@@ -8,6 +8,8 @@ DROP POLICY IF EXISTS nations_equipos_read_guard ON public.equipos;
 DROP POLICY IF EXISTS nations_partidos_read_guard ON public.partidos;
 DROP POLICY IF EXISTS nations_puntos_read_guard ON public.tabla_puntos;
 DROP POLICY IF EXISTS nations_scoreboard_read_guard ON public.scoreboard_partidos;
+DROP POLICY IF EXISTS nations_games_read_guard ON public.games;
+DROP FUNCTION IF EXISTS public.puede_leer_games_nations(bigint);
 DROP FUNCTION IF EXISTS public.puede_leer_nations(bigint,bigint,bigint);
 DROP TRIGGER IF EXISTS proteger_plan_nations_torneo ON public.torneos;
 DROP TRIGGER IF EXISTS proteger_plan_nations_partido ON public.partidos;
