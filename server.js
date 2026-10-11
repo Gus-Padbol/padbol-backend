@@ -1,5 +1,5 @@
 import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
-import { isNationsPublicRevealed, resolveNationsReadAudience } from './lib/torneos/nationsPublicAccess.js';
+import { isNationsPublicRevealed, resolveNationsReadAudience, projectNationsMatch } from './lib/torneos/nationsPublicAccess.js';
 import { mountPointsConfigRoutes } from './routes/pointsConfig.js';
 import { loadPointsPolicy, buildPointsRows } from './lib/torneos/pointsPolicyService.js';
 import { mountNationsCupRoutes } from './routes/nationsCup.js';
@@ -3117,7 +3117,7 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
     if (error) throw error;
 
     const partidos = (data || []).filter(m=>!audience||audience.admin||audience.revealed||[...audience.captainIds,...audience.memberIds].some(id=>[Number(m.equipo_a_id),Number(m.equipo_b_id)].includes(id)));
-    if(audience&&!audience.admin)return res.json(partidos.map(m=>Object.fromEntries(['id','torneo_id','equipo_a_id','equipo_b_id','grupo','bracket_round','bracket_position','estado','fecha_hora','cancha','cancha_id','resultado','ganador_equipo_id','next_partido_id','next_slot'].map(k=>[k,m[k]??null]))));
+    if(audience&&!audience.admin)return res.json(partidos.map(projectNationsMatch));
     const scoreboardMap = await resolveScoreboardsMapForTorneoPartidos(
       supabaseAdmin,
       partidos.map((partido) => partido.id),
