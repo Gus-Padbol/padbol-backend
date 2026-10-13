@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {validateDraw,buildNationsClassification,buildNationsBracket,sourceSnapshot,buildNationsPlacements} from '../lib/torneos/nationsCupService.js';
 import {mountNationsCupRoutes} from './nationsCup.js';
 const actor='00000000-0000-4000-8000-000000000001',request='00000000-0000-4000-8000-000000000002',base='/api/torneos/:id/nations-cup';
 function fixture({user={id:actor},role={rol:'super_admin'},patch={},readError=null,rpcError=null,rpcReceipt=null}={}){const routes=new Map(),calls=[];const t={id:1,sede_id:7,deporte:'padbol',modalidad_plantel:'selecciones',tipo_torneo:'grupos_knockout',nivel_torneo:'internacional',estado:'abierto',fecha_inicio:'2020-01-01',plan_nations:null,...patch},data={torneos:t,equipos:[],partidos:[],torneo_nations_programacion:[],canchas:[],torneo_partido_participacion:[],tabla_puntos:[],config_puntos:[]};const db={from(table){const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:data[table],error:readError}),then(resolve,reject){return Promise.resolve({data:data[table],error:readError}).then(resolve,reject);}};return q;},async rpc(name,params){if(name==='leer_estado_nations')return {data:{torneo:t,teams:data.equipos,matches:data.partidos,schedule:data.torneo_nations_programacion,courts:data.canchas},error:readError};calls.push({name,params});if(name==='exportar_acta_nations')return {data:rpcReceipt??{ok:true,torneo_id:1,revision:t.plan_nations?.revision??0,type:'event_review_draft',official_fipa_points:null,official_fipa_status:'external_review_required',config:t.plan_nations.config,placements:t.plan_nations.placements??[],internal_points:data.tabla_puntos,declared_participants:[]},error:rpcError};if(!rpcError)t.plan_nations={...t.plan_nations,...params.p_payload,revision:params.p_revision+1};return {data:rpcReceipt??{ok:true,torneo_id:1,revision:params.p_revision+1,status:'saved'},error:rpcError};}};mountNationsCupRoutes(Object.fromEntries(['get','put','post'].map(method=>[method,(path,handler)=>routes.set(method+path,handler)])),{db,getAuthenticatedUser:async()=>({user,status:401}),getRole:async()=>role});return {calls,data,t,async call(method,path,body={},query={}){const res={statusCode:200,headers:{},status(n){this.statusCode=n;return this;},json(value){this.body=value;return this;},setHeader(k,v){this.headers[k]=v;},send(value){this.body=value;return this;}};await routes.get(method+path)({params:{id:'1'},body,query},res);return res;}};}
@@ -16,3 +17,27 @@ test('acta is a private review draft, not official FIPA publication or provider 
 test('CSV exports saved internal ledger only with official FIPA column blank',async()=>{const f=fixture({patch:{plan_nations:{config:{...cfg,country_by_team:{2:'IT'}},revision:1,placements:[{equipo_id:2,posicion:1}]}}});f.data.tabla_puntos=[{equipo_id:2,posicion:1,puntos:300}];const r=await f.call('get',base+'/acta',{}, {format:'csv'});assert.equal(r.statusCode,200);assert.match(r.headers['Content-Type'],/csv/);assert.match(r.body,/1,2,IT,1,300,,external_review_required/);});
 
 test('private administration GET cannot bypass public reveal for any authenticated unrelated user',async()=>{const f=fixture({role:{rol:'jugador'}});assert.equal((await f.call('get',base)).statusCode,403);});
+
+function completedEvent(thirdPlace){
+ const teams=Array.from({length:15},(_,i)=>({id:i+1,nombre:`QA${i+1}`,inscripcion_estado:'confirmado',jugadores:[{},{},{},{}]})),draw=validateDraw([[1,2,3,4,5],[6,7,8,9,10],[11,12,13,14,15]],teams,1,7);
+ const groups=draw.matches.map((m,i)=>({...m,id:i+1,estado:'finalizado',ganador_equipo_id:m.equipo_a_id,resultado:{goles_a:2,goles_b:0,historial_sets:[{a:6,b:m.grupo==='B'&&m.equipo_b_id===8?4:m.grupo==='C'&&m.equipo_b_id===13?1:0},{a:6,b:m.grupo==='B'&&m.equipo_b_id===8?4:m.grupo==='C'&&m.equipo_b_id===13?1:0}]}}));
+ let classification=buildNationsClassification({groups:draw.groups,teams,matches:groups}),resolutions=[];
+ while(classification.ties.length){resolutions.push(...classification.ties.map(t=>({...t,ordered_team_ids:t.team_ids,reason:'Explicit QA sporting tie order'})));classification=buildNationsClassification({groups:draw.groups,teams,matches:groups,resolutions});}
+ const bracket=buildNationsBracket(classification.qualified,1,7,{third_place_match:thirdPlace}).map((m,i)=>({...m,id:31+i}));
+ for(let i=0;i<6;i++){const next=bracket[i<4?4+Math.floor(i/2):6];bracket[i].partido_siguiente_id=next.id;bracket[i].partido_siguiente_slot=i%2?'B':'A';next[i%2?'equipo_b_id':'equipo_a_id']=bracket[i].equipo_a_id;}
+ if(thirdPlace){bracket[7].equipo_a_id=bracket[4].equipo_b_id;bracket[7].equipo_b_id=bracket[5].equipo_b_id;}
+ bracket.forEach(m=>Object.assign(m,{estado:'finalizado',ganador_equipo_id:m.equipo_a_id,resultado:{goles_a:2,goles_b:0,historial_sets:[{a:6,b:0},{a:6,b:0}]}}));
+ const plan={config:{...cfg,rules:{...cfg.rules,third_place_match:thirdPlace}},groups:draw.groups,...classification,tie_resolutions:resolutions,classification_source:sourceSnapshot(groups),revision:3,status:'knockout'},matches=[...groups,...bracket];
+ let pendingTies=[];try{buildNationsPlacements(plan,matches);}catch(e){assert.equal(e.code,'NATIONS_TIE_APPROVAL_REQUIRED');pendingTies=e.ties;}
+ const f=fixture({patch:{estado:'en_curso',plan_nations:plan}});f.data.equipos=teams;f.data.partidos=matches;
+ return {f,plan,matches,pendingTies,approvePlacements(){plan.tie_resolutions.push(...pendingTies.map(t=>({...t,ordered_team_ids:t.team_ids,reason:'Explicit QA final placement order'})));}};
+}
+test('GET38completed with approved final placements enables closure, legacy37 remains enabled',async()=>{
+ for(const thirdPlace of [true,false]){const e=completedEvent(thirdPlace);e.approvePlacements();const r=await e.f.call('get',base);assert.equal(r.statusCode,200);assert.equal(r.body.matches.length,thirdPlace?38:37);assert.equal(r.body.capabilities.can_close,true);assert.deepEqual(r.body.ties,[]);}
+});
+test('GET38 exposes unresolved final placement ties and resolution capability',async()=>{
+ const e=completedEvent(true),r=await e.f.call('get',base);assert.equal(r.statusCode,200);assert.ok(r.body.ties.length>0);assert.ok(r.body.ties.every(t=>t.scope.startsWith('placements:')));assert.equal(r.body.capabilities.can_close,false);assert.equal(r.body.capabilities.can_resolve_ties,true);
+});
+test('GET38 cannot close while bronze pending or missing even after final completed',async()=>{
+ for(const missing of [false,true]){const e=completedEvent(true);e.approvePlacements();if(missing)e.f.data.partidos=e.matches.filter(m=>m.id!==38);else e.matches.find(m=>m.id===38).estado='pendiente';const r=await e.f.call('get',base);assert.equal(r.statusCode,200);assert.equal(r.body.capabilities.can_close,false);}
+});
