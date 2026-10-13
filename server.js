@@ -1,3 +1,5 @@
+import { horasAnticipacionReserva } from './lib/reservaCancelacionTiming.js';
+import { confirmReservaGratuita } from './lib/reservaGratuita.js';
 import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
 import { isNationsPublicRevealed, resolveNationsReadAudience, projectNationsMatch, rejectLegacyNationsStandings, rejectConfiguredNationsDeletion } from './lib/torneos/nationsPublicAccess.js';
 import { mountPointsConfigRoutes } from './routes/pointsConfig.js';
@@ -317,7 +319,7 @@ app.use(publicReadRateLimitIfMatch);
 // `/api/torneos/:id` route, otherwise Express treats `resumen-stats` as an id.
 mountAdminLegacyAliases(app);
 // Gate SDKs with their own HTTP transports before any payment persistence.
-app.use(['/api/crear-preferencia', '/api/crear-pago-stripe', '/api/pago-exitoso',
+app.use(['/api/crear-pago-stripe', '/api/pago-exitoso',
   '/api/pago-exitoso-stripe', '/api/webhooks/mercadopago', '/api/webhooks/stripe'],
   externalOperationsGate(runtime));
 
@@ -3256,11 +3258,13 @@ app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {
 
     if (reserva.estado === 'cancelada') return res.status(409).json({ error: 'La reserva ya está cancelada' });
 
-    // Check if reservation is more than 24h away (Argentina UTC-3)
+    const sedeTimingQuery = supabaseAdmin.from('sedes').select('timezone');
+    const { data: sedeTiming, error: sedeTimingError } = reserva.sede_id != null
+      ? await sedeTimingQuery.eq('id', reserva.sede_id).maybeSingle()
+      : await sedeTimingQuery.eq('nombre', reserva.sede).maybeSingle();
+    if (sedeTimingError) throw sedeTimingError;
     const horaInicio = reservaHoraInicioFromRow(reserva);
-    const reservaDt = new Date(`${reserva.fecha}T${horaInicio}:00-03:00`);
-    const nowAR     = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
-    const horasHasta = (reservaDt - nowAR) / (1000 * 60 * 60);
+    const horasHasta = horasAnticipacionReserva(reserva, { timezone: sedeTiming?.timezone });
     const eligibleForCredit = horasHasta > 24;
 
     const reservaEmail = reserva.email
@@ -3268,11 +3272,15 @@ app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {
       : String(user.email || '').trim().toLowerCase();
 
     // Mark as cancelled
-    const { error: updateErr } = await supabaseAdmin
+    const { data: cancelled, error: updateErr } = await supabaseAdmin
       .from('reservas')
       .update({ estado: 'cancelada' })
-      .eq('id', reservaId);
+      .eq('id', reservaId)
+      .or('estado.is.null,estado.neq.cancelada')
+      .select('id')
+      .maybeSingle();
     if (updateErr) throw updateErr;
+    if (!cancelled) return res.status(409).json({ error: 'La reserva ya está cancelada' });
 
     let padcoinsParticipacionReversal = null;
     try {
@@ -3536,9 +3544,6 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
         error: 'Configuración del servidor incompleta (SUPABASE_SERVICE_ROLE_KEY). Contactá soporte.',
       });
     }
-    if (!RESERVA_RELEASE_TOKEN_SECRET) {
-      return res.status(503).json({ error: 'Liberación segura de reservas no configurada' });
-    }
 
     const {
       titulo,
@@ -3589,6 +3594,18 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
         serverTotal: priceErr.serverTotal ?? quote.total,
         clientPrecio: priceErr.clientPrecio ?? precio,
       });
+    }
+
+    // A free slot never requires provider credentials or creates a payment.
+    if (quote.total === 0) {
+      const free = await confirmReservaGratuita({ db, pgPool, body: req.body, user, quote });
+      await registerMembresiaUsoIncluidaIfNeeded({ quote, user, reservaId: free.reserva_id, sedeId: resolvedSedeId });
+      return res.status(201).json(free);
+    }
+
+    assertOutboundDeliveryEnabled(runtime);
+    if (!RESERVA_RELEASE_TOKEN_SECRET) {
+      return res.status(503).json({ error: 'Liberación segura de reservas no configurada' });
     }
 
     let client = mpClient;
@@ -3698,6 +3715,8 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
     });
   } catch (err) {
     logCrearPreferenciaError('handler', err, ctx);
+    const bookingError = classifyReservaWriteError(err);
+    if (bookingError && !res.headersSent) return res.status(bookingError.status).json({ error: bookingError.error });
     if (!res.headersSent) {
       console.error('[MP ERROR DETALLADO]', summarizeError(err));
       res.status(Number.isFinite(Number(err?.status)) ? Number(err.status) : 500).json({

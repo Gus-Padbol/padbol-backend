@@ -498,7 +498,7 @@ export function isBlockingReserva(reserva, nowMs = Date.now()) {
 
 export function isReservaSlotUniqueViolation(err) {
   if (!err) return false;
-  if (String(err.code) === '23505') return true;
+  if (['23505', '23P01'].includes(String(err.code))) return true;
   const text = [
     err.message,
     err.details,
@@ -527,7 +527,7 @@ export function classifyReservaWriteError(err) {
   if (code === '23503') {
     return { status: 400, error: 'Referencia inválida (sede o cancha)' };
   }
-  if (code === '22P02' || code === '22007' || code === '22008') {
+  if (code === '22P02' || code === '22007' || code === '22008' || code === '22023') {
     return { status: 400, error: 'Formato de fecha u hora inválido' };
   }
 
