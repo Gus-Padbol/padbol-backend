@@ -1,3 +1,4 @@
+import { readPublicReservationOccupancy } from './lib/reservasDisponibilidadPublica.js';
 import { horasAnticipacionReserva } from './lib/reservaCancelacionTiming.js';
 import { confirmReservaGratuita } from './lib/reservaGratuita.js';
 import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
@@ -1374,34 +1375,11 @@ app.get('/api/disponibilidad/bloqueos', async (req, res) => {
 app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
   try {
     const { sede, fecha } = req.params;
-    const selectCols = 'id, hora, hora_inicio, hora_fin, cancha, cancha_id, estado, created_at, sede, sede_id, duracion_minutos';
-
-    const { data: sedeRow } = await supabaseAdmin
-      .from('sedes')
-      .select('id')
-      .eq('nombre', sede)
-      .maybeSingle();
-
-    const queries = [
-      supabase.from('reservas').select(selectCols).eq('sede', sede).eq('fecha', fecha),
-    ];
-    if (sedeRow?.id != null) {
-      queries.push(
-        supabase.from('reservas').select(selectCols).eq('sede_id', sedeRow.id).eq('fecha', fecha),
-      );
-    }
-
-    const results = await Promise.all(queries);
-    for (const r of results) {
-      if (r.error) throw r.error;
-    }
-
-    const merged = new Map();
-    for (const row of results.flatMap((r) => r.data ?? [])) {
-      if (row?.id != null) merged.set(String(row.id), row);
-    }
-
-    res.json(filterBlockingReservas([...merged.values()]));
+    const sedeId = req.query.sede_id == null ? null : parsePositiveInt(req.query.sede_id);
+    if (req.query.sede_id != null && !sedeId) return res.status(400).json({ error: 'sede_id inválido' });
+    const occupancy = await readPublicReservationOccupancy(supabaseAdmin, { sede, sedeId, fecha });
+    res.set('Cache-Control', 'no-store');
+    res.json(occupancy);
   } catch (err) {
     sendHttpError(res, err);
   }
