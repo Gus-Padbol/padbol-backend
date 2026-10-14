@@ -1,3 +1,4 @@
+import { rankingTournamentEligible } from './lib/torneos/rankingTournamentEligibility.js';
 import { readPublicReservationOccupancy } from './lib/reservasDisponibilidadPublica.js';
 import { horasAnticipacionReserva } from './lib/reservaCancelacionTiming.js';
 import { confirmReservaGratuita } from './lib/reservaGratuita.js';
@@ -2462,7 +2463,7 @@ app.get('/api/rankings', async (req, res) => {
 
     let torneosQuery = supabaseAdmin
       .from('torneos')
-      .select('id,sede_id,nivel_torneo,nombre,plan_nations,fecha_inicio,horas_revelar_equipos')
+      .select('id,sede_id,nivel_torneo,nombre,plan_nations,fecha_inicio,horas_revelar_equipos,es_prueba')
       .eq('estado', 'finalizado')
       .in('nivel_torneo', nivelesPermitidos);
 
@@ -2474,7 +2475,7 @@ app.get('/api/rankings', async (req, res) => {
     if (errT) throw errT;
     if (!torneos?.length) return res.json([]);
 
-    const torneoIds = torneos.filter(t=>isNationsPublicRevealed(t)).map(t => t.id);
+    const torneoIds = torneos.filter(t=>rankingTournamentEligible(t)&&isNationsPublicRevealed(t)).map(t => t.id);
     if(!torneoIds.length)return res.json([]);
 
     // 2. Load tabla_puntos for those torneos
@@ -4253,14 +4254,15 @@ async function getRankingEntryForEmail(email) {
 
   const { data: torneos, error: errT } = await supabase
     .from('torneos')
-    .select('id, sede_id, nivel_torneo, nombre')
+    .select('id, sede_id, nivel_torneo, nombre, es_prueba')
     .eq('estado', 'finalizado')
     .in('nivel_torneo', nivelesPermitidos);
 
   if (errT) throw errT;
   if (!torneos?.length) return null;
 
-  const torneoIds = torneos.map((t) => t.id);
+  const torneoIds = torneos.filter(rankingTournamentEligible).map((t) => t.id);
+  if (!torneoIds.length) return null;
 
   const { data: puntos, error: errP } = await supabase
     .from('tabla_puntos')

@@ -123,7 +123,7 @@ async function fetchPerfilesForJugadoresPg(pgPool, jugadoresLists) {
 
 async function listTorneosFinalizadosPg(pgPool, { sedeId, deporte, offset, limit }) {
   const params = [];
-  const where = [`lower(trim(t.estado)) = 'finalizado'`];
+  const where = [`lower(trim(t.estado)) = 'finalizado'`, 'COALESCE(t.es_prueba, false) = false'];
 
   if (sedeId != null) {
     params.push(sedeId);
