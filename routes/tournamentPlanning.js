@@ -1,5 +1,5 @@
 import {buildScoreboardInsertRow} from '../src/scoreboard/scoreboardTorneoService.js';
-import {validateNationalLineup,lineupPlayerId} from '../lib/nationalTeamLineup.js';
+import {validateNationalLineup,lineupPlayerId,assertNationalLineupsReady} from '../lib/nationalTeamLineup.js';
 import {persistTournamentPlan} from '../lib/torneos/tournamentPlanningService.js';
 import {ensureScoreboardForCompletedBracketPartido} from '../lib/torneos/bracketScoreboardService.js';
 import {assertTournamentTeamsSportReady} from '../lib/tournamentParticipantsReadiness.js';
@@ -35,7 +35,7 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin,ensureS
   const schedule=await read(db.from('torneo_partidos_programacion').select('court_id,inicio,duration_minutes').eq('partido_id',partido.id).maybeSingle());
   const sede=await read(db.from('sedes').select('timezone').eq('id',torneo.sede_id).single());
   const matchTeams=equipos.filter(e=>[Number(partido.equipo_a_id),Number(partido.equipo_b_id)].includes(Number(e.id)));
-  let ready=matchTeams.length===2,requirements=[];try{await assertTournamentTeamsSportReady(db,{torneo,equipos:matchTeams});}catch(e){ready=false;requirements=[e.message];}
+  let ready=matchTeams.length===2,requirements=[];try{await assertTournamentTeamsSportReady(db,{torneo,equipos:matchTeams});if(ready && torneo.modalidad_plantel==='selecciones')await assertNationalLineupsReady(db,partido);}catch(e){ready=false;requirements=[e.message];}
   res.json({ok:true,partido,timezone:sede.timezone||'America/Argentina/Buenos_Aires',canchas:canchas.filter(c=>c.estado!=='inactiva'&&(c.deporte||'padbol')===(torneo.deporte||'padbol')),schedule,equipos:matchTeams.map(e=>({id:e.id,nombre:e.nombre,jugadores:(e.jugadores||[]).map(p=>({nombre:p.nombre,apellido:p.apellido,participante_id:p.participante_id}))})),can_open:['en_curso','activo'].includes(torneo.estado)&&ready,requirements:ready?[]:requirements});
  });
  route('put','/api/torneos/:id/partidos/:partidoId/programacion',async(req,res,{auth,torneo})=>{
