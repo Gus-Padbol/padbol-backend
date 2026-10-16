@@ -29,3 +29,10 @@ test('real opened inscription state aliases allow draft enrollment and editable 
 test('list management capability comes from actual captain or authorized tournament scope',async()=>{for(const [role,user,expected] of [[{rol:'admin_nacional',pais:'Argentina'},{id:ids[8]},false],[{rol:'admin_club',sede_id:8},{id:ids[8]},false],[{rol:'super_admin'},{id:ids[8]},true],[{rol:'jugador'},{id:ids[0]},true]]){const f=fixture({role,user});assert.equal((await f.call('get',base)).body.equipos[0].can_manage,expected);}});
 
 test('arbitrary-profile addition capability is real admin scope even when actor is also captain',async()=>{for(const [role,expected] of [[{rol:'jugador'},false],[{rol:'admin_nacional',pais:'Argentina'},false],[{rol:'admin_club',sede_id:8},false],[{rol:'admin_club',sede_id:7},true],[{rol:'super_admin'},true]]){const f=fixture({role,user:{id:ids[0]}});const r=await f.call('get',base+'/:equipoId');assert.equal(r.body.can_manage,true);assert.equal(r.body.can_add_profiles,expected);}});
+
+test('Nations captain declares four persisted sporting guests with no account requirement',async()=>{
+ const jugadores=ids.slice(0,8).map((participante_id,i)=>({participante_id,user_id:null,nombre:`Guest${i}`,tipo_identidad:'generico',estado:'confirmado'}));
+ const f=fixture({tournament:{plan_nations:{enabled:true}},team:{jugadores}});
+ const get=await f.call('get',lineup);assert.equal(get.body.plantel.length,8);assert.ok(get.body.plantel.every(p=>p.user_id===null));
+ const result=await f.call('put',lineup,body);assert.equal(result.statusCode,200);assert.equal(f.calls.find(c=>c[0]==='rpc')[1],'guardar_alineacion_participantes');
+});

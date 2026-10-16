@@ -45,16 +45,16 @@ export function mountNationalTeamRoutes(app,{db,getAuthenticatedUser,getRole}) {
   let markerExists=false;
   if(required){const marker=await db.from('scoreboard_partidos').select('id').eq('partido_torneo_id',c.partido.id).limit(1);if(marker.error)throw marker.error;markerExists=(marker.data??[]).length>0;}
   const canEdit=!markerExists&&required&&unlocked(c.partido)&&['planificacion','proximo','inscripcion','abierto','inscripcion_abierta','en_curso'].includes(c.torneo.estado)&&['confirmado','confirmada'].includes(c.equipo.inscripcion_estado);
-  const base={ok:true,torneo_id:Number(c.torneo.id),partido_id:Number(c.partido.id),equipo_id:Number(c.equipo.id),modalidad_plantel:c.torneo.modalidad_plantel??'dobles',required,can_edit:canEdit,plantel:c.torneo.plan_nations?rosterPlayers(c.equipo):lineupRosterPlayers(c.equipo),alternancia:required?'games_impares':null,manual_date_supported:!required};
+  const base={ok:true,torneo_id:Number(c.torneo.id),partido_id:Number(c.partido.id),equipo_id:Number(c.equipo.id),modalidad_plantel:c.torneo.modalidad_plantel??'dobles',required,can_edit:canEdit,plantel:lineupRosterPlayers(c.equipo),alternancia:required?'games_impares':null,manual_date_supported:!required};
   if(!required){if(write)throw nationalError('Las duplas no requieren esta alineación.',409);return res.json({...base,alineacion:null});}
   let row;
   if(write){if(!canEdit)throw nationalError('El partido ya no permite cambiar sus convocados.',409);
-   const validated=validateNationalLineup(req.body,c.equipo,{allowGeneric:!c.torneo.plan_nations});
-   const {data,error}=await db.rpc(!c.torneo.plan_nations && c.equipo.jugadores?.some(p=>p.participante_id)?'guardar_alineacion_participantes':'guardar_alineacion_seleccion',{p_torneo_id:Number(c.torneo.id),p_partido_id:Number(c.partido.id),p_equipo_id:Number(c.equipo.id),p_actor_id:c.user.id,p_admin:c.admin,p_iniciales:validated.iniciales,p_suplentes:validated.suplentes,p_revision:validateRevision(req.body.expected_revision)});
+   const validated=validateNationalLineup(req.body,c.equipo,{allowGeneric:true});
+   const {data,error}=await db.rpc(c.equipo.jugadores?.some(p=>p.participante_id)?'guardar_alineacion_participantes':'guardar_alineacion_seleccion',{p_torneo_id:Number(c.torneo.id),p_partido_id:Number(c.partido.id),p_equipo_id:Number(c.equipo.id),p_actor_id:c.user.id,p_admin:c.admin,p_iniciales:validated.iniciales,p_suplentes:validated.suplentes,p_revision:validateRevision(req.body.expected_revision)});
    if(error){if(error.code==='40001')throw nationalError('La alineación cambió. Actualiza y reintenta.',409);if(error.code==='22023')throw nationalError('Revisa los convocados y el estado del partido.',409);throw error;}row=data;
   }else{const result=await db.from('torneo_partido_alineaciones').select('torneo_id,partido_id,equipo_id,iniciales,suplentes,revision').eq('partido_id',c.partido.id).eq('equipo_id',c.equipo.id).maybeSingle();if(result.error)throw result.error;row=result.data;}
   if(row&&(Number(row.partido_id)!==Number(c.partido.id)||Number(row.equipo_id)!==Number(c.equipo.id)||Number(row.torneo_id)!==Number(c.torneo.id)))throw nationalError('Alineación sin confirmación.',503);
-  if(row){validateNationalLineup(row,c.equipo,{allowGeneric:!c.torneo.plan_nations});if(!Number.isSafeInteger(Number(row.revision))||Number(row.revision)<1)throw nationalError('Alineación sin revisión confirmada.',503);}
+  if(row){validateNationalLineup(row,c.equipo,{allowGeneric:true});if(!Number.isSafeInteger(Number(row.revision))||Number(row.revision)<1)throw nationalError('Alineación sin revisión confirmada.',503);}
   if(write&&!row)throw nationalError('Alineación sin confirmación.',503);
   return res.json({...base,alineacion:lineupDto(row)});
  }catch(e){return sendError(res,e);}}
