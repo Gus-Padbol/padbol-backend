@@ -15,7 +15,7 @@ export async function startPlannedTournament(db,{torneo,equipos,actorId}) {
  if(data?.ok!==true||data.estado!=='en_curso'||Number(data.torneo_id)!==Number(torneo.id))throw invalid('No se pudo comprobar el inicio del torneo.',503);
  return data;
 }
-export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin}) {
+export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin,ensureScoreboard=ensureScoreboardForCompletedBracketPartido}) {
  const load=async(req,res)=>{
   const auth=await requireTorneoAdmin(req,res,req.params.id);if(!auth)return null;
   const torneo=await read(db.from('torneos').select('*').eq('id',Number(req.params.id)).single());
@@ -61,7 +61,7 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin}) {
     return buildScoreboardInsertRow({...params,equipoA:declared(params.equipoA),equipoB:declared(params.equipoB)});
    }};
   }
-  const result=await ensureScoreboardForCompletedBracketPartido(db,{partidoId:match.id},markerDeps);
+  const result=await ensureScoreboard(db,{partidoId:match.id},markerDeps);
   if(!result.scoreboard_id)throw invalid('No se pudo abrir el marcador vinculado. Comprueba equipos, integrantes y estado del cruce.');
   res.json({ok:true,partido_id:match.id,scoreboard_id:result.scoreboard_id});
  });
