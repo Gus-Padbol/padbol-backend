@@ -1,6 +1,6 @@
 BEGIN;
 DO $qa$
-DECLARE actor uuid:='11111111-1111-4111-8111-111111111111';payload jsonb;receipt jsonb;ea bigint;eb bigint;mid bigint;sid bigint;idsa uuid[];idsb uuid[];snapshot jsonb;plan jsonb;auth_before integer;
+DECLARE actor uuid:='11111111-1111-4111-8111-111111111111';payload jsonb;receipt jsonb;ea bigint;eb bigint;mid bigint;sid bigint;idsa uuid[];idsb uuid[];snapshot jsonb;plan jsonb;auth_before integer;account_pid uuid;
 BEGIN
  SELECT count(*) INTO auth_before FROM auth.users;
  UPDATE torneos SET modalidad_plantel='selecciones',tipo_torneo='round_robin' WHERE id=555;
@@ -8,6 +8,16 @@ BEGIN
  receipt:=gestionar_participantes_torneo(555,actor,'inscribir',payload);ea:=(receipt->'equipo'->>'id')::bigint;
  SELECT jsonb_build_object('nombre','QA invitados B','incluir_capitan',false,'request_id',gen_random_uuid(),'participantes',jsonb_agg(jsonb_build_object('tipo_identidad','generico','nombre','QA B '||i))) INTO payload FROM generate_series(1,8)i;
  receipt:=gestionar_participantes_torneo(555,actor,'inscribir',payload);eb:=(receipt->'equipo'->>'id')::bigint;
+ SELECT jugadores INTO snapshot FROM equipos WHERE id=ea;
+ BEGIN PERFORM referencias_plantel_general(555,jsonb_set(snapshot,'{0,user_id}',to_jsonb(actor::text)));RAISE EXCEPTION 'Discrepant roster account field accepted';EXCEPTION WHEN invalid_parameter_value THEN NULL;END;
+ INSERT INTO torneo_participantes(torneo_id,sede_id,nombre,tipo_identidad,origen,creado_por,linked_user_id,estado_vinculacion) VALUES(555,8,'QA cuenta propia','cuenta','cuenta',actor,actor,'vinculado') RETURNING id INTO account_pid;
+ snapshot:=jsonb_build_array(jsonb_build_object('participante_id',account_pid,'nombre','QA cuenta propia','tipo_identidad','cuenta','user_id',actor));
+ IF referencias_plantel_general(555,snapshot) IS DISTINCT FROM ARRAY[actor] THEN RAISE EXCEPTION 'Authoritative account reference not preserved';END IF;
+ BEGIN PERFORM referencias_plantel_general(555,jsonb_set(snapshot,'{0,id}',to_jsonb('99999999-9999-4999-8999-999999999999'::text)));RAISE EXCEPTION 'Discrepant secondary account ID accepted';EXCEPTION WHEN invalid_parameter_value THEN NULL;END;
+ IF current_setting('padbol.test_partial_roster',true)='1' THEN
+  UPDATE torneo_participantes p SET nombre='',tipo_identidad='plaza_pendiente' WHERE p.id IN(SELECT (j->>'participante_id')::uuid FROM equipos e CROSS JOIN LATERAL jsonb_array_elements(e.jugadores)WITH ORDINALITY x(j,ord) WHERE e.torneo_id=555 AND ord>4);
+  UPDATE equipos e SET jugadores=(SELECT jsonb_agg(CASE WHEN ord>4 THEN j||jsonb_build_object('nombre','','tipo_identidad','plaza_pendiente','estado','pendiente') ELSE j END ORDER BY ord) FROM jsonb_array_elements(e.jugadores)WITH ORDINALITY x(j,ord)) WHERE e.torneo_id=555;
+ END IF;
  IF (SELECT count(*) FROM equipos WHERE torneo_id=555 AND jsonb_array_length(jugadores)=8 AND inscripcion_estado='confirmado')<>2 THEN RAISE EXCEPTION 'Both generic eight-player rosters must register';END IF;
  IF EXISTS(SELECT 1 FROM equipos e CROSS JOIN LATERAL jsonb_array_elements(e.jugadores)j WHERE e.torneo_id=555 AND j->>'user_id' IS NOT NULL) OR (SELECT count(*) FROM auth.users)<>auth_before THEN RAISE EXCEPTION 'Guest roster invented an auth identity';END IF;
  plan:=jsonb_build_array(jsonb_build_object('torneo_id',555,'sede_id',8,'equipo_a_id',ea,'equipo_b_id',eb,'estado','pendiente','ronda',1));

@@ -7,8 +7,11 @@ DECLARE refs uuid[];t public.torneos;
 BEGIN
  SELECT * INTO t FROM torneos WHERE id=p_torneo_id;
  IF t.id IS NULL OR t.plan_nations IS NOT NULL OR jsonb_typeof(p_jugadores) IS DISTINCT FROM 'array' THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Generic sporting roster context required';END IF;
- IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_jugadores) j WHERE j->>'participante_id' IS NULL OR NOT EXISTS(SELECT 1 FROM torneo_participantes p WHERE p.id::text=j->>'participante_id' AND p.torneo_id=t.id AND p.sede_id=t.sede_id AND p.tipo_identidad=j->>'tipo_identidad' AND coalesce(p.nombre,'')=coalesce(j->>'nombre',''))) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Only exact persisted sporting participants may form a generic selection';END IF;
- SELECT array_agg(coalesce(j->>'user_id',j->>'id',j->>'participante_id')::uuid) INTO refs FROM jsonb_array_elements(p_jugadores)j;
+ IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_jugadores) j WHERE j->>'participante_id' IS NULL OR NOT EXISTS(SELECT 1 FROM torneo_participantes p WHERE p.id::text=j->>'participante_id' AND p.torneo_id=t.id AND p.sede_id=t.sede_id AND p.tipo_identidad=j->>'tipo_identidad' AND coalesce(p.nombre,'')=coalesce(j->>'nombre','') AND (
+  p.origen='cuenta' AND p.linked_user_id IS NOT NULL AND j->>'user_id'=p.linked_user_id::text AND (j->>'id' IS NULL OR j->>'id'=p.linked_user_id::text)
+  OR p.origen<>'cuenta' AND j->>'user_id' IS NULL AND j->>'id' IS NULL
+ ))) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Sporting references must match their authoritative participant registration';END IF;
+ SELECT array_agg(CASE WHEN p.origen='cuenta' THEN p.linked_user_id ELSE p.id END ORDER BY entry.ord) INTO refs FROM jsonb_array_elements(p_jugadores)WITH ORDINALITY entry(j,ord) JOIN torneo_participantes p ON p.id::text=entry.j->>'participante_id' AND p.torneo_id=t.id;
  IF array_position(refs,NULL) IS NOT NULL OR cardinality(refs)<>(SELECT count(DISTINCT x) FROM unnest(refs)x) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Unique sporting references required';END IF;
  RETURN refs;
 END $$;
@@ -114,8 +117,13 @@ BEGIN
    ) participants;
    IF EXISTS(SELECT 1 FROM unnest(coalesce(eligible,'{}'::uuid[])) x WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(e.jugadores) j WHERE (CASE WHEN t.plan_nations IS NULL THEN coalesce(j->>'user_id',j->>'id',j->>'participante_id') ELSE coalesce(j->>'user_id',j->>'id') END)=x::text)) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Participant outside frozen roster'; END IF;
    -- Sporting guest references remain in participation evidence, never as auth/ranking identities.
-   IF t.plan_nations IS NULL THEN
-    SELECT array_agg(x ORDER BY x) INTO eligible FROM unnest(coalesce(eligible,'{}'::uuid[]))x WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(e.jugadores)j WHERE coalesce(j->>'user_id',j->>'id')=x::text) AND EXISTS(SELECT 1 FROM auth.users u WHERE u.id=x);
+   IF t.plan_nations IS NULL AND EXISTS(SELECT 1 FROM jsonb_array_elements(e.jugadores)j WHERE j ? 'participante_id') THEN
+    -- Identity and explicit eligibility come from the protected registry, never free roster JSON.
+    SELECT array_agg(DISTINCT p.linked_user_id ORDER BY p.linked_user_id) INTO eligible
+    FROM jsonb_array_elements(e.jugadores)j JOIN public.torneo_participantes p ON p.id::text=j->>'participante_id' AND p.torneo_id=t.id
+    WHERE p.ranking_oficial_elegible IS TRUE AND p.linked_user_id IS NOT NULL
+     AND (CASE WHEN p.origen='cuenta' THEN p.linked_user_id ELSE p.id END)=ANY(coalesce(eligible,'{}'::uuid[]))
+     AND EXISTS(SELECT 1 FROM auth.users u WHERE u.id=p.linked_user_id);
    END IF;
    SELECT p INTO point FROM jsonb_array_elements(p_puntos) p WHERE (p->>'equipo_id')::bigint=e.id;
    UPDATE public.equipos SET participantes_ranking=coalesce(eligible,'{}'::uuid[]),puntos_ranking=(point->>'puntos')::int WHERE id=e.id;
