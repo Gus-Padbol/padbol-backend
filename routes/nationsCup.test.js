@@ -41,3 +41,19 @@ test('GET38 exposes unresolved final placement ties and resolution capability',a
 test('GET38 cannot close while bronze pending or missing even after final completed',async()=>{
  for(const missing of [false,true]){const e=completedEvent(true);e.approvePlacements();if(missing)e.f.data.partidos=e.matches.filter(m=>m.id!==38);else e.matches.find(m=>m.id===38).estado='pendiente';const r=await e.f.call('get',base);assert.equal(r.statusCode,200);assert.equal(r.body.capabilities.can_close,false);}
 });
+
+ test('finalized public Nations table uses authoritative bracket placements, not legacy team ordering', async()=>{
+ const e=completedEvent(true);e.approvePlacements();e.f.t.estado='finalizado';e.plan.status='finalized';
+ const response=await e.f.call('get',base+'/publico');assert.equal(response.statusCode,200);
+ assert.deepEqual(response.body.placements,buildNationsPlacements(e.plan,e.matches));
+ assert.equal(response.body.placements.length,15);assert.equal(response.body.placements[0].equipo_id,e.matches.find(m=>m.bracket_round===3&&m.bracket_position===1).ganador_equipo_id);
+ });
+ test('QA Nations direct public endpoint respects authenticated venue scope',async()=>{
+ for(const [role,user,expected] of [[{rol:'jugador'},{id:actor},404],[{rol:'admin_club',sede_id:8},{id:actor},404],[{rol:'admin_club',sede_id:7},{id:actor},200],[{rol:'super_admin'},{id:actor},200],[null,null,404]]){
+ const f=fixture({role,user,patch:{es_prueba:true,plan_nations:{config:cfg}}});assert.equal((await f.call('get',base+'/publico')).statusCode,expected);assert.equal(f.calls.length,0);
+ }
+ });
+ test('real Nations closure before event date fails without a mutation',async()=>{
+ const e=completedEvent(true);e.approvePlacements();e.f.t.fecha_inicio='2099-01-01';
+ const response=await e.f.call('post',base+'/finalizar',{expected_revision:3,request_id:request});assert.equal(response.statusCode,409);assert.equal(response.body.code,'TOURNAMENT_NOT_STARTED');assert.equal(e.f.calls.length,0);
+ });
