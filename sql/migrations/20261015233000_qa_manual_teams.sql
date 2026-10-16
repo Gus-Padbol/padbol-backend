@@ -21,7 +21,7 @@ BEGIN
  writes:=(t.estado IN('abierto','inscripcion','inscripcion_abierta') AND coalesce(t.costo_inscripcion,0)=0 AND coalesce(t.inscripcion_monto,0)=0 AND NOT EXISTS(SELECT 1 FROM public.partidos WHERE torneo_id=t.id)) IS TRUE;
  SELECT coalesce(jsonb_agg(jsonb_build_object('user_id',p.user_id,'nombre',p.nombre,'apellido',coalesce(p.apellido,''),'inscrito',EXISTS(SELECT 1 FROM public.equipos eq CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(eq.jugadores)='array' THEN eq.jugadores ELSE '[]'::jsonb END) j WHERE eq.torneo_id=t.id AND coalesce(j->>'user_id',j->>'id')=p.user_id::text)) ORDER BY p.nombre,p.user_id),'[]'::jsonb) INTO players
  FROM public.jugadores_perfil p JOIN auth.users u ON u.id=p.user_id
- WHERE u.raw_user_meta_data->>'qa_test'='true' AND u.raw_user_meta_data->>'qa_torneo_id'=t.id::text AND u.raw_user_meta_data->>'qa_sede_id'=t.sede_id::text
+ WHERE u.raw_app_meta_data->>'qa_test'='true' AND u.raw_app_meta_data->>'qa_torneo_id'=t.id::text AND u.raw_app_meta_data->>'qa_sede_id'=t.sede_id::text
  AND p.fecha_nacimiento IS NOT NULL AND p.fecha_nacimiento<=current_date-interval '16 years';
  IF p_accion='listar' THEN RETURN jsonb_build_object('ok',true,'torneo_id',t.id,'can_manage',true,'can_write',writes,'players',players); END IF;
  IF p_accion<>'crear' OR p_request_id IS NULL OR length(trim(coalesce(p_nombre,''))) NOT BETWEEN 1 AND 80 OR cardinality(p_jugadores) IS DISTINCT FROM 2 OR p_jugadores[1] IS NULL OR p_jugadores[2] IS NULL OR p_jugadores[1]=p_jugadores[2] THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Choose two distinct QA players and a name'; END IF;
