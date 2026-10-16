@@ -24,7 +24,7 @@ BEGIN
  WHERE u.raw_app_meta_data->>'qa_test'='true' AND u.raw_app_meta_data->>'qa_torneo_id'=t.id::text AND u.raw_app_meta_data->>'qa_sede_id'=t.sede_id::text
  AND p.fecha_nacimiento IS NOT NULL AND p.fecha_nacimiento<=current_date-interval '16 years';
  IF p_accion='listar' THEN RETURN jsonb_build_object('ok',true,'torneo_id',t.id,'can_manage',true,'can_write',writes,'players',players); END IF;
- IF p_accion<>'crear' OR p_request_id IS NULL OR length(trim(coalesce(p_nombre,''))) NOT BETWEEN 1 AND 80 OR cardinality(p_jugadores) IS DISTINCT FROM 2 OR p_jugadores[1] IS NULL OR p_jugadores[2] IS NULL OR p_jugadores[1]=p_jugadores[2] THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Choose two distinct QA players and a name'; END IF;
+ IF p_accion IS DISTINCT FROM 'crear' OR p_request_id IS NULL OR length(trim(coalesce(p_nombre,''))) NOT BETWEEN 1 AND 80 OR cardinality(p_jugadores) IS DISTINCT FROM 2 OR p_jugadores[1] IS NULL OR p_jugadores[2] IS NULL OR p_jugadores[1]=p_jugadores[2] THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Choose two distinct QA players and a name'; END IF;
  payload:=jsonb_build_object('nombre',trim(p_nombre),'jugadores',to_jsonb(p_jugadores));
  SELECT * INTO previous FROM public.torneo_qa_inscripcion_requests WHERE torneo_id=t.id AND request_id=p_request_id;
  IF previous.request_id IS NOT NULL THEN
@@ -44,4 +44,39 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION public.gestionar_dupla_qa(bigint,uuid,text,text,uuid[],uuid) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.gestionar_dupla_qa(bigint,uuid,text,text,uuid[],uuid) TO service_role;
+COMMIT;
+
+BEGIN;
+CREATE OR REPLACE FUNCTION public.guardar_fixture_qa(p_torneo_id bigint,p_actor_id uuid,p_equipo_ids bigint[],p_partidos jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE t public.torneos;r public.user_roles;actual bigint[];ids bigint[];rows jsonb; expected integer;n integer;
+BEGIN
+ SELECT * INTO t FROM public.torneos WHERE id=p_torneo_id FOR UPDATE;
+ IF t.id IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='Tournament missing';END IF;
+ SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor_id;
+ IF (r.role='super_admin' OR r.role='admin_club' AND r.sede_id=t.sede_id) IS DISTINCT FROM true THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Tournament scope denied';END IF;
+ IF t.es_prueba IS DISTINCT FROM true OR t.plan_nations IS NOT NULL OR (t.estado IN('abierto','inscripcion','inscripcion_abierta','proximo','planificacion')) IS DISTINCT FROM true THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Fixture not allowed';END IF;
+ SELECT array_agg(id ORDER BY id) INTO actual FROM public.equipos WHERE torneo_id=t.id;
+ SELECT array_agg(x ORDER BY x) INTO ids FROM unnest(p_equipo_ids) x;
+ IF actual IS DISTINCT FROM ids OR coalesce(cardinality(ids),0)<2 OR cardinality(ids)<>(SELECT count(DISTINCT x) FROM unnest(ids) x) THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Team snapshot changed';END IF;
+ IF EXISTS(SELECT 1 FROM public.partidos WHERE torneo_id=t.id) THEN RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Fixture already exists';END IF;
+ IF jsonb_typeof(p_partidos) IS DISTINCT FROM 'array' OR jsonb_array_length(p_partidos)<1 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Fixture required';END IF;
+ IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_partidos) x WHERE (x->>'torneo_id')::bigint IS DISTINCT FROM t.id OR (x->>'sede_id')::bigint IS DISTINCT FROM t.sede_id OR x->>'estado' IS DISTINCT FROM 'pendiente' OR x->>'equipo_a_id' IS NOT NULL AND ((x->>'equipo_a_id')::bigint=ANY(ids)) IS DISTINCT FROM true OR x->>'equipo_b_id' IS NOT NULL AND ((x->>'equipo_b_id')::bigint=ANY(ids)) IS DISTINCT FROM true) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Foreign fixture match';END IF;
+ IF t.tipo_torneo='knockout' THEN
+  IF cardinality(ids) NOT IN(2,4,8,16,32,64) OR jsonb_array_length(p_partidos)<>cardinality(ids)-1 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Invalid knockout count';END IF;
+ END IF;
+ INSERT INTO public.partidos(torneo_id,sede_id,equipo_a_id,equipo_b_id,estado,grupo,ronda,bracket_round,bracket_position)
+ SELECT t.id,t.sede_id,m.equipo_a_id,m.equipo_b_id,'pendiente',m.grupo,m.ronda,m.bracket_round,m.bracket_position FROM jsonb_to_recordset(p_partidos) AS m(equipo_a_id bigint,equipo_b_id bigint,grupo text,ronda integer,bracket_round integer,bracket_position integer);
+ IF t.tipo_torneo='knockout' THEN
+  UPDATE public.partidos src SET partido_siguiente_id=dst.id,partido_siguiente_slot=CASE WHEN src.bracket_position%2=1 THEN 'A' ELSE 'B' END
+  FROM public.partidos dst WHERE src.torneo_id=t.id AND dst.torneo_id=t.id AND dst.bracket_round=src.bracket_round+1 AND dst.bracket_position=(src.bracket_position+1)/2;
+  GET DIAGNOSTICS n=ROW_COUNT;
+  IF n<>jsonb_array_length(p_partidos)-1 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Incomplete fixture links';END IF;
+ END IF;
+ UPDATE public.torneos SET estado='en_curso' WHERE id=t.id;
+ SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) INTO rows FROM public.partidos p WHERE p.torneo_id=t.id;
+ RETURN jsonb_build_object('ok',true,'torneo_id',t.id,'partidos',rows,'total',jsonb_array_length(rows),'formato',t.tipo_torneo);
+END $$;
+REVOKE ALL ON FUNCTION public.guardar_fixture_qa(bigint,uuid,bigint[],jsonb) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.guardar_fixture_qa(bigint,uuid,bigint[],jsonb) TO service_role;
 COMMIT;

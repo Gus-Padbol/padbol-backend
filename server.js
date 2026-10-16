@@ -2305,14 +2305,14 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
     const auth = await requireTorneoAdminByTorneoId(req, res, id);
     if (!auth) return;
 
-    const { data: torneo, error: errTorneo } = await supabase
+    const { data: torneo, error: errTorneo } = await supabaseAdmin
       .from('torneos')
       .select('*')
       .eq('id', id)
       .single();
     if (errTorneo) throw errTorneo;
 
-    const { data: equipos, error: errEquipos } = await supabase
+    const { data: equipos, error: errEquipos } = await supabaseAdmin
       .from('equipos')
       .select('*')
       .eq('torneo_id', parseInt(id))
@@ -2323,7 +2323,7 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
       return res.status(400).json({ error: 'Se necesitan al menos 2 equipos para generar partidos' });
     }
 
-    const { count: existingPartidosCount, error: errExistingPartidos } = await supabase
+    const { count: existingPartidosCount, error: errExistingPartidos } = await supabaseAdmin
       .from('partidos')
       .select('id', { count: 'exact', head: true })
       .eq('torneo_id', parseInt(id, 10));
@@ -2358,6 +2358,16 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
         break;
       default:
         partidosData = generarRoundRobin(equipos, id, torneo.sede_id);
+    }
+
+    if (torneo.es_prueba === true) {
+      const { data, error } = await supabaseAdmin.rpc('guardar_fixture_qa', {
+        p_torneo_id: Number(id), p_actor_id: auth.user.id,
+        p_equipo_ids: equipos.map(equipo => Number(equipo.id)), p_partidos: partidosData,
+      });
+      if (error) return res.status(['40001','23505','55000'].includes(error.code) ? 409 : error.code==='42501' ? 403 : 503).json({error:'El listado de equipos o el estado cambió. Recarga antes de generar el fixture.',code:'QA_FIXTURE_UNCONFIRMED'});
+      if (data?.ok !== true || Number(data.torneo_id)!==Number(id) || !Array.isArray(data.partidos) || data.total!==partidosData.length) return res.status(503).json({error:'No se confirmó el fixture QA.'});
+      return res.json({partidos:data.partidos,total:data.total,formato:data.formato});
     }
 
     const { data: partidosInsertados, error: errPartidos } = await supabase
