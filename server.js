@@ -1,3 +1,4 @@
+import {mountTournamentPlanningRoutes, startPlannedTournament} from './routes/tournamentPlanning.js';
 import { canReadQaCatalogRow, pickPlayerSedeSummary } from './lib/qaCatalogVisibility.js';
 import { mountQaManualTeamsRoutes } from './routes/qaManualTeams.js';
 import { rankingTournamentEligible } from './lib/torneos/rankingTournamentEligibility.js';
@@ -2053,6 +2054,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 
 mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountQaManualTeamsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
+mountTournamentPlanningRoutes(app, {db:supabaseAdmin, requireTorneoAdmin:requireTorneoAdminByTorneoId});
 mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
@@ -2256,6 +2258,12 @@ app.put('/api/torneos/:id', async (req, res) => {
     });
     const currentAccess=resolveTorneoAdminAccess(auth,current.sede_id);
     if(!currentAccess.allowed){sendTorneoAdminForbidden(res,auth,currentAccess.reason);return;}
+    if (patch.estado === 'en_curso' && !current.plan_nations && !['en_curso','activo'].includes(current.estado)) {
+      const {data:equipos,error:teamError}=await supabaseAdmin.from('equipos').select('*').eq('torneo_id',Number(id)).order('id');
+      if(teamError)throw teamError;
+      const started=await startPlannedTournament(supabaseAdmin,{torneo:current,equipos,actorId:auth.user.id});
+      return res.json([{...current,estado:started.estado}]);
+    }
     // JWT, stored role and current persisted venue scope are verified for every format.
     let mutation = supabaseAdmin.from('torneos').update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', id).eq('estado', current.estado);
@@ -2295,6 +2303,7 @@ app.delete('/api/torneos/:id', async (req, res) => {
   }
 });
 
+// Compatibility handler for legacy group formats; normal knockout/round-robin are intercepted by the planner.
 // POST /api/torneos/:id/generar-partidos
 // Reads all equipos for the torneo, generates matches based on tipo_torneo,
 // saves them to partidos, and sets the torneo estado to 'en_curso'.
