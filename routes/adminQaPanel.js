@@ -39,42 +39,43 @@ async function rowsOrThrow(query) {
 
 export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date()) {
   const monthStart = startOfCurrentMonthIso(now);
+  const today = now.toISOString().slice(0,10);
+  const thirtyDaysStart = new Date(now.getTime()-29*86400000).toISOString().slice(0,10);
   const [profiles, activeVenues, tournaments, recentReservations, venues, courts] = await Promise.all([
     rowsOrThrow(supabaseAdmin.from('jugadores_perfil').select('id,created_at')),
-    rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,licencia_activa,numero_licencia')),
-    rowsOrThrow(supabaseAdmin.from('torneos').select('id,deporte,estado,fecha_fin')),
-    rowsOrThrow(supabaseAdmin.from('reservas').select('id,estado,fecha,created_at,deporte,cancha_id')),
-    rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,estado')),
+    rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,licencia_activa,numero_licencia,es_prueba')),
+    rowsOrThrow(supabaseAdmin.from('torneos').select('id,deporte,estado,fecha_fin,es_prueba')),
+    rowsOrThrow(supabaseAdmin.from('reservas').select('id,estado,fecha,created_at,deporte,cancha_id,sede_id')),
+    rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,estado,es_prueba')),
     optionalRows(supabaseAdmin.from('canchas').select('id,deporte')),
   ]);
 
   const newProfiles = profiles.filter((row) => String(row?.created_at || '') >= monthStart).length;
-  const activeVenueRows = activeVenues.filter((row) => row.licencia_activa === true && String(row.numero_licencia ?? '').trim() !== '');
+  const qaVenueIds = new Set(venues.filter(v => v.es_prueba === true).map(v => String(v.id)));
+  const activeVenueRows = activeVenues.filter((row) => row.es_prueba !== true && row.licencia_activa === true && String(row.numero_licencia ?? '').trim() !== '');
   const finishedTournaments = tournaments.filter((row) => {
     const state = String(row?.estado || '').toLowerCase();
-    return ['finalizado', 'finalizada', 'completado', 'completada'].includes(state)
-      || (row?.fecha_fin && String(row.fecha_fin).slice(0, 10) < now.toISOString().slice(0, 10));
+    return row.es_prueba !== true && ['finalizado', 'finalizada', 'completado', 'completada'].includes(state);
   });
   const reservationsLastMonth = recentReservations.filter((row) => {
-    const created = String(row?.fecha || row?.created_at || '');
+    const created = String(row?.fecha || row?.created_at || '').slice(0,10);
     const state = String(row?.estado || '').toLowerCase();
-    return created >= monthStart && row?.cancelada !== true && ACTIVE_RESERVATION_STATES.has(state);
+    return created >= thirtyDaysStart && created <= today && !qaVenueIds.has(String(row.sede_id)) && row?.cancelada !== true && ACTIVE_RESERVATION_STATES.has(state);
   });
   const courtSport = new Map(courts.map((court) => [String(court.id), normalizedSport(court)]));
-  const completedReservations = recentReservations.filter((row) =>
-    row?.cancelada !== true && ACTIVE_RESERVATION_STATES.has(String(row?.estado || '').toLowerCase()));
+  const completedReservations = reservationsLastMonth;
   const sportRanking = countBy(completedReservations, (row) => {
     const direct = String(row?.deporte || '').trim();
     return direct ? normalizedSport(row) : courtSport.get(String(row?.cancha_id || '')) || 'padbol';
   });
   const topSport = sportRanking[0] || [null, 0];
   const countryLabels = new Map();
-  for (const venue of venues) {
+  for (const venue of venues.filter(v => v.es_prueba !== true)) {
     const label = normalizedCountry(venue.pais);
     const key = label.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     if (key && !countryLabels.has(key)) countryLabels.set(key, label);
   }
-  const countries = countBy(venues, (row) => normalizedCountry(row.pais)
+  const countries = countBy(venues.filter(v => v.es_prueba !== true), (row) => normalizedCountry(row.pais)
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() || null)
     .slice(0, 5)
     .map(([key, sedes_total]) => ({ pais: countryLabels.get(key), cantidad: sedes_total, sedes_total }));
@@ -95,6 +96,8 @@ export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date())
     },
     sedes_por_pais_top5: countries,
     generated_at: now.toISOString(),
+    reservas_periodo: {desde: thirtyDaysStart, hasta: today, dias:30},
+    sedes_activas_criterio: 'licencia_activa_con_numero',
   };
 }
 

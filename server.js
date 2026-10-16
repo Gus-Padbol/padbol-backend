@@ -1,3 +1,4 @@
+import { canReadQaCatalogRow, pickPlayerSedeSummary } from './lib/qaCatalogVisibility.js';
 import { rankingTournamentEligible } from './lib/torneos/rankingTournamentEligibility.js';
 import { readPublicReservationOccupancy } from './lib/reservasDisponibilidadPublica.js';
 import { horasAnticipacionReserva } from './lib/reservaCancelacionTiming.js';
@@ -1030,6 +1031,12 @@ function reservaBelongsToUser(reserva, user, qrUserId) {
   return false;
 }
 
+async function qaCatalogAudience(req) {
+  if (!req.headers?.authorization) return null;
+  const { user } = await getAuthenticatedUser(req);
+  return user ? {user, role: await resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS)} : null;
+}
+
 // GET sedes
 app.get('/api/sedes', async (req, res) => {
   try {
@@ -1037,7 +1044,7 @@ app.get('/api/sedes', async (req, res) => {
     console.log('📡 GET /api/sedes - Conectando a Supabase...');
     const { data, error } = await supabaseAdmin
       .from('sedes')
-      .select(SEDE_PAYMENT_STATUS_SELECT);
+      .select(`${SEDE_PAYMENT_STATUS_SELECT},es_prueba`);
 
     if (error) {
       console.error('❌ Error Supabase GET /api/sedes:', summarizeError(error));
@@ -1045,7 +1052,9 @@ app.get('/api/sedes', async (req, res) => {
     }
 
     console.log(`✓ GET /api/sedes — ${(data || []).length} sede(s)`);
-    const sedes = await enrichSedesWithCourtCatalog(supabaseAdmin, (data || []).map(pickPublicSedeWithPaymentStatus));
+    const audience = await qaCatalogAudience(req);
+    const visible = (data || []).filter(row => canReadQaCatalogRow(row, audience));
+    const sedes = await enrichSedesWithCourtCatalog(supabaseAdmin, visible.map(row => pickPlayerSedeSummary(pickPublicSedeWithPaymentStatus(row))));
     res.json(sport ? sedes.filter(sede => sede.deportes_disponibles.includes(sport)) : sedes);
   } catch (err) {
     console.error('❌ Error GET /api/sedes:', err.message);
@@ -1054,6 +1063,7 @@ app.get('/api/sedes', async (req, res) => {
 });
 
 mountSedesProfileRoutes(app, {
+  qaCatalogAudience,
   supabase,
   supabaseAdmin,
   getAuthenticatedUser,
@@ -1249,12 +1259,12 @@ app.get('/api/sedes/:id', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('sedes')
-      .select(SEDE_PAYMENT_STATUS_SELECT)
+      .select(`${SEDE_PAYMENT_STATUS_SELECT},es_prueba`)
       .eq('id', sedeId)
       .maybeSingle();
 
     if (error) throw error;
-    if (!data) {
+    if (!data || !canReadQaCatalogRow(data, await qaCatalogAudience(req))) {
       return res.status(404).json({ error: 'Sede no encontrada' });
     }
 
@@ -2129,13 +2139,14 @@ app.post('/api/torneos', async (req, res) => {
 
 app.get('/api/torneos', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('torneos')
-      .select(TORNEO_PUBLIC_SELECT)
+      .select(`${TORNEO_PUBLIC_SELECT},es_prueba`)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json((data || []).map(mapTorneoPublicRow));
+    const audience = await qaCatalogAudience(req);
+    res.json((data || []).filter(row => canReadQaCatalogRow(row, audience)).map(mapTorneoPublicRow));
   } catch (err) {
     sendHttpError(res, err);
   }
@@ -2187,13 +2198,14 @@ app.get('/api/torneos/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('torneos')
-      .select(TORNEO_PUBLIC_SELECT)
+      .select(`${TORNEO_PUBLIC_SELECT},es_prueba`)
       .eq('id', id)
       .single();
 
     if (error) throw error;
+    if (!canReadQaCatalogRow(data, await qaCatalogAudience(req))) return res.status(404).json({error:'Torneo no encontrado'});
     res.json(mapTorneoPublicRow(data));
   } catch (err) {
     sendHttpError(res, err);
