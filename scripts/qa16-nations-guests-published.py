@@ -25,7 +25,7 @@ def run(m,commit):
  baseline=sql('BASELINE.sql',g.protected_baseline_sql())
  pre=sql('PREFLIGHT.sql',"SELECT(SELECT es_prueba FROM sedes WHERE id=8)qa,(SELECT role FROM user_roles WHERE user_id="+q(m['actor']['id'])+"::uuid AND sede_id=8)role,(SELECT id FROM canchas WHERE sede_id=8 AND deporte='padbol'AND estado='activa'ORDER BY id LIMIT 1)court;")[0];assert pre['qa']is True and pre['role']=='admin_club'and pre['court']
  (OUT/'CLEANUP_REVIEW.sql').write_text(g.cleanup(m))
- seeded=sql('PREPARE.sql',"INSERT INTO torneos(nombre,sede_id,created_by,estado,deporte,modalidad_plantel,formato_equipo,tipo_torneo,nivel_torneo,fecha_inicio,fecha_fin,costo_inscripcion,es_prueba)VALUES("+q(m['name'])+",8,"+q(m['actor']['id'])+"::uuid,'abierto','padbol','selecciones','dobles','grupos_knockout','internacional',current_date+40,current_date+41,0,true)RETURNING id,fecha_inicio,fecha_fin;")[0];tid=int(seeded['id']);assert tid not in(39,41);m['torneo_id']=tid;(OUT/'MANIFEST.json').write_text(json.dumps(m,indent=2))
+ seeded=sql('PREPARE.sql',"INSERT INTO torneos(nombre,sede_id,created_by,estado,deporte,modalidad_plantel,formato_equipo,tipo_torneo,nivel_torneo,fecha_inicio,fecha_fin,costo_inscripcion,es_prueba)VALUES("+q(m['name'])+",8,"+q(m['actor']['id'])+"::uuid,'abierto','padbol','selecciones','dobles','grupos_knockout','internacional',current_date+40,current_date+41,0,true)RETURNING id,fecha_inicio,fecha_fin;")[0];tid=int(seeded['id']);assert tid not in(39,41,48);m['torneo_id']=tid;(OUT/'MANIFEST.json').write_text(json.dumps(m,indent=2))
  def api(path,method='GET',body=None,expected=200,auth=headers):
   status,data=h.request(h.API+path,method,auth,body);check(method+' '+path,status==expected);return data
  base=f'/api/torneos/{tid}';nc=base+'/nations-cup'

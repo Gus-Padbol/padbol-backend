@@ -19,7 +19,7 @@ def cleanup(m):
 DECLARE tid bigint;eids bigint[];mids bigint[];sids uuid[];
 BEGIN
  SELECT id INTO tid FROM torneos WHERE nombre="""+q(m['name'])+" AND created_by="+q(m['actor']['id'])+"::uuid AND sede_id=8 AND es_prueba IS TRUE;"+"""
- IF tid IS NULL OR tid IN(39,41) THEN RAISE EXCEPTION 'Exact QA fixture missing';END IF;
+ IF tid IS NULL OR tid IN(39,41,48) THEN RAISE EXCEPTION 'Exact QA fixture missing';END IF;
  PERFORM id FROM torneos WHERE id=tid FOR UPDATE;
  SELECT array_agg(id) INTO eids FROM equipos WHERE torneo_id=tid;
  SELECT array_agg(id) INTO mids FROM partidos WHERE torneo_id=tid;
@@ -54,10 +54,10 @@ def protected_baseline_sql():
  tables=['torneos','equipos','partidos','tabla_puntos','torneo_partido_alineaciones','torneo_partido_participacion','torneo_nations_planes','torneo_nations_programacion','torneo_fixture_planes','torneo_partidos_programacion','torneo_participantes','torneo_participante_equipos','torneo_participante_operaciones','torneo_participante_vinculaciones','torneo_participante_acreditaciones','torneo_homologaciones','torneo_participante_ranking_cierres','scoreboard_partidos']
  rows=[]
  for table in tables:
-  scope='id IN(39,41)' if table=='torneos' else 'torneo_id IN(39,41)'
+  scope='id IN(39,41,48)' if table=='torneos' else 'torneo_id IN(39,41,48)'
   rows.append("SELECT '"+table+"' table_name,md5(coalesce(jsonb_agg(to_jsonb(x)ORDER BY to_jsonb(x)::text)::text,'')) hash FROM public."+table+" x WHERE "+scope)
- rows.append("SELECT 'scoreboard_historial_puntos',md5(coalesce(jsonb_agg(to_jsonb(x)ORDER BY to_jsonb(x)::text)::text,''))FROM scoreboard_historial_puntos x WHERE partido_id IN(SELECT id FROM scoreboard_partidos WHERE torneo_id IN(39,41))")
- rows.append("SELECT 'games',md5(coalesce(jsonb_agg(to_jsonb(x)ORDER BY to_jsonb(x)::text)::text,''))FROM games x WHERE partido_id IN(SELECT id FROM partidos WHERE torneo_id IN(39,41))")
+ rows.append("SELECT 'scoreboard_historial_puntos',md5(coalesce(jsonb_agg(to_jsonb(x)ORDER BY to_jsonb(x)::text)::text,''))FROM scoreboard_historial_puntos x WHERE partido_id IN(SELECT id FROM scoreboard_partidos WHERE torneo_id IN(39,41,48))")
+ rows.append("SELECT 'games',md5(coalesce(jsonb_agg(to_jsonb(x)ORDER BY to_jsonb(x)::text)::text,''))FROM games x WHERE partido_id IN(SELECT id FROM partidos WHERE torneo_id IN(39,41,48))")
  return ' UNION ALL '.join(rows)+';'
 
 def run(m,commit):
@@ -74,7 +74,7 @@ def run(m,commit):
  baseline=sql('BASELINE.sql',protected_baseline_sql())
  pre=sql('PREFLIGHT.sql',"SELECT (SELECT es_prueba FROM sedes WHERE id=8) qa,(SELECT role FROM user_roles WHERE user_id="+q(m['actor']['id'])+"::uuid AND sede_id=8) role,(SELECT id FROM canchas WHERE sede_id=8 AND deporte='padbol' AND estado='activa' ORDER BY id LIMIT1) court;".replace('LIMIT1','LIMIT 1'))[0];assert pre['qa']is True and pre['role']=='admin_club' and pre['court']
  (OUT/'CLEANUP_REVIEW.sql').write_text(cleanup(m))
- rows=sql('PREPARE.sql',"INSERT INTO torneos(nombre,sede_id,created_by,estado,deporte,modalidad_plantel,formato_equipo,tipo_torneo,nivel_torneo,fecha_inicio,fecha_fin,costo_inscripcion,es_prueba) VALUES("+q(m['name'])+",8,"+q(m['actor']['id'])+"::uuid,'abierto','padbol','selecciones','dobles','knockout','club_no_oficial',current_date+30,current_date+31,0,true)RETURNING id,fecha_inicio;");tid=int(rows[0]['id']);m['torneo_id']=tid;(OUT/'MANIFEST.json').write_text(json.dumps(m,indent=2));assert tid not in(39,41)
+ rows=sql('PREPARE.sql',"INSERT INTO torneos(nombre,sede_id,created_by,estado,deporte,modalidad_plantel,formato_equipo,tipo_torneo,nivel_torneo,fecha_inicio,fecha_fin,costo_inscripcion,es_prueba) VALUES("+q(m['name'])+",8,"+q(m['actor']['id'])+"::uuid,'abierto','padbol','selecciones','dobles','knockout','club_no_oficial',current_date+30,current_date+31,0,true)RETURNING id,fecha_inicio;");tid=int(rows[0]['id']);m['torneo_id']=tid;(OUT/'MANIFEST.json').write_text(json.dumps(m,indent=2));assert tid not in(39,41,48)
  def call(path,method='GET',body=None,expected=200):
   status,data=h.request(h.API+f'/api/torneos/{tid}'+path,method,headers,body);check(method+' '+path,status==expected);return data
  try:
