@@ -1,3 +1,4 @@
+import { projectVerifiedTournamentRankingTeams } from './lib/verifiedTournamentRanking.js';
 import { mountTournamentParticipantsRoutes } from './routes/tournamentParticipants.js';
 import {mountTournamentPlanningRoutes, startPlannedTournament} from './routes/tournamentPlanning.js';
 import { canReadQaCatalogRow, pickPlayerSedeSummary } from './lib/qaCatalogVisibility.js';
@@ -2527,12 +2528,12 @@ app.get('/api/rankings', async (req, res) => {
     const equipoIds = [...new Set(puntos.map(p => p.equipo_id))];
     const { data: equipos, error: errE } = await supabaseAdmin
       .from('equipos')
-      .select('id, nombre, jugadores,modalidad_plantel,participantes_ranking')
+      .select('id, torneo_id, nombre, jugadores,modalidad_plantel,participantes_ranking')
       .in('id', equipoIds);
     if (errE) throw errE;
 
     const equipoMap = {};
-    (equipos || []).forEach(e => { equipoMap[e.id] = e; });
+    (await projectVerifiedTournamentRankingTeams(supabaseAdmin, equipos || [])).forEach(e => { equipoMap[e.id] = e; });
 
     // 4. Aggregate per player (keyed by email when available, else by name)
     const playerMap = {};
@@ -2542,7 +2543,7 @@ app.get('/api/rankings', async (req, res) => {
       if (!equipo) return;
       const jugadores = rankingPlayersForTeam(equipo);
 
-      if (jugadores.length === 0 && !isNationalRoster(equipo)) {
+      if (jugadores.length === 0 && !isNationalRoster(equipo) && !equipo.registry_ranking_verified) {
         // Fallback: team-level entry when no individual player data
         const key = `equipo:${equipo.id}`;
         if (!playerMap[key]) {
@@ -4312,13 +4313,13 @@ async function getRankingEntryForEmail(email) {
   const equipoIds = [...new Set(puntos.map((p) => p.equipo_id))];
   const { data: equipos, error: errE } = await supabase
     .from('equipos')
-    .select('id, nombre, jugadores,modalidad_plantel,participantes_ranking')
+    .select('id, torneo_id, nombre, jugadores,modalidad_plantel,participantes_ranking')
     .in('id', equipoIds);
 
   if (errE) throw errE;
 
   const equipoMap = {};
-  (equipos || []).forEach((e) => { equipoMap[e.id] = e; });
+  (await projectVerifiedTournamentRankingTeams(supabaseAdmin, equipos || [])).forEach((e) => { equipoMap[e.id] = e; });
 
   const playerMap = {};
   puntos.forEach((p) => {
@@ -4326,7 +4327,7 @@ async function getRankingEntryForEmail(email) {
     if (!equipo) return;
     const jugadores = rankingPlayersForTeam(equipo);
 
-    if (jugadores.length === 0 && !isNationalRoster(equipo)) {
+    if (jugadores.length === 0 && !isNationalRoster(equipo) && !equipo.registry_ranking_verified) {
       const key = `equipo:${equipo.id}`;
       if (!playerMap[key]) {
         playerMap[key] = {
