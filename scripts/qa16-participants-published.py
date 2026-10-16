@@ -18,7 +18,7 @@ def need(code,data):
 def sql(name,query):
  if (RUNTIME/'supabase/.temp/project-ref').read_text().strip()!=PROJECT:raise RuntimeError('Project mismatch')
  file=OUT/name;file.write_text(query)
- p=subprocess.run(['supabase','db','query','--linked','--workdir',str(RUNTIME),'--file',str(file),'--output','json'],capture_output=True,text=True,timeout=120)
+ p=subprocess.run(['supabase','db','query','--linked','--yes','--workdir',str(RUNTIME),'--file',str(file),'--output','json'],capture_output=True,text=True,timeout=120)
  if p.returncode:raise RuntimeError('SQL '+name+' failed; diagnostics withheld')
  return json.loads(p.stdout[p.stdout.index('{'):])['rows']
 def prepare():
@@ -75,18 +75,25 @@ def run(m,expected_commit):
   link=need(*request(BASE+'/auth/v1/admin/generate_link','POST',admin,{'type':'magiclink','email':account['email']}));hashed=link.get('hashed_token') or link.get('properties',{}).get('hashed_token');assert hashed
   session=need(*request(BASE+'/auth/v1/verify','POST',{'apikey':anon},{'type':'magiclink','token_hash':hashed}));assert session['user']['id']==account['id'];return {'Authorization':'Bearer '+session['access_token']}
  headers=jwt(actor)
+ if not m.get('accounts_ready'):
+  for account in m['users']:
+   metadata={'qa_test':True,'qa_fixture':m['prefix'],'qa_sede_id':8,'name':account['nombre']}
+   created=need(*request(BASE+'/auth/v1/admin/users','POST',admin,{'email':account['email'],'password':secrets.token_urlsafe(36),'email_confirm':True,'user_metadata':metadata,'app_metadata':metadata}))
+   account['id']=created['id'];account['created_via_auth_api']=True
+   (OUT/'MANIFEST.json').write_text(json.dumps(m,indent=2))
+   jwt(account) # First account is proved usable before creating the second one.
+  for account in m['users']:
+   sql('PROFILE_PREPARATION_'+account['id']+'.sql',"INSERT INTO public.jugadores_perfil(user_id,email,nombre,apellido,fecha_nacimiento,genero,pais,es_prueba) VALUES("+literal(account['id'])+"::uuid,"+literal(account['email'])+","+literal(account['nombre'])+",'QA','1990-01-01','masculino','Italia',true) ON CONFLICT(user_id) DO UPDATE SET nombre=EXCLUDED.nombre,apellido=EXCLUDED.apellido,fecha_nacimiento=EXCLUDED.fecha_nacimiento,genero=EXCLUDED.genero,pais=EXCLUDED.pais,es_prueba=true;")
+  m['accounts_ready']=True;(OUT/'MANIFEST.json').write_text(json.dumps(m,indent=2))
  if m['torneo_id'] is not None:raise RuntimeError('Rehearsal manifest already used: review/cleanup before any rerun')
  protected_query=(PROJECT_ROOT/'output/qa/revision_20261016/participants/PROTECTED_SNAPSHOT.sql').read_text()
  protected_before=sql('PROTECTED_BEFORE.sql',protected_query)[0]['protected']
  (OUT/'PROTECTED_BEFORE.json').write_text(json.dumps(protected_before,indent=2))
  # The complete cleanup is persisted BEFORE creating any fixture data.
  (OUT/'CLEANUP_REVIEW.sql').write_text(cleanup(m))
- q=literal;prep="BEGIN;DO $seed$ DECLARE tid bigint;BEGIN "
- for p in m['users']:prep+="IF EXISTS(SELECT 1 FROM auth.users WHERE id="+q(p['id'])+"::uuid OR email="+q(p['email'])+") THEN RAISE EXCEPTION 'Fresh UUID/email collision';END IF;"
+ q=literal;prep="BEGIN;SET LOCAL lock_timeout='5s';SET LOCAL statement_timeout='30s';DO $seed$ DECLARE tid bigint;BEGIN "
+ for p in m['users']:prep+="IF NOT EXISTS(SELECT 1 FROM auth.users WHERE id="+q(p['id'])+"::uuid AND email="+q(p['email'])+" AND raw_app_meta_data->>'qa_fixture'="+q(m['prefix'])+") THEN RAISE EXCEPTION 'API-created QA ownership mismatch';END IF;"
  prep+="INSERT INTO public.torneos(nombre,sede_id,created_by,estado,deporte,modalidad_plantel,formato_equipo,tipo_torneo,nivel_torneo,fecha_inicio,fecha_fin,costo_inscripcion,es_prueba) VALUES("+q(m['name'])+",8,"+q(actor['id'])+"::uuid,'abierto','padbol','dobles','dobles','knockout','club_no_oficial',current_date+2,current_date+3,0,true) RETURNING id INTO tid;IF tid IN(39,41) THEN RAISE EXCEPTION 'Protected event';END IF;"
- for p in m['users']:
-  meta="jsonb_build_object('qa_test',true,'qa_fixture',"+q(m['prefix'])+",'qa_torneo_id',tid,'qa_sede_id',8)"
-  prep+="INSERT INTO auth.users(id,email,aud,role,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at) VALUES("+q(p['id'])+"::uuid,"+q(p['email'])+",'authenticated','authenticated',now(),"+meta+","+meta+",now(),now()); INSERT INTO public.jugadores_perfil(user_id,email,nombre,apellido,fecha_nacimiento,genero,pais,es_prueba) VALUES("+q(p['id'])+"::uuid,"+q(p['email'])+","+q(p['nombre'])+",'QA','1990-01-01','masculino','Italia',true);"
  prep+="END $seed$;COMMIT;SELECT id FROM public.torneos WHERE nombre="+q(m['name'])+" AND sede_id=8;"
  m['torneo_id']=int(sql('PREPARATION.sql',prep)[0]['id']);(OUT/'MANIFEST.json').write_text(json.dumps(m,indent=2));tid=m['torneo_id'];report={'status':'RUNNING','torneo_id':tid,'checks':[]}
  def check(name,passed,**safe):
@@ -94,6 +101,9 @@ def run(m,expected_commit):
  def call(auth,path,method='GET',body=None,expected=200):
   start=time.monotonic();status,data=request(API+f'/api/torneos/{tid}'+path,method,auth,body);check(method+' '+path,status==expected,status=status,milliseconds=round((time.monotonic()-start)*1000));return data
  try:
+  for account in m['users']:
+   metadata={'qa_test':True,'qa_fixture':m['prefix'],'qa_sede_id':8,'qa_torneo_id':tid,'name':account['nombre']}
+   need(*request(BASE+'/auth/v1/admin/users/'+account['id'],'PUT',admin,{'app_metadata':metadata,'user_metadata':metadata}))
   cap=jwt(m['users'][0]);claim=jwt(m['users'][1]);req=lambda:str(uuid.uuid4())
   call({},'/participantes',expected=401)
   club=call(headers,'/inscripciones-participantes','POST',{'request_id':req(),'nombre':m['name']+' Club','participantes':[{'tipo_identidad':'generico','nombre':'QA Guest One'},{'tipo_identidad':'generico','nombre':'QA Guest Two'}]},201)
