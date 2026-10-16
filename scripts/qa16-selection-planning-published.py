@@ -38,6 +38,9 @@ BEGIN
  DELETE FROM torneo_participante_operaciones WHERE torneo_id=tid;
  DELETE FROM torneo_participante_equipos WHERE torneo_id=tid;
  DELETE FROM torneo_participantes WHERE torneo_id=tid;
+ PERFORM set_config('padbol.nations_rpc','1',true);
+ DELETE FROM torneo_nations_programacion WHERE torneo_id=tid;
+ DELETE FROM torneo_nations_planes WHERE torneo_id=tid;
  DELETE FROM torneo_partidos_programacion WHERE torneo_id=tid;
  DELETE FROM torneo_fixture_planes WHERE torneo_id=tid;
  DELETE FROM tabla_puntos WHERE torneo_id=tid;
@@ -46,6 +49,16 @@ BEGIN
  DELETE FROM equipos WHERE torneo_id=tid;
  DELETE FROM torneos WHERE id=tid;
 END $cleanup$;COMMIT;""".replace('SELECT1','SELECT 1')
+
+def protected_baseline_sql():
+ tables=['torneos','equipos','partidos','tabla_puntos','torneo_partido_alineaciones','torneo_partido_participacion','torneo_nations_planes','torneo_nations_programacion','torneo_fixture_planes','torneo_partidos_programacion','torneo_participantes','torneo_participante_equipos','torneo_participante_operaciones','torneo_participante_vinculaciones','torneo_participante_acreditaciones','torneo_homologaciones','torneo_participante_ranking_cierres','scoreboard_partidos']
+ rows=[]
+ for table in tables:
+  scope='id IN(39,41)' if table=='torneos' else 'torneo_id IN(39,41)'
+  rows.append("SELECT '"+table+"' table_name,md5(coalesce(jsonb_agg(to_jsonb(x)ORDER BY to_jsonb(x)::text)::text,'')) hash FROM public."+table+" x WHERE "+scope)
+ rows.append("SELECT 'scoreboard_historial_puntos',md5(coalesce(jsonb_agg(to_jsonb(x)ORDER BY to_jsonb(x)::text)::text,''))FROM scoreboard_historial_puntos x WHERE partido_id IN(SELECT id FROM scoreboard_partidos WHERE torneo_id IN(39,41))")
+ rows.append("SELECT 'games',md5(coalesce(jsonb_agg(to_jsonb(x)ORDER BY to_jsonb(x)::text)::text,''))FROM games x WHERE partido_id IN(SELECT id FROM partidos WHERE torneo_id IN(39,41))")
+ return ' UNION ALL '.join(rows)+';'
 
 def run(m,commit):
  if Path.cwd().resolve()!=h.CANONICAL:raise RuntimeError('Canonical directory required')
@@ -58,7 +71,7 @@ def run(m,commit):
   report['checks'].append({'name':name,'passed':bool(passed)});(OUT/'RESULT.json').write_text(json.dumps(report,indent=2));assert passed,name
  def sql(name,query):return h.sql('SELECTION_'+name,query)
  q=h.literal
- baseline=sql('BASELINE.sql',"SELECT md5(coalesce(jsonb_agg(to_jsonb(t)ORDER BY id)::text,'')) AS hash FROM torneos t WHERE id IN(39,41);")[0]['hash']
+ baseline=sql('BASELINE.sql',protected_baseline_sql())
  pre=sql('PREFLIGHT.sql',"SELECT (SELECT es_prueba FROM sedes WHERE id=8) qa,(SELECT role FROM user_roles WHERE user_id="+q(m['actor']['id'])+"::uuid AND sede_id=8) role,(SELECT id FROM canchas WHERE sede_id=8 AND deporte='padbol' AND estado='activa' ORDER BY id LIMIT1) court;".replace('LIMIT1','LIMIT 1'))[0];assert pre['qa']is True and pre['role']=='admin_club' and pre['court']
  (OUT/'CLEANUP_REVIEW.sql').write_text(cleanup(m))
  rows=sql('PREPARE.sql',"INSERT INTO torneos(nombre,sede_id,created_by,estado,deporte,modalidad_plantel,formato_equipo,tipo_torneo,nivel_torneo,fecha_inicio,fecha_fin,costo_inscripcion,es_prueba) VALUES("+q(m['name'])+",8,"+q(m['actor']['id'])+"::uuid,'abierto','padbol','selecciones','dobles','knockout','club_no_oficial',current_date+30,current_date+31,0,true)RETURNING id,fecha_inicio;");tid=int(rows[0]['id']);m['torneo_id']=tid;(OUT/'MANIFEST.json').write_text(json.dumps(m,indent=2));assert tid not in(39,41)
@@ -78,10 +91,11 @@ def run(m,commit):
    call(f'/partidos/{mid}/programacion','PUT',{'court_id':pre['court'],'fecha_hora':str(rows[0]['fecha_inicio'])+f'T{10+index:02}:00:00Z','duration_minutes':30})
    marker=call(f'/partidos/{mid}/marcador','POST',{});check('linked marker',bool(marker.get('scoreboard_id')))
    call(f'/partidos/{mid}/resultado','POST',{'goles_a':2,'goles_b':0,'historial_sets':[{'a':6,'b':0},{'a':6,'b':0}]})
+   synced=h.need(*h.request(h.API+'/api/scoreboard/partidos/'+str(marker['scoreboard_id']),headers=headers));check('marker reflects manual result',synced.get('estado')in('terminado','finalizado')and synced.get('sets_a')==2 and synced.get('sets_b')==0)
   closed=call('/finalizar','POST',{});check('closed via application',closed.get('torneo',{}).get('estado')=='finalizado')
   state=sql('EVIDENCE.sql',f"SELECT(SELECT count(*)FROM torneo_partido_participacion WHERE torneo_id={tid}) evidence,(SELECT count(*)FROM scoreboard_partidos WHERE torneo_id={tid} AND jsonb_array_length(equipo_a_jugadores)=4 AND jsonb_array_length(equipo_b_jugadores)=4) markers,(SELECT count(*)FROM equipos WHERE torneo_id={tid} AND cardinality(participantes_ranking)>0) official;")[0];check('three real matches4+4 evidence and0official',state['evidence']==3 and state['markers']==3 and state['official']==0);report['status']='PASS'
  finally:
-  sql('CLEANUP_EXECUTED.sql',cleanup(m));remaining=sql('RESIDUALS.sql',f"SELECT(SELECT count(*)FROM torneos WHERE id={tid}) tournaments,(SELECT count(*)FROM torneo_participantes WHERE torneo_id={tid}) participants,(SELECT count(*)FROM scoreboard_partidos WHERE torneo_id={tid}) markers;")[0];check('zero fixture residuals',not any(remaining.values()));after=sql('BASELINE_AFTER.sql',"SELECT md5(coalesce(jsonb_agg(to_jsonb(t)ORDER BY id)::text,'')) AS hash FROM torneos t WHERE id IN(39,41);")[0]['hash'];check('protected39/41unchanged',after==baseline);(OUT/'RESULT.json').write_text(json.dumps(report,indent=2))
+  sql('CLEANUP_EXECUTED.sql',cleanup(m));remaining=sql('RESIDUALS.sql',f"SELECT(SELECT count(*)FROM torneos WHERE id={tid}) tournaments,(SELECT count(*)FROM torneo_participantes WHERE torneo_id={tid}) participants,(SELECT count(*)FROM scoreboard_partidos WHERE torneo_id={tid}) markers;")[0];check('zero fixture residuals',not any(remaining.values()));after=sql('BASELINE_AFTER.sql',protected_baseline_sql());check('protected39/41unchanged',after==baseline);(OUT/'RESULT.json').write_text(json.dumps(report,indent=2))
  print(json.dumps({'status':report['status'],'checks':len(report['checks'])}))
 if __name__=='__main__':
  p=argparse.ArgumentParser();p.add_argument('--execute',action='store_true');p.add_argument('--expected-commit');a=p.parse_args();m=prepare();(OUT/'CLEANUP_REVIEW.sql').write_text(cleanup(m))
