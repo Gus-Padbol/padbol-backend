@@ -1,3 +1,4 @@
+import { mountTournamentParticipantsRoutes } from './routes/tournamentParticipants.js';
 import {mountTournamentPlanningRoutes, startPlannedTournament} from './routes/tournamentPlanning.js';
 import { canReadQaCatalogRow, pickPlayerSedeSummary } from './lib/qaCatalogVisibility.js';
 import { mountQaManualTeamsRoutes } from './routes/qaManualTeams.js';
@@ -2054,6 +2055,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 
 mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountQaManualTeamsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
+mountTournamentParticipantsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
 mountTournamentPlanningRoutes(app, {db:supabaseAdmin, requireTorneoAdmin:requireTorneoAdminByTorneoId});
 mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountTorneosFinalizadosRoutes(app, { pgPool });
