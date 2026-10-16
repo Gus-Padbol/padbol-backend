@@ -1,3 +1,4 @@
+import {mayReadTournamentEnrollment,mapTournamentTeamReadRow} from './lib/dto/tournamentScopedTeams.js';
 import { projectVerifiedTournamentRankingTeams } from './lib/verifiedTournamentRanking.js';
 import { mountTournamentParticipantsRoutes } from './routes/tournamentParticipants.js';
 import {mountTournamentPlanningRoutes, startPlannedTournament} from './routes/tournamentPlanning.js';
@@ -2955,6 +2956,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     const eventRead = await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',tid).maybeSingle();
     if(eventRead.error)throw eventRead.error;
     const audience=eventRead.data?.plan_nations?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
+    const enrollmentAdmin=audience?audience.admin:mayReadTournamentEnrollment(await qaCatalogAudience(req),eventRead.data);
     if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
 
     const [
@@ -2995,7 +2997,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     });
 
     const result = (equipos || []).map((eq) =>
-      mapEquipoTorneoPublicRow(eq, grupoMap[eq.id] || null, posicionMap[eq.id] ?? null),
+      mapTournamentTeamReadRow(eq,{grupo:grupoMap[eq.id]||null,posicion:posicionMap[eq.id]??null,admin:enrollmentAdmin}),
     );
     res.json(audience&&!audience.admin?result.map(eq=>audience.captainIds.includes(Number(eq.id))?eq:{id:eq.id,nombre:eq.nombre,grupo:eq.grupo,posicion:eq.posicion}).filter(eq=>audience.revealed||audience.captainIds.includes(Number(eq.id))):result);
   } catch (err) {
