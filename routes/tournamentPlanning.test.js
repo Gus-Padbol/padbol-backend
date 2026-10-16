@@ -25,3 +25,11 @@ test('selection marker freezes only four declared players per side from an eight
  const s=setup({event,teams,match,lineups,ensureScoreboard:async(_db,_params,deps)=>{frozen=deps.buildScoreboardInsertRow({partido:match,torneo:event,equipoA:teams[0],equipoB:teams[1],cancha:'1'});return{scoreboard_id:'test-marker'};}});
  const res=response();await s.routes['POST /api/torneos/:id/partidos/:partidoId/marcador']({params:{id:901,partidoId:5}},res);assert.equal(res.statusCode,200);assert.equal(frozen.equipo_a_jugadores.length,4);assert.equal(frozen.equipo_b_jugadores.length,4);assert.deepEqual(frozen.equipo_a_jugadores.map(p=>p.user_id),lineups[0].iniciales.concat(lineups[0].suplentes));
 });
+
+test('guest selection marker freezes four participant references without creating user identities',async()=>{
+ const teams=[1,2].map(id=>({...team(id),jugadores:Array.from({length:8},(_,i)=>({participante_id:`22222222-2222-4222-8222-${String(id*10+i).padStart(12,'0')}`,nombre:`QA ${id} ${i}`,estado:'confirmado'}))}));
+ const lineups=teams.map(e=>({equipo_id:e.id,iniciales:e.jugadores.slice(0,2).map(p=>p.participante_id),suplentes:e.jugadores.slice(2,4).map(p=>p.participante_id)}));let frozen;
+ const event={...torneo,estado:'en_curso',modalidad_plantel:'selecciones'};const match={id:5,torneo_id:901,sede_id:8,equipo_a_id:1,equipo_b_id:2,estado:'pendiente',fecha_hora:'2026-11-20T10:00:00Z',cancha:'1'};
+ const s=setup({event,teams,match,lineups,ensureScoreboard:async(_db,_params,deps)=>{frozen=deps.buildScoreboardInsertRow({partido:match,torneo:event,equipoA:teams[0],equipoB:teams[1],cancha:'1'});return{scoreboard_id:'test-marker'};}});
+ const res=response();await s.routes['POST /api/torneos/:id/partidos/:partidoId/marcador']({params:{id:901,partidoId:5}},res);assert.equal(res.statusCode,200);assert.equal(frozen.equipo_a_jugadores.length,4);assert.equal(frozen.equipo_b_jugadores.length,4);assert.deepEqual(frozen.equipo_a_jugadores.map(p=>p.participante_id),lineups[0].iniciales.concat(lineups[0].suplentes));
+});

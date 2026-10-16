@@ -30,7 +30,7 @@ BEGIN
  PERFORM id FROM public.equipos WHERE torneo_id=t.id ORDER BY id FOR UPDATE;
  SELECT array_agg(id ORDER BY id) INTO actual FROM public.equipos WHERE torneo_id=t.id;
  SELECT array_agg(x ORDER BY x) INTO ids FROM unnest(p_equipo_ids) x;
- IF actual IS DISTINCT FROM ids OR cardinality(ids)<2 OR cardinality(ids)<>(SELECT count(DISTINCT x) FROM unnest(ids) x) OR EXISTS(SELECT 1 FROM equipos WHERE torneo_id=t.id AND inscripcion_estado IS DISTINCT FROM 'confirmada') THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Confirmed roster changed';END IF;
+ IF actual IS DISTINCT FROM ids OR cardinality(ids)<2 OR cardinality(ids)<>(SELECT count(DISTINCT x) FROM unnest(ids) x) OR EXISTS(SELECT 1 FROM equipos WHERE torneo_id=t.id AND coalesce(inscripcion_estado,'') NOT IN('confirmado','confirmada')) THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Confirmed roster changed';END IF;
  IF EXISTS(SELECT 1 FROM partidos WHERE torneo_id=t.id) THEN RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Fixture already exists; preserve all results';END IF;
  IF jsonb_typeof(p_partidos) IS DISTINCT FROM 'array' OR jsonb_array_length(p_partidos)<1 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Matches required';END IF;
  IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_partidos) x WHERE (x->>'torneo_id')::bigint IS DISTINCT FROM t.id OR (x->>'sede_id')::bigint IS DISTINCT FROM t.sede_id OR x->>'estado' IS DISTINCT FROM 'pendiente' OR x->>'equipo_a_id' IS NOT NULL AND ((x->>'equipo_a_id')::bigint=ANY(ids)) IS DISTINCT FROM true OR x->>'equipo_b_id' IS NOT NULL AND ((x->>'equipo_b_id')::bigint=ANY(ids)) IS DISTINCT FROM true OR x->>'equipo_a_id' IS NOT NULL AND x->>'equipo_a_id'=x->>'equipo_b_id') THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Foreign/self match';END IF;
@@ -69,7 +69,7 @@ BEGIN
  IF t.plan_nations IS NOT NULL OR t.estado NOT IN('abierto','inscripcion','inscripcion_abierta','proximo','planificacion') THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Explicit start not allowed';END IF;
  PERFORM id FROM equipos WHERE torneo_id=t.id ORDER BY id FOR UPDATE;
  SELECT jsonb_agg(jsonb_build_object('id',id,'jugadores',jugadores,'inscripcion_estado',inscripcion_estado) ORDER BY id) INTO actual FROM equipos WHERE torneo_id=t.id;
- IF actual IS DISTINCT FROM p_roster OR coalesce(jsonb_array_length(actual),0)<2 OR EXISTS(SELECT 1 FROM equipos WHERE torneo_id=t.id AND inscripcion_estado IS DISTINCT FROM 'confirmada') THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Roster changed';END IF;
+ IF actual IS DISTINCT FROM p_roster OR coalesce(jsonb_array_length(actual),0)<2 OR EXISTS(SELECT 1 FROM equipos WHERE torneo_id=t.id AND coalesce(inscripcion_estado,'') NOT IN('confirmado','confirmada')) THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Roster changed';END IF;
  IF NOT EXISTS(SELECT 1 FROM partidos WHERE torneo_id=t.id) OR EXISTS(SELECT 1 FROM partidos WHERE torneo_id=t.id AND estado NOT IN('pendiente','programado')) THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Review pending fixture before start';END IF;
  UPDATE torneos SET estado='en_curso',updated_at=now() WHERE id=t.id;
  RETURN jsonb_build_object('ok',true,'torneo_id',t.id,'estado','en_curso');

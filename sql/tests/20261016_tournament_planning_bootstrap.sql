@@ -14,5 +14,5 @@ CREATE TABLE clases_horarios(clase_id bigint,dia_semana integer,hora_inicio time
 INSERT INTO sedes VALUES(8,'QA','Europe/Rome');
 INSERT INTO torneos VALUES(901,8,'abierto','knockout',NULL,'2026-11-20','2026-11-22',now(),'padbol'),(902,8,'abierto','knockout',NULL,'2026-11-20','2026-11-22',now(),'padbol');
 INSERT INTO user_roles VALUES('11111111-1111-4111-8111-111111111111','admin_club',8),('99999999-9999-4999-8999-999999999999','admin_club',9);
-INSERT INTO equipos SELECT i,901,'[{"nombre":"Invitado Uno","participante_id":"p1"},{"nombre":"Invitado Dos","participante_id":"p2"}]','confirmada' FROM generate_series(1,4)i;
+INSERT INTO equipos SELECT i,901,'[{"nombre":"Invitado Uno","participante_id":"p1"},{"nombre":"Invitado Dos","participante_id":"p2"}]',CASE WHEN i%2=0 THEN 'confirmado' ELSE 'confirmada' END FROM generate_series(1,4)i;
 INSERT INTO canchas VALUES(13,8,'Cancha1','padbol','activa',1),(14,8,'Cancha2','padbol','activa',2);

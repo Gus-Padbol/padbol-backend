@@ -1,5 +1,5 @@
 import {buildScoreboardInsertRow} from '../src/scoreboard/scoreboardTorneoService.js';
-import {validateNationalLineup,playerId} from '../lib/nationalTeamLineup.js';
+import {validateNationalLineup,lineupPlayerId} from '../lib/nationalTeamLineup.js';
 import {persistTournamentPlan} from '../lib/torneos/tournamentPlanningService.js';
 import {ensureScoreboardForCompletedBracketPartido} from '../lib/torneos/bracketScoreboardService.js';
 import {assertTournamentTeamsSportReady} from '../lib/tournamentParticipantsReadiness.js';
@@ -57,7 +57,7 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin,ensureS
   if(torneo.modalidad_plantel==='selecciones') {
    const lineups=await read(db.from('torneo_partido_alineaciones').select('equipo_id,iniciales,suplentes').eq('partido_id',match.id));
    markerDeps={buildScoreboardInsertRow:params=>{
-    const declared=team=>{const row=lineups.find(l=>Number(l.equipo_id)===Number(team.id));const valid=validateNationalLineup(row,team);const ids=new Set([...valid.iniciales,...valid.suplentes]);return {...team,jugadores:team.jugadores.filter(p=>ids.has(playerId(p)))};};
+    const declared=team=>{const row=lineups.find(l=>Number(l.equipo_id)===Number(team.id));const valid=validateNationalLineup(row,team,{allowGeneric:true});const ids=new Set([...valid.iniciales,...valid.suplentes]);return {...team,jugadores:team.jugadores.filter(p=>ids.has(lineupPlayerId(p)))};};
     return buildScoreboardInsertRow({...params,equipoA:declared(params.equipoA),equipoB:declared(params.equipoB)});
    }};
   }
