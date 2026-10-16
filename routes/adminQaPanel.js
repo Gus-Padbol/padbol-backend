@@ -42,7 +42,7 @@ export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date())
   const today = now.toISOString().slice(0,10);
   const thirtyDaysStart = new Date(now.getTime()-29*86400000).toISOString().slice(0,10);
   const [profiles, activeVenues, tournaments, recentReservations, venues, courts] = await Promise.all([
-    rowsOrThrow(supabaseAdmin.from('jugadores_perfil').select('id,created_at')),
+    rowsOrThrow(supabaseAdmin.from('jugadores_perfil').select('id,created_at,es_prueba')),
     rowsOrThrow(supabaseAdmin.from('sedes').select('id,pais,licencia_activa,numero_licencia,es_prueba')),
     rowsOrThrow(supabaseAdmin.from('torneos').select('id,deporte,estado,fecha_fin,es_prueba')),
     rowsOrThrow(supabaseAdmin.from('reservas').select('id,estado,fecha,created_at,deporte,cancha_id,sede_id')),
@@ -50,7 +50,8 @@ export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date())
     optionalRows(supabaseAdmin.from('canchas').select('id,deporte')),
   ]);
 
-  const newProfiles = profiles.filter((row) => String(row?.created_at || '') >= monthStart).length;
+  const eligibleProfiles = profiles.filter(row => row.es_prueba !== true);
+  const newProfiles = eligibleProfiles.filter((row) => String(row?.created_at || '') >= monthStart).length;
   const qaVenueIds = new Set(venues.filter(v => v.es_prueba === true).map(v => String(v.id)));
   const activeVenueRows = activeVenues.filter((row) => row.es_prueba !== true && row.licencia_activa === true && String(row.numero_licencia ?? '').trim() !== '');
   const finishedTournaments = tournaments.filter((row) => {
@@ -81,7 +82,7 @@ export async function buildGlobalAdminAnalytics(supabaseAdmin, now = new Date())
     .map(([key, sedes_total]) => ({ pais: countryLabels.get(key), cantidad: sedes_total, sedes_total }));
 
   return {
-    jugadores_registrados_total: profiles.length,
+    jugadores_registrados_total: eligibleProfiles.length,
     jugadores_nuevos_este_mes: newProfiles,
     sedes_activas_total: activeVenueRows.length,
     torneos_finalizados_total: finishedTournaments.length,

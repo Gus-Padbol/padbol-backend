@@ -56,7 +56,7 @@ test('analytics globales separa estados, mes, deportes y países', async () => {
 
 test('analytics usa las tablas y columnas existentes en producción', async () => {
   const columns = {
-    jugadores_perfil: new Set(['id', 'created_at']),
+    jugadores_perfil: new Set(['id', 'created_at', 'es_prueba']),
     sedes: new Set(['id', 'pais', 'estado', 'licencia_activa', 'numero_licencia','es_prueba']),
     torneos: new Set(['id', 'deporte', 'estado', 'fecha_fin','es_prueba']),
     reservas: new Set(['id', 'estado', 'fecha', 'created_at', 'deporte', 'cancha_id','sede_id']),
@@ -91,3 +91,10 @@ test('last30days excludes tomorrow, old/cancelled and QA-venue bookings; overdue
  const out=await buildGlobalAdminAnalytics({from:n=>query(tables[n]||[])},new Date('2026-10-15T12:00:00Z'));
  assert.equal(out.reservas_ultimo_mes_total,1);assert.equal(out.deporte_mas_popular.reservas_realizadas,1);assert.equal(out.torneos_finalizados_total,0);assert.equal(out.sedes_activas_total,0);assert.equal(out.sedes_por_pais_top5.length,1);
 });
+
+ test('QA profiles are excluded explicitly while real and legacy profiles remain eligible', async()=>{
+ const profiles=[{id:1,es_prueba:true,created_at:'2026-10-02'}, {id:2,es_prueba:false,created_at:'2026-10-03'}, {id:3,es_prueba:null,created_at:'2026-10-04'}, {id:4,nombre:'QA Test',email:'qa@example.invalid',created_at:'2026-09-01'}];
+ const out=await buildGlobalAdminAnalytics({from:n=>query(n==='jugadores_perfil'?profiles:[])},new Date('2026-10-15T12:00:00Z'));
+ assert.equal(out.jugadores_registrados_total,3);
+ assert.equal(out.jugadores_nuevos_este_mes,2);
+ });
