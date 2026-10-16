@@ -41,7 +41,7 @@ const registryPlayers=ids.slice(0,8).map((participante_id,i)=>({participante_id,
 test('registry list and authorized detail preserve eight sporting slots with no legacy editor or contacts',async()=>{
  for(const role of [{rol:'jugador'},{rol:'admin_club',sede_id:7},{rol:'super_admin'}]){
   const f=fixture({role,team:{jugadores:registryPlayers}});const list=await f.call('get',base);const e=list.body.equipos[0];
-  assert.equal(e.registro_participantes,true);assert.equal(e.jugadores.length,8);assert.equal(e.can_manage,false);
+  assert.equal(e.registro_participantes,true);assert.equal(e.jugadores.length,8);assert.equal(e.can_manage,false);assert.equal(e.can_add_profiles,false);assert.equal(e.can_confirm,false);assert.equal(e.referencias_plantel_disponibles,true);
   const detail=await f.call('get',base+'/:equipoId');assert.equal(detail.statusCode,200);assert.equal(detail.body.jugadores.length,8);
   assert.equal(detail.body.registro_participantes,true);assert.equal(detail.body.can_manage,false);assert.equal(detail.body.can_add_profiles,false);assert.equal(detail.body.can_confirm,false);
   assert.ok(detail.body.jugadores.every((p,i)=>p.participante_id===ids[i]&&p.user_id===null&&!('email'in p)&&!('id'in p)));
@@ -56,5 +56,5 @@ test('registry legacy writes reject before RPC while unrelated detail remains fo
 test('registry Nations list preserves existing hidden audience and does not expose other roster references',async()=>{
  const hidden=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2099-11-20T00:00:00Z'}}}});assert.deepEqual((await hidden.call('get',base)).body.equipos,[]);
  const revealed=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2000-11-20T00:00:00Z'}}}});const e=(await revealed.call('get',base)).body.equipos[0];assert.equal(e.creador_id,null);assert.deepEqual(e.jugadores,[]);
- const publicNormal=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});const p=(await publicNormal.call('get',base)).body.equipos[0];assert.equal(p.jugadores.length,8);assert.ok(p.jugadores.every(j=>!('participante_id'in j)&&!('user_id'in j)&&!('email'in j)));
+ const publicNormal=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});const p=(await publicNormal.call('get',base)).body.equipos[0];assert.equal(p.jugadores.length,8);assert.equal(p.referencias_plantel_disponibles,false);assert.equal(p.can_add_profiles,false);assert.equal(p.can_confirm,false);assert.ok(p.jugadores.every(j=>!('participante_id'in j)&&!('user_id'in j)&&!('email'in j)));
 });
