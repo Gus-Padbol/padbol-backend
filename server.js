@@ -1264,12 +1264,14 @@ app.get('/api/sedes/:id', async (req, res) => {
       .maybeSingle();
 
     if (error) throw error;
-    if (!data || !canReadQaCatalogRow(data, await qaCatalogAudience(req))) {
+    const audience = await qaCatalogAudience(req);
+    if (!data || !canReadQaCatalogRow(data, audience)) {
       return res.status(404).json({ error: 'Sede no encontrada' });
     }
 
     const [withCatalog] = await enrichSedesWithCourtCatalog(supabaseAdmin, [pickPublicSedeWithPaymentStatus(data)]);
-    res.json(enrichSedeWithHeroPhoto(withCatalog));
+    const dto = enrichSedeWithHeroPhoto(withCatalog);
+    res.json(canReadQaCatalogRow({...data, es_prueba:true}, audience) ? dto : pickPlayerSedeSummary(dto));
   } catch (err) {
     console.error('❌ Error GET /api/sedes/:id:', err.message);
     sendHttpError(res, err);
