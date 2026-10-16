@@ -1,3 +1,5 @@
+import {buildScoreboardInsertRow} from '../src/scoreboard/scoreboardTorneoService.js';
+import {validateNationalLineup,playerId} from '../lib/nationalTeamLineup.js';
 import {persistTournamentPlan} from '../lib/torneos/tournamentPlanningService.js';
 import {ensureScoreboardForCompletedBracketPartido} from '../lib/torneos/bracketScoreboardService.js';
 import {assertTournamentTeamsSportReady} from '../lib/tournamentParticipantsReadiness.js';
@@ -51,7 +53,15 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin}) {
   if(matchTeams.length!==2)throw invalid('Los equipos del cruce no pertenecen al torneo o están incompletos.');
   await assertTournamentTeamsSportReady(db,{torneo,equipos:matchTeams});
   if(!match.fecha_hora||!match.cancha)throw invalid('Programa fecha y cancha antes de abrir el marcador.');
-  const result=await ensureScoreboardForCompletedBracketPartido(db,{partidoId:match.id});
+  let markerDeps={};
+  if(torneo.modalidad_plantel==='selecciones') {
+   const lineups=await read(db.from('torneo_partido_alineaciones').select('equipo_id,iniciales,suplentes').eq('partido_id',match.id));
+   markerDeps={buildScoreboardInsertRow:params=>{
+    const declared=team=>{const row=lineups.find(l=>Number(l.equipo_id)===Number(team.id));const valid=validateNationalLineup(row,team);const ids=new Set([...valid.iniciales,...valid.suplentes]);return {...team,jugadores:team.jugadores.filter(p=>ids.has(playerId(p)))};};
+    return buildScoreboardInsertRow({...params,equipoA:declared(params.equipoA),equipoB:declared(params.equipoB)});
+   }};
+  }
+  const result=await ensureScoreboardForCompletedBracketPartido(db,{partidoId:match.id},markerDeps);
   if(!result.scoreboard_id)throw invalid('No se pudo abrir el marcador vinculado. Comprueba equipos, integrantes y estado del cruce.');
   res.json({ok:true,partido_id:match.id,scoreboard_id:result.scoreboard_id});
  });
