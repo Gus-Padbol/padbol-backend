@@ -32,6 +32,7 @@ BEGIN
  DELETE FROM games WHERE partido_id=ANY(mids);
  DELETE FROM torneo_partido_participacion WHERE torneo_id=tid;
  DELETE FROM torneo_partido_alineaciones WHERE torneo_id=tid;
+ DELETE FROM torneo_participante_ranking_cierres WHERE torneo_id=tid;
  DELETE FROM torneo_participante_acreditaciones WHERE torneo_id=tid;
  DELETE FROM torneo_participante_vinculaciones WHERE torneo_id=tid;
  DELETE FROM torneo_participante_operaciones WHERE torneo_id=tid;
