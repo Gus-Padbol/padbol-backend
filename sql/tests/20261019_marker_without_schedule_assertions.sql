@@ -10,7 +10,7 @@ DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM partidos WHERE id=5 AND (fecha_hora IS NOT NULL OR cancha<>'1' OR estado<>'pendiente')) OR EXISTS(SELECT 1 FROM torneo_partidos_programacion) THEN RAISE EXCEPTION 'Implicit scheduling/start';END IF;
 END $$;
 -- An actual booking now blocks opening; an estimated time on this match does not.
-INSERT INTO reservas(id,sede_id,sede,cancha,estado,fecha,hora,duracion_minutos) VALUES(9001,8,'QA',2,'confirmada',to_char(now() AT TIME ZONE 'Europe/Rome','YYYY-MM-DD'),to_char((now()-interval '5 minutes') AT TIME ZONE 'Europe/Rome','HH24:MI'),90);
+INSERT INTO reservas(id,sede_id,sede,cancha,estado,fecha,hora,duracion_minutos) VALUES(9001,8,'QA',2,'confirmada',to_char((now()-interval '5 minutes') AT TIME ZONE 'Europe/Rome','YYYY-MM-DD'),to_char((now()-interval '5 minutes') AT TIME ZONE 'Europe/Rome','HH24:MI'),90);
 DO $$ BEGIN
  BEGIN PERFORM preparar_marcador_torneo_ahora(901,6,'11111111-1111-4111-8111-111111111111',14);RAISE EXCEPTION 'Occupied booking accepted';EXCEPTION WHEN unique_violation THEN NULL;END;
 END $$;
