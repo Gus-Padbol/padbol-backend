@@ -32,8 +32,14 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE c public.canchas;m public.partidos;
 BEGIN
  IF NEW.sede_id IS NULL OR NEW.cancha IS NULL OR lower(coalesce(NEW.estado,'')) IN('terminado','finalizado','cancelado') THEN RETURN NEW;END IF;
+ -- Preserve historical active controls: only a new claim, reassignment or reactivation acquires a screen.
+ IF TG_OP='UPDATE' AND NEW.sede_id IS NOT DISTINCT FROM OLD.sede_id AND NEW.cancha IS NOT DISTINCT FROM OLD.cancha AND lower(coalesce(OLD.estado,'')) NOT IN('terminado','finalizado','cancelado') THEN RETURN NEW;END IF;
  SELECT * INTO c FROM canchas x WHERE x.sede_id=NEW.sede_id AND coalesce(x.orden,(SELECT count(*)::int FROM canchas y WHERE y.sede_id=x.sede_id AND y.id<=x.id))::text=NEW.cancha ORDER BY id LIMIT 1 FOR UPDATE;
- IF c.id IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Valid court required';END IF;
+ IF c.id IS NULL THEN
+  -- Manual/legacy markers accept free-text court labels; this migration does not redefine them.
+  IF NEW.partido_torneo_id IS NOT NULL AND EXISTS(SELECT 1 FROM partidos WHERE id=NEW.partido_torneo_id AND cancha_id IS NOT NULL) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Valid court required';END IF;
+  RETURN NEW;
+ END IF;
  IF NEW.partido_torneo_id IS NOT NULL THEN
   SELECT * INTO m FROM partidos WHERE id=NEW.partido_torneo_id;
   PERFORM id FROM equipos WHERE id IN(m.equipo_a_id,m.equipo_b_id) ORDER BY id FOR UPDATE;

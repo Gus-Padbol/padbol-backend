@@ -6,7 +6,7 @@ Observación nueva del correo 1a154ee98c4ae0ec. Ambos circuitos, habitual y Nati
 
 - GET operación conserva comprobación de torneo iniciado e integrantes listos; POST marcador exige la sesión autorizada, la misma sede y una cancha habilitada del deporte correcto.
 - RPC `preparar_marcador_torneo_ahora` asigna cancha sin inventar fecha ni duración; no escribe programación ni resultados. Bloquea la cancha durante comprobaciones y respeta reservas/clases/programaciones ajenas activas ahora.
-- Trigger en scoreboard serializa inserción/asignación de pantalla y evita dos marcadores activos de la misma cancha o de equipos compartidos. Los finalizados liberan la cancha. El marcador vinculado conserva la sincronización y progresión de resultados existentes.
+- Trigger en scoreboard serializa inserción/asignación de pantalla y evita dos marcadores activos de la misma cancha o de equipos compartidos. Los finalizados liberan la cancha. Se preservan los marcadores manuales de cancha de texto libre y los controles activos históricos: se valida una nueva asignación o reactivación, no cada uso del control. Los nuevos marcadores manuales de cancha oficial sí respetan ocupación. Regresiones SQL específicas PASS. El marcador vinculado conserva la sincronización y progresión de resultados existentes.
 - La migración no actualiza filas existentes; rollback elimina únicamente función/trigger. No se alteraron torneos 39, 41, 48 ni datos remotos.
 
 ## Evidencia local
