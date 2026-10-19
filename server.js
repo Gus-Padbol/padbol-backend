@@ -23,6 +23,7 @@ import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
 import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, registerWhatsappAdminRoutes } from './lib/whatsappAdmin.js';
+import { CRM_COMMERCIAL_OPERATORS, commercialSafeWhatsappPermissions } from './lib/crmCommercialScope.js';
 import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
 import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
 import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
@@ -750,11 +751,13 @@ const whatsappOperators = new Set(
   String(process.env.WHATSAPP_ASSISTANT_OPERATORS ?? '')
     .split(',')
     .map((s) => s.trim().toLowerCase())
-    .filter(Boolean),
+    .filter(Boolean)
+    .filter(email => !CRM_COMMERCIAL_OPERATORS.some(operator => operator.email === email)),
 );
 const whatsappSuperAdminEmails = new Set(LEGACY_SUPER_ADMIN_EMAILS_API);
 
 const whatsappAdminService = createWhatsappAdminService({
+  resolvePermissions: commercialSafeWhatsappPermissions,
   repository: createSupabaseWhatsappAdminRepository(supabaseAdmin),
   operators: whatsappOperators,
   superAdminEmails: whatsappSuperAdminEmails,
@@ -772,6 +775,7 @@ const crmAdminService = createCrmAdminService({
   sendEmailReply: crmEmailSender,
   leadAnalyzer: crmLeadAnalyzer,
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
+  commercialOperators: CRM_COMMERCIAL_OPERATORS,
 });
 registerCrmAdminRoutes(app, {
   crmAdminService,
