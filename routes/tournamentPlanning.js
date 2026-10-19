@@ -45,14 +45,19 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin,ensureS
   if(data?.ok!==true||Number(data.partido_id)!==Number(req.params.partidoId))throw invalid('Programación no confirmada.',503);
   res.json(data);
  });
- route('post','/api/torneos/:id/partidos/:partidoId/marcador',async(req,res,{torneo,equipos})=>{
+ route('post','/api/torneos/:id/partidos/:partidoId/marcador',async(req,res,{auth,torneo,equipos})=>{
   if(!['en_curso','activo'].includes(torneo.estado))throw invalid('Primero revisa el fixture e inicia explícitamente el torneo.');
   const match=await read(db.from('partidos').select('*').eq('id',Number(req.params.partidoId)).eq('torneo_id',Number(torneo.id)).single());
   if(match.equipo_a_id==null||match.equipo_b_id==null)throw invalid('Faltan ganadores de los cruces anteriores.');
   const matchTeams=equipos.filter(e=>[Number(match.equipo_a_id),Number(match.equipo_b_id)].includes(Number(e.id)));
   if(matchTeams.length!==2)throw invalid('Los equipos del cruce no pertenecen al torneo o están incompletos.');
   await assertTournamentTeamsSportReady(db,{torneo,equipos:matchTeams});
-  if(!match.fecha_hora||!match.cancha)throw invalid('Programa fecha y cancha antes de abrir el marcador.');
+  const courtId=Number(req.body?.court_id??match.cancha_id);
+  if(!Number.isSafeInteger(courtId)||courtId<=0)throw invalid('Elige una cancha habilitada para abrir el marcador.',400);
+  // Court allocation is independent of estimated schedule; SQL locks and checks the live court.
+  const {data:allocation,error:allocationError}=await db.rpc('preparar_marcador_torneo_ahora',{p_torneo_id:Number(torneo.id),p_partido_id:Number(match.id),p_actor_id:auth.user.id,p_court_id:courtId});
+  if(allocationError)throw invalid('No se pudo habilitar el marcador: comprueba permisos, cancha/pantalla ocupada y participantes.',allocationError.code==='42501'?403:409);
+  if(allocation?.ok!==true||Number(allocation.partido_id)!==Number(match.id))throw invalid('No se confirmó la cancha del marcador.',503);
   let markerDeps={};
   if(torneo.modalidad_plantel==='selecciones') {
    const lineups=await read(db.from('torneo_partido_alineaciones').select('equipo_id,iniciales,suplentes').eq('partido_id',match.id));
