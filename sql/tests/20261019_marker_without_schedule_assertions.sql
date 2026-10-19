@@ -37,5 +37,7 @@ DO $$ BEGIN
 END $$;
 UPDATE scoreboard_partidos SET estado='terminado' WHERE partido_torneo_id=5;
 UPDATE partidos SET estado='finalizado' WHERE id=5;
+INSERT INTO scoreboard_partidos(id,torneo_id,sede_id,partido_torneo_id,cancha,estado) VALUES('44444444-4444-4444-8444-444444444444',901,8,6,NULL,'pendiente');
 SELECT preparar_marcador_torneo_ahora(901,6,'11111111-1111-4111-8111-111111111111',13);
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM scoreboard_partidos WHERE id='44444444-4444-4444-8444-444444444444' AND cancha='1' AND estado='pendiente') THEN RAISE EXCEPTION 'Progression marker was not bound to court';END IF;END $$;
 ROLLBACK;
