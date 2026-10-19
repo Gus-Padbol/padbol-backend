@@ -16,3 +16,9 @@ Backend 2298 pruebas PASS; frontend 196 suites / 1484 pruebas PASS y build PASS 
 `release:preflight` requiere rama main y falla únicamente en esa condición al trabajar en la rama derivada. Debe repetirse tras integrar. No se publicaron cambios. Requiere revisión independiente, aplicación de migración coordinada antes del backend, comprobación visual desktop/móvil y recorrido integrado en QA con un torneo nuevo antes de declarar disponible en línea.
 
 La comprobación de dos inserciones secuenciales contra el trigger no constituye una simulación de dos transacciones concurrentes reales; esa prueba adicional debe hacerse en PostgreSQL con dos sesiones si se necesita afirmar concurrencia verificada.
+
+## Contraste con guardas reales de producción
+
+La revisión independiente detectó que `proteger_marcador_nations` seguía exigiendo una fila de programación, aunque el endpoint ya no la pedía. La migración reemplaza esa guarda: valida torneo, partido, sede y cancha oficial asignada, sin exigir horario/duración. Un marcador futuro pendiente sin cancha puede existir sin apropiarse de una pantalla; al elegir cancha se vincula el mismo marcador. La guarda de selecciones permanece intacta y sigue congelando exactamente cuatro convocados de los ocho integrantes.
+
+Se incorporó como fixture la definición exacta de las tres funciones de producción relacionadas (sin datos ni credenciales) en `sql/tests/20261019_scoreboard_production_guard_baseline.sql`. El harness carga baseline/trigger antes de aplicar la migración; `20261019_nations_marker_without_schedule_assertions.sql` comprueba Nación sin programación, convocados, marcador futuro, asignación, inicio explícito/cierre, ocupación liberada y rechazos de sede/deporte/cancha inactiva. Rollback restaura la función Nations exacta y `pg_get_functiondef` coincide con el baseline. Todos PASS en PostgreSQL aislado.

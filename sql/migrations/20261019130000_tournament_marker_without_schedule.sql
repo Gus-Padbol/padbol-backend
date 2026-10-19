@@ -42,8 +42,10 @@ BEGIN
   IF NEW.partido_torneo_id IS NOT NULL AND EXISTS(SELECT 1 FROM partidos WHERE id=NEW.partido_torneo_id AND cancha_id IS NOT NULL) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Valid court required';END IF;
   RETURN NEW;
  END IF;
+ IF lower(coalesce(c.estado,'')) IN('inactiva','inactivo','cerrada','mantenimiento') THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Court not eligible';END IF;
  IF NEW.partido_torneo_id IS NOT NULL THEN
   SELECT * INTO m FROM partidos WHERE id=NEW.partido_torneo_id;
+  IF EXISTS(SELECT 1 FROM torneos WHERE id=m.torneo_id AND coalesce(deporte,'padbol')<>coalesce(c.deporte,'padbol')) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Court sport mismatch';END IF;
   PERFORM id FROM equipos WHERE id IN(m.equipo_a_id,m.equipo_b_id) ORDER BY id FOR UPDATE;
   IF EXISTS(SELECT 1 FROM scoreboard_partidos s JOIN partidos p ON p.id=s.partido_torneo_id WHERE s.id IS DISTINCT FROM NEW.id AND p.id<>m.id AND (m.equipo_a_id IN(p.equipo_a_id,p.equipo_b_id) OR m.equipo_b_id IN(p.equipo_a_id,p.equipo_b_id)) AND lower(coalesce(s.estado,'')) NOT IN('terminado','finalizado','cancelado')) THEN RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Team already using a scoreboard';END IF;
  END IF;
@@ -52,4 +54,22 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION public.proteger_cancha_marcador_activo() FROM PUBLIC,anon,authenticated;
 CREATE TRIGGER proteger_cancha_marcador_activo BEFORE INSERT OR UPDATE OF sede_id,cancha,estado ON scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION public.proteger_cancha_marcador_activo();
+-- Nations previously required a schedule row at every marker write. Keep court/scope validation,
+-- but derive the real court from the match assignment instead of an optional estimated schedule.
+CREATE OR REPLACE FUNCTION public.proteger_marcador_nations() RETURNS trigger
+LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
+DECLARE t public.torneos;m public.partidos;c public.canchas;court_number integer;
+BEGIN
+ IF NEW.torneo_id IS NULL OR NEW.partido_torneo_id IS NULL THEN RETURN NEW;END IF;
+ SELECT * INTO t FROM public.torneos WHERE id=NEW.torneo_id FOR UPDATE;
+ IF t.plan_nations IS NULL THEN RETURN NEW;END IF;
+ SELECT * INTO m FROM public.partidos WHERE id=NEW.partido_torneo_id FOR UPDATE;
+ IF m.id IS NULL OR m.torneo_id IS DISTINCT FROM t.id OR m.sede_id IS DISTINCT FROM t.sede_id OR NEW.sede_id IS DISTINCT FROM t.sede_id THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Nations scoreboard requires its real match and venue';END IF;
+ -- A future-round pending marker may exist before a court is allocated. It owns no screen yet.
+ IF m.cancha_id IS NULL AND m.cancha IS NULL AND NEW.cancha IS NULL AND NEW.estado='pendiente' THEN RETURN NEW;END IF;
+ SELECT * INTO c FROM public.canchas WHERE id=m.cancha_id AND sede_id=t.sede_id;
+ court_number:=coalesce(c.orden,(SELECT count(*)::int FROM public.canchas WHERE sede_id=t.sede_id AND id<=c.id));
+ IF c.id IS NULL OR m.cancha IS DISTINCT FROM court_number::text OR NEW.cancha IS DISTINCT FROM court_number::text THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Nations scoreboard requires a confirmed real court';END IF;
+ RETURN NEW;
+END $$;
 COMMIT;
