@@ -87,6 +87,7 @@ export function mountAdminValidationAndChannelsRoutes(app, {
       if (!/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n) return res.status(400).json({ error: 'Perfil inválido' });
       const { accion, nivel, motivo } = req.body || {};
       if (!['aprobar', 'rechazar', 'categoria'].includes(accion)) return res.status(400).json({ error: 'Acción inválida' });
+      if (accion === 'rechazar' && auth.role.rol !== 'super_admin') return res.status(403).json({ error: 'Solo un superadministrador puede rechazar validaciones' });
       if (accion === 'rechazar' && !cleanReason(motivo)) return res.status(400).json({ error: 'Motivo inválido' });
       if (accion === 'categoria' && !['Principiante','6ta','5ta','4ta','3ra','2da','1ra','Elite'].includes(nivel)) return res.status(400).json({ error: 'Categoría inválida' });
       const changes = { pendiente_validacion: false, ...(accion === 'categoria' ? { nivel } : {}) };

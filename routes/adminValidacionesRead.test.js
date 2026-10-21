@@ -52,3 +52,21 @@ test('escritura por PK exige administrador y limita cambios a una fila pendiente
   q.maybeSingle=async()=>({data:null,error:null});assert.equal((await run('12',{accion:'aprobar'})).code,409);
   q.maybeSingle=async()=>({data:null,error:new Error('fixture')});assert.equal((await run('12',{accion:'aprobar'})).code,500);
 });
+
+test('rechazo exclusivo de superadministrador sin alterar aprobación o categoría dentro de sede', async()=>{
+  const routes={}; const calls=[]; const app={get(){},post(){},patch(p,h){routes[p]=h}};
+  let role={role:'admin_club',sede_id:7};
+  const q={update(v){calls.push(['update',v]);return this},eq(k,v){calls.push(['eq',k,v]);return this},select(){return this},async maybeSingle(){return {data:{id:12},error:null}}};
+  mountAdminValidationAndChannelsRoutes(app,{supabaseAdmin:{from(){return q}},getAuthenticatedUser:async()=>({user:{id:'fixture'}}),fetchUserRoleRowForAuthUser:async()=>role,env:{}});
+  const run=async(body)=>{const res={code:200,status(c){this.code=c;return this},json(v){this.body=v;return this}};await routes['/api/admin/validaciones/perfil/:id']({params:{id:'12'},body},res);return res};
+  assert.equal((await run({accion:'rechazar',motivo:'Rechazo de prueba'})).code,403);
+  assert.deepEqual(calls,[]);
+  assert.equal((await run({accion:'aprobar'})).code,200);
+  assert.deepEqual(calls,[['update',{pendiente_validacion:false}],['eq','id','12'],['eq','pendiente_validacion',true],['eq','sede_id',7]]);
+  calls.length=0;
+  assert.equal((await run({accion:'categoria',nivel:'3ra'})).code,200);
+  assert.deepEqual(calls,[['update',{pendiente_validacion:false,nivel:'3ra'}],['eq','id','12'],['eq','pendiente_validacion',true],['eq','sede_id',7]]);
+  calls.length=0;role={role:'super_admin'};
+  assert.equal((await run({accion:'rechazar',motivo:'Rechazo de prueba'})).code,200);
+  assert.deepEqual(calls,[['update',{pendiente_validacion:false}],['eq','id','12'],['eq','pendiente_validacion',true]]);
+});
