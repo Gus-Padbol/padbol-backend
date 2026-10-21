@@ -21,6 +21,7 @@ test('el listado solo entrega partidos suspendidos al organizador o jugador aute
     for (const [user, ids] of [[null, []], ['member', [11]], ['owner', [11]], ['outsider', []]]) {
       const response = await fetch(base, user ? { headers: { authorization: user } } : {});
       assert.equal(response.status, 200);
+      if (user) assert.match(response.headers.get('cache-control'), /private, no-store/);
       assert.deepEqual((await response.json()).map((row) => row.id), ids);
     }
   } finally { await new Promise((resolve) => server.close(resolve)); }

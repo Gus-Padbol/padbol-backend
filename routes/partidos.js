@@ -1884,6 +1884,7 @@ export function createPartidosRouter({
       const sedeId = parsePositiveInt(req.query.sede_id);
       const auth = await getAuthenticatedUser(req);
       const user = auth.user ?? null;
+      if (user) res.set('Cache-Control', 'private, no-store');
 
       if (sedeId != null) {
         console.log('[GET /api/partidos/abiertos] query', {
