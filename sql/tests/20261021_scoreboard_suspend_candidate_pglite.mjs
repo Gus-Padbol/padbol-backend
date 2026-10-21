@@ -42,7 +42,7 @@ await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$
 await db.exec(`DELETE FROM torneo_nations_programacion WHERE partido_id=5`);
 // Nations reactivation moves the original fixture, advances both plan
 // revisions, keeps the score and records the prior schedule atomically.
-await db.exec(`UPDATE torneos SET plan_nations='{"revision":3}' WHERE id=901; INSERT INTO torneo_nations_planes VALUES(901,'{"revision":3,"config":{"rules":{"minimum_rest_minutes":15}}}',now()); INSERT INTO torneo_nations_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes,timezone,actor_id,revision,updated_at) VALUES(5,901,13,clock_timestamp()-interval '1 day',90,'UTC','11111111-1111-4111-8111-111111111111',3,now());`);
+await db.exec(`UPDATE torneos SET plan_nations='{"revision":3}' WHERE id=901; INSERT INTO torneo_nations_planes VALUES(901,'{"revision":3,"config":{"timezone":"UTC","rules":{"minimum_rest_minutes":15}}}',now()); INSERT INTO torneo_nations_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes,timezone,actor_id,revision,updated_at) VALUES(5,901,13,clock_timestamp()-interval '1 day',90,'UTC','11111111-1111-4111-8111-111111111111',3,now());`);
 // Inconsistent plans and incomplete semifinals fail without changing the score.
 await db.exec(`UPDATE torneo_nations_programacion SET torneo_id=902 WHERE partido_id=5`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Inconsistent Nations schedule tournament/);
@@ -51,6 +51,11 @@ await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$
 await db.exec(`UPDATE torneos SET plan_nations='{"revision":3}' WHERE id=901; UPDATE partidos SET bracket_round=3, bracket_position=2 WHERE id=5; UPDATE torneo_nations_planes SET plan=jsonb_set(plan,'{config,rules,third_place_match}','true'::jsonb,true) WHERE torneo_id=901`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Third place requires both semifinals and rest/);
 await db.exec(`UPDATE partidos SET bracket_round=NULL, bracket_position=NULL WHERE id=5; UPDATE torneo_nations_planes SET plan=jsonb_set(plan,'{config,rules,third_place_match}','false'::jsonb,true) WHERE torneo_id=901`);
+await db.exec(`UPDATE torneo_nations_planes SET plan=jsonb_set(plan,'{config,timezone}', '"America/New_York"'::jsonb) WHERE torneo_id=901`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Nations timezone differs from venue/);
+await db.exec(`UPDATE torneo_nations_planes SET plan=jsonb_set(plan,'{config,timezone}', '"UTC"'::jsonb) WHERE torneo_id=901; UPDATE canchas SET estado=NULL WHERE id=14`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Court not eligible/);
+await db.exec(`UPDATE canchas SET estado='activa' WHERE id=14`);
 // Reject a team clash and protect semifinal/third-place order before writing.
 await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado,equipo_a_id,bracket_round,bracket_position) VALUES(76,901,8,'pendiente',1,1,1); INSERT INTO torneo_nations_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(76,901,13,clock_timestamp()+interval '5 minutes',60)`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Team conflict/);

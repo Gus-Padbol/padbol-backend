@@ -167,7 +167,7 @@ BEGIN
   END IF;
  END IF;
  SELECT * INTO c FROM public.canchas WHERE id=p_court_id AND sede_id=initial.sede_id FOR UPDATE;
- IF c.id IS NULL OR lower(coalesce(c.estado,'')) IN('inactiva','inactivo','cerrada','mantenimiento')
+ IF c.id IS NULL OR lower(coalesce(c.estado,'')) NOT IN('activa','activo')
     OR (t.id IS NOT NULL AND coalesce(c.deporte,'padbol')<>coalesce(t.deporte,'padbol')) THEN
   RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Court not eligible';
  END IF;
@@ -181,6 +181,9 @@ BEGIN
  at_now:=clock_timestamp();
  court_number:=coalesce(c.orden,(SELECT count(*)::int FROM public.canchas WHERE sede_id=c.sede_id AND id<=c.id));
  SELECT coalesce(nullif(timezone,''),'America/Argentina/Buenos_Aires') INTO zone FROM public.sedes WHERE id=c.sede_id;
+ IF has_nations AND (nations_plan#>>'{config,timezone}' IS DISTINCT FROM zone OR nations_schedule->>'timezone' IS DISTINCT FROM zone) THEN
+  RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Nations timezone differs from venue';
+ END IF;
  IF coalesce(p_duration_minutes,0) NOT BETWEEN 1 AND 1440 THEN
   RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Explicit match duration required';
  END IF;
