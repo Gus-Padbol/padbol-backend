@@ -22,7 +22,12 @@ export function installScoreboardSuspensionRoutesCandidate(app, {
           if (typeof expected !== 'string' || !Number.isFinite(Date.parse(expected))) {
             return res.status(400).json({ error: 'Actualizá el marcador antes de continuar.' });
           }
-          Object.assign(args, { p_expected: expected, p_court_id: null, p_duration: null });
+          Object.assign(args, { p_expected: expected, p_court_id: null, p_duration: null, p_reason: null });
+          if (action === 'suspend') {
+            const reason = req.body?.reason;
+            if (typeof reason !== 'string' || reason.trim().length < 1 || reason.trim().length > 500) return res.status(400).json({ error: 'Indicá el motivo de la suspensión.' });
+            args.p_reason = reason.trim();
+          }
           if (action === 'resume') {
             const court = req.body?.court_id; const duration = req.body?.duration_minutes;
             if (!Number.isSafeInteger(court) || court <= 0 || !Number.isInteger(duration) || duration < 1 || duration > 1440) {

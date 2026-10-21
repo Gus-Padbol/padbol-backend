@@ -23,7 +23,7 @@ test('validates authorization and input before making any mutation', async () =>
 });
 test('forwards operation reference and version and never returns secrets', async () => {
  const h=harness(); const result=await h.run('resume',valid); assert.equal(result.status,200); assert.equal(result.data.control_token_hash,undefined);
- assert.deepEqual(h.calls[0],{ name:'scoreboard_transition_receipt_isolated_candidate', args:{p_action_id:valid.action_id,p_action:'resume',p_id:'marker',p_actor:'actor',p_expected:valid.updated_at,p_court_id:14,p_duration:90} });
+ assert.deepEqual(h.calls[0],{ name:'scoreboard_transition_receipt_isolated_candidate', args:{p_action_id:valid.action_id,p_action:'resume',p_id:'marker',p_actor:'actor',p_expected:valid.updated_at,p_court_id:14,p_duration:90,p_reason:null} });
  assert.equal(result.data.transition_receipt.status,'applied');
 });
 test('recovers uncertain result and does not show stale saved score', async () => {
@@ -31,7 +31,7 @@ test('recovers uncertain result and does not show stale saved score', async () =
  assert.equal(r.status,200); assert.equal(r.data.score_a,30); assert.equal(h.calls[0].name,'scoreboard_reconcile_isolated_candidate');
 });
 test('reports conflict and completed transaction despite socket failure', async () => {
- const stale=harness({result:{data:{status:'conflict'}}}); assert.equal((await stale.run('suspend',valid)).status,409);
+ const stale=harness({result:{data:{status:'conflict'}}}); assert.equal((await stale.run('suspend',{...valid,reason:'Lluvia'})).status,409);
  const busy=harness({result:{error:{code:'23505'}}}); assert.equal((await busy.run('resume',valid)).status,409);
  const socket=harness({socketError:true}); assert.equal((await socket.run('resume',valid)).status,200);
 });

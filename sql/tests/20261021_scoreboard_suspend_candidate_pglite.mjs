@@ -75,12 +75,15 @@ await db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion
 
 await db.exec(`UPDATE partidos SET estado='suspendido' WHERE id=5`);
 const actionId='33333333-3333-4333-8333-333333333333', cancellationId='44444444-4444-4444-8444-444444444444';
-const transition=()=>db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7) as r',[actionId,'resume',id,actor,'2026-10-21',14,90]);
+const transition=()=>db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7,$8) as r',[actionId,'resume',id,actor,'2026-10-21',14,90,null]);
 assert.equal((await transition()).rows[0].r.status,'applied');
 assert.equal((await transition()).rows[0].r.status,'replayed');
 assert.equal((await db.query('select scoreboard_reconcile_isolated_candidate($1,$2,$3,$4) as r',[actionId,'resume',id,actor])).rows[0].r.status,'applied');
-await assert.rejects(db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7)',[actionId,'resume',id,actor,'2026-10-21',13,90]),/reference already used/);
+await assert.rejects(db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7,$8)',[actionId,'resume',id,actor,'2026-10-21',13,90,null]),/reference already used/);
 assert.equal((await db.query('select scoreboard_reconcile_isolated_candidate($1,$2,$3,$4) as r',[cancellationId,'suspend',id,actor])).rows[0].r.status,'cancelled');
-await assert.rejects(db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7)',[cancellationId,'suspend',id,actor,'2026-10-21',null,null]),/reference cancelled/);
+await assert.rejects(db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7,$8)',[cancellationId,'suspend',id,actor,'2026-10-21',null,null,'Lluvia']),/reference cancelled/);
+const rainId='55555555-5555-4555-8555-555555555555';
+assert.equal((await db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7,$8) as r',[rainId,'suspend',id,actor,'2026-10-21',null,null,'Lluvia'])).rows[0].r.status,'applied');
+assert.equal((await db.query('select reason from scoreboard_suspension_reason_isolated_candidate where action_id=$1',[rainId])).rows[0].reason,'Lluvia');
 assert.equal((await db.query("select has_function_privilege('authenticated','public.scoreboard_suspend_candidate(uuid,timestamptz,uuid)','execute') as ok")).rows[0].ok,false);
 await db.close();console.log('Candidate suspension/resumption: scope, CAS, score and clock preserved, court conflicts, linked match, unsupported fixture and grants passed');
