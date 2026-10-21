@@ -9,6 +9,7 @@ import {createTournamentReadVisibility} from './lib/torneos/tournamentReadVisibi
 import { mountQaManualTeamsRoutes } from './routes/qaManualTeams.js';
 import { rankingTournamentEligible } from './lib/torneos/rankingTournamentEligibility.js';
 import { readPublicReservationOccupancy } from './lib/reservasDisponibilidadPublica.js';
+import { verifiedSuspendedBookings } from './lib/verifiedSuspendedBookings.js';
 import { horasAnticipacionReserva } from './lib/reservaCancelacionTiming.js';
 import { confirmReservaGratuita } from './lib/reservaGratuita.js';
 import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
@@ -2136,8 +2137,9 @@ async function clasesAssertReservaSinSolape({ sede, fecha, hora, cancha, duracio
   const { data, error } = await query;
   if (error) throw error;
   const duracion = Number(duracionMin) > 0 ? Number(duracionMin) : 90;
+  const released = await verifiedSuspendedBookings(supabaseAdmin, data);
   const conflict = (data || []).some((row) => {
-    if (String(row.estado || '').toLowerCase() === 'cancelada') return false;
+    if (String(row.estado || '').toLowerCase() === 'cancelada' || released.has(String(row.id))) return false;
     const otroInicio = clasesMinutosDesdeHora(row.hora);
     if (otroInicio == null) return false;
     const otraDuracion = Number(row.duracion_minutos || row.duracion) > 0

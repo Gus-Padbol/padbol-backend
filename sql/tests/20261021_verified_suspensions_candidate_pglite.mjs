@@ -1,0 +1,17 @@
+import { PGlite } from '@electric-sql/pglite';
+import { readFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const db = new PGlite();
+await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
+CREATE TABLE reservas(id bigint,estado text); CREATE TABLE scoreboard_linked_suspend_candidate(scoreboard_id uuid,booking_id bigint,open_id bigint);
+CREATE TABLE scoreboard_partidos(id uuid,estado text,reserva_id bigint,partido_abierto_id bigint); CREATE TABLE partidos_abiertos(id bigint,reserva_id bigint);
+INSERT INTO reservas VALUES(1,'suspendida'),(2,'suspendida'),(3,'confirmada'),(4,'suspendida');
+INSERT INTO scoreboard_partidos VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','suspendido',1,NULL),('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','suspendido',NULL,7),('cccccccc-cccc-4ccc-8ccc-cccccccccccc','en_curso',4,NULL);
+INSERT INTO scoreboard_linked_suspend_candidate VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',1,NULL),('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',3,7),('cccccccc-cccc-4ccc-8ccc-cccccccccccc',4,NULL); INSERT INTO partidos_abiertos VALUES(7,3);`);
+await db.exec(await readFile('sql/20261021176000_scoreboard_verified_suspensions_candidate.sql','utf8'));
+const result=await db.query('SELECT * FROM scoreboard_verified_suspended_bookings_candidate(ARRAY[1,2,3,4]::bigint[])');
+assert.deepEqual(result.rows.map(row=>Number(row.booking_id)),[1]);
+assert.equal((await db.query("SELECT has_function_privilege('authenticated','public.scoreboard_verified_suspended_bookings_candidate(bigint[])','EXECUTE') AS allowed")).rows[0].allowed,false);
+assert.equal((await db.query("SELECT has_function_privilege('service_role','public.scoreboard_verified_suspended_bookings_candidate(bigint[])','EXECUTE') AS allowed")).rows[0].allowed,true);
+await db.close();
+console.log('Verified suspended bookings: linkage, state and role restrictions passed');
