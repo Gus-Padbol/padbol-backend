@@ -73,14 +73,27 @@ END $$;
 REVOKE ALL ON FUNCTION public.scoreboard_suspend_candidate(uuid,timestamptz,uuid) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.scoreboard_suspend_candidate(uuid,timestamptz,uuid) TO service_role;
 
+-- Candidate helper, strict about ambiguous legacy date/time representations.
+CREATE OR REPLACE FUNCTION public.scoreboard_local_interval_candidate(p_date text,p_time text,p_minutes integer)
+RETURNS tsrange LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog AS $$
+DECLARE start_at timestamp;
+BEGIN
+ IF p_date IS NULL OR p_date !~ '^\d{4}-\d{2}-\d{2}$' OR p_time IS NULL OR p_time !~ '^\d{2}:\d{2}(:\d{2})?$'
+    OR coalesce(p_minutes,0) NOT BETWEEN 1 AND 1440 THEN RETURN NULL; END IF;
+ BEGIN start_at:=(p_date||' '||p_time)::timestamp; EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN RETURN NULL; END;
+ RETURN tsrange(start_at,start_at+p_minutes*interval '1 minute','[)');
+END $$;
+REVOKE ALL ON FUNCTION public.scoreboard_local_interval_candidate(text,text,integer) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.scoreboard_local_interval_candidate(text,text,integer) TO service_role;
+
 -- Experimental only: this function does not yet cover every writer of court
 -- occupancy, and refuses matches with historical fixture schedule rows.
 CREATE OR REPLACE FUNCTION public.scoreboard_resume_candidate(
- p_id uuid, p_expected timestamptz, p_actor uuid, p_court_id bigint
+ p_id uuid, p_expected timestamptz, p_actor uuid, p_court_id bigint, p_duration_minutes integer
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE initial public.scoreboard_partidos; current_row public.scoreboard_partidos;
         m public.partidos; r public.user_roles; t public.torneos; c public.canchas;
-        zone text; court_number integer; at_now timestamptz:=clock_timestamp();
+        zone text; court_number integer; at_now timestamptz:=clock_timestamp(); local_range tsrange;
 BEGIN
  SELECT * INTO initial FROM public.scoreboard_partidos WHERE id=p_id;
  IF initial.id IS NULL THEN RETURN NULL; END IF;
@@ -118,14 +131,33 @@ BEGIN
  END IF;
  court_number:=coalesce(c.orden,(SELECT count(*)::int FROM public.canchas WHERE sede_id=c.sede_id AND id<=c.id));
  SELECT coalesce(nullif(timezone,''),'America/Argentina/Buenos_Aires') INTO zone FROM public.sedes WHERE id=c.sede_id;
- IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=c.sede_id OR b.sede_id IS NULL AND b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id)) AND b.cancha=court_number AND lower(coalesce(b.estado,'')) NOT IN('cancelada','cancelado') AND b.fecha ~ '^\d{4}-\d{2}-\d{2}$' AND b.hora ~ '^\d{2}:\d{2}' AND ((b.fecha||' '||substring(b.hora,1,5))::timestamp AT TIME ZONE zone)<=at_now AND at_now<((b.fecha||' '||substring(b.hora,1,5))::timestamp AT TIME ZONE zone)+coalesce(b.duracion_minutos,90)*interval '1 minute') THEN
-  RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has active reservation';
+ IF coalesce(p_duration_minutes,0) NOT BETWEEN 1 AND 1440 THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Explicit match duration required';
  END IF;
- IF EXISTS(SELECT 1 FROM public.clases a JOIN public.clases_horarios h ON h.clase_id=a.id WHERE a.cancha_id=c.id AND a.activo=true AND h.dia_semana=extract(dow FROM at_now AT TIME ZONE zone)::int AND (at_now AT TIME ZONE zone)::time>=h.hora_inicio AND (at_now AT TIME ZONE zone)::time<h.hora_fin) THEN
-  RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has active class';
+ local_range:=tsrange(at_now AT TIME ZONE zone,(at_now AT TIME ZONE zone)+p_duration_minutes*interval '1 minute','[)');
+ IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=c.sede_id OR b.sede_id IS NULL AND b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id))
+   AND (b.cancha_id=c.id OR b.cancha_id IS NULL AND b.cancha=court_number)
+   AND lower(coalesce(b.estado,'')) NOT IN('cancelada','cancelado')
+   AND (public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),coalesce(b.duracion_minutos,90)) IS NULL
+     OR public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),coalesce(b.duracion_minutos,90)) && local_range)) THEN
+  RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has a conflicting reservation';
  END IF;
- IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<=at_now AND at_now<s.inicio+s.duration_minutes*interval '1 minute')
- OR EXISTS(SELECT 1 FROM public.torneo_nations_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<=at_now AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
+ IF EXISTS(SELECT 1 FROM public.partidos_abiertos p WHERE p.sede_id=c.sede_id AND lower(coalesce(p.estado,'')) IN('abierto','completo')
+   AND (p.cancha_id=c.id OR p.cancha_id IS NULL AND (trim(p.cancha)=court_number::text OR coalesce(trim(p.cancha),'') !~ '^[0-9]+$'))
+   AND (public.scoreboard_local_interval_candidate(p.fecha::text,p.hora::text,coalesce(p.duracion_minutos,90)) IS NULL
+     OR public.scoreboard_local_interval_candidate(p.fecha::text,p.hora::text,coalesce(p.duracion_minutos,90)) && local_range)) THEN
+  RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has a conflicting open match';
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.clases a JOIN public.clases_horarios h ON h.clase_id=a.id
+   CROSS JOIN LATERAL generate_series((lower(local_range)::date-1)::timestamp,upper(local_range)::date::timestamp,interval '1 day') AS d(day)
+   WHERE a.sede_id=c.sede_id AND a.activo=true AND (a.cancha_id=c.id OR a.cancha_id IS NULL)
+   AND h.dia_semana=extract(dow FROM d.day)::int
+   AND (h.hora_inicio IS NULL OR h.hora_fin IS NULL OR
+    tsrange(d.day::date+h.hora_inicio,(d.day::date+h.hora_fin)+CASE WHEN h.hora_fin<=h.hora_inicio THEN interval '1 day' ELSE interval '0' END,'[)') && local_range)) THEN
+  RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has a conflicting class';
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute')
+ OR EXISTS(SELECT 1 FROM public.torneo_nations_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court reserved by another match';
  END IF;
  SELECT * INTO current_row FROM public.scoreboard_partidos WHERE id=p_id FOR UPDATE;
@@ -142,5 +174,5 @@ BEGIN
  WHERE id=p_id RETURNING * INTO current_row;
  RETURN to_jsonb(current_row)-'control_token_hash'-'control_token_created_at'-'control_token_revoked_at';
 END $$;
-REVOKE ALL ON FUNCTION public.scoreboard_resume_candidate(uuid,timestamptz,uuid,bigint) FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION public.scoreboard_resume_candidate(uuid,timestamptz,uuid,bigint) TO service_role;
+REVOKE ALL ON FUNCTION public.scoreboard_resume_candidate(uuid,timestamptz,uuid,bigint,integer) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.scoreboard_resume_candidate(uuid,timestamptz,uuid,bigint,integer) TO service_role;
