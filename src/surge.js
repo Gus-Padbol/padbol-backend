@@ -1,4 +1,3 @@
-import { normalizeSlotInicio } from './pricing/slotInicio.js';
 import { reservaHoraInicioFromRow } from '../utils/reservasColumns.js';
 import {
   PRICE_SOURCES,
@@ -285,14 +284,13 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
   if (!sede) throw Object.assign(new Error('Sede no encontrada'), { status: 404 });
 
   const tz = String(sede.timezone || DEFAULT_TZ).trim() || DEFAULT_TZ;
-  const normalizedSlot = normalizeSlotInicio(options.slot_inicio, tz);
 
   const baseResolved = await resolveReservaBasePrice(supabaseAdmin, {
     sedeId: sid,
     sede,
     deporte: dep,
     duracionMinutos: duracion,
-    slotInicio: normalizedSlot,
+    slotInicio: options.slot_inicio ?? null,
     timezone: tz,
   });
 
@@ -368,7 +366,7 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
 
   let lastMinute = false;
   let lmMultiplier = 1.0;
-  const slot = parseSlotInicio(normalizedSlot, tz);
+  const slot = parseSlotInicio(options.slot_inicio, tz);
   if (slot && slot.ms - nowMs < 2 * 60 * 60 * 1000 && baseOcupacion < 0.40) {
     lastMinute = true;
     lmMultiplier = 0.85;

@@ -1,4 +1,3 @@
-import { normalizeSlotInicio } from './slotInicio.js';
 const DEFAULT_TZ = 'America/Argentina/Buenos_Aires';
 
 export const VALID_SURGE_DEPORTES = new Set(['padbol', 'padel', 'pickleball', 'tenis']);
@@ -120,7 +119,7 @@ async function resolveFranjaPrecio(supabaseAdmin, {
   if (!slotInicio) return null;
 
   const tz = String(timezone || DEFAULT_TZ).trim() || DEFAULT_TZ;
-  const slotDate = new Date(normalizeSlotInicio(slotInicio, tz));
+  const slotDate = new Date(String(slotInicio).trim());
   if (!Number.isFinite(slotDate.getTime())) return null;
 
   const diaSemana = slotDate.toLocaleDateString('es-AR', { timeZone: tz, weekday: 'short' });
@@ -241,26 +240,13 @@ export async function resolveReservaBasePrice(supabaseAdmin, {
 
   const tz = String(timezone ?? sedeRow.timezone ?? DEFAULT_TZ).trim() || DEFAULT_TZ;
 
-  // An explicitly disabled offer must not silently fall back to a legacy price
-  // or a time-band price. A venue without rows retains legacy behavior.
-  const allDurationRows = await fetchSedesDuracionesRows(supabaseAdmin, sid, duracion, { activeOnly: false });
-  const applicableRows = allDurationRows.filter(row => {
-    const sport = row.deporte == null ? '' : String(row.deporte).trim().toLowerCase();
-    return !sport || sport === dep;
-  });
-  const activeRows = applicableRows.filter(row => row.activo === true);
-  if (applicableRows.length && !activeRows.length) {
-    throw Object.assign(new Error('La duración no está disponible para este deporte'), { status: 400, code: 'DURACION_NO_DISPONIBLE' });
-  }
-
-  const normalizedSlot = slotInicio ? normalizeSlotInicio(slotInicio, tz) : null;
-  if (!skipFranjas && normalizedSlot) {
+  if (!skipFranjas && slotInicio) {
     try {
       const franja = await resolveFranjaPrecio(supabaseAdmin, {
         sedeId: sid,
         deporte: dep,
         duracionMinutos: duracion,
-        slotInicio: normalizedSlot,
+        slotInicio,
         timezone: tz,
       });
       if (franja) {
@@ -274,11 +260,12 @@ export async function resolveReservaBasePrice(supabaseAdmin, {
         });
       }
     } catch (franjaErr) {
-      throw Object.assign(new Error('No se pudo confirmar la tarifa del horario'), { status: 503, code: 'FRANJA_NO_CONFIRMADA', cause: franjaErr });
+      console.warn('⚠️ resolveReservaBasePrice franjas_precio:', franjaErr.message);
     }
   }
 
-  const picked = pickSedesDuracionRow(activeRows, dep);
+  const duracionRows = await fetchSedesDuracionesRows(supabaseAdmin, sid, duracion, { activeOnly: true });
+  const picked = pickSedesDuracionRow(duracionRows, dep);
   if (picked) {
     const precio = parsePrecioInt(picked.row.precio);
     if (precio != null) {

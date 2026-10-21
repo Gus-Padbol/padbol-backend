@@ -114,6 +114,53 @@ export function mountSedesDuracionesRoutes(app, {
 
       let query = supabaseAdmin
         .from('sedes_duraciones')
+        .select('id, duracion_minutos, precio, deporte')
+        .eq('sede_id', sid)
+        .eq('activo', true)
+        .order('duracion_minutos', { ascending: true });
+
+      const deporteFilter = req.query.deporte;
+      if (deporteFilter != null && String(deporteFilter).trim() !== '') {
+        const dep = normalizeSurgeDeporte(deporteFilter);
+        query = query.or(`deporte.eq.${dep},deporte.is.null`);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const rows = data ?? [];
+      if (deporteFilter != null && String(deporteFilter).trim() !== '') {
+        return res.json({
+          sede_id: sid,
+          deporte: normalizeSurgeDeporte(deporteFilter),
+          duraciones: rows.map((row) => ({
+            id: row.id,
+            duracion_minutos: row.duracion_minutos,
+            precio: row.precio,
+            deporte: row.deporte,
+            es_base: row.deporte == null,
+          })),
+        });
+      }
+
+      return res.json({
+        sede_id: sid,
+        grupos: groupDuracionesByDeporte(rows),
+      });
+    } catch (err) {
+      const st = err.status || 500;
+      console.error('❌ GET /api/sedes/:id/duraciones-disponibles:', err.message);
+      return res.status(st).json({ error: err.message || 'Error al listar duraciones disponibles' });
+    }
+  });
+
+  app.get('/api/v2/sedes/:id/duraciones-disponibles', async (req, res) => {
+    try {
+      const sid = parseSedeId(req.params.id);
+      if (!sid) return res.status(400).json({ error: 'sede_id inválido' });
+
+      let query = supabaseAdmin
+        .from('sedes_duraciones')
         .select('id, duracion_minutos, precio, deporte, activo')
         .eq('sede_id', sid)
         .order('duracion_minutos', { ascending: true });
@@ -151,7 +198,7 @@ export function mountSedesDuracionesRoutes(app, {
       });
     } catch (err) {
       const st = err.status || 500;
-      console.error('❌ GET /api/sedes/:id/duraciones-disponibles:', err.message);
+      console.error('❌ GET /api/v2/sedes/:id/duraciones-disponibles:', err.message);
       return res.status(st).json({ error: err.message || 'Error al listar duraciones disponibles' });
     }
   });

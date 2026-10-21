@@ -3599,6 +3599,7 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
     let quote;
     try {
       quote = await quoteReservaPrice(db, {
+        priceContractVersion: req.body?.price_confirmation_strict === true ? 2 : 1,
         sedeId: resolvedSedeId,
         deporte: quoteInput.deporte ?? reservaData?.deporte ?? 'padbol',
         duracionMinutos: quoteInput.duracion_minutos ?? reservaData?.duracion_minutos ?? 90,
