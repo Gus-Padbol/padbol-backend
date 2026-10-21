@@ -36,6 +36,7 @@ await db.exec(`INSERT INTO torneo_partidos_programacion(partido_id,court_id) VAL
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Fixture schedule resumption not implemented/);
 await db.exec(`DELETE FROM torneo_partidos_programacion WHERE partido_id=5`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,13,90]),/Court screen occupied/);
+const afterFailure=(await db.query('select estado,cancha from partidos where id=5')).rows[0]; assert.equal(afterFailure.estado,'suspendido'); assert.equal(afterFailure.cancha,'1');
 await db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,hora_inicio,duracion_minutos) SELECT 8,14,'confirmada',to_char((clock_timestamp()+interval '10 minutes') AT TIME ZONE 'UTC','YYYY-MM-DD'),'00:00',to_char((clock_timestamp()+interval '10 minutes') AT TIME ZONE 'UTC','HH24:MI'),60`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/conflicting reservation/); await db.exec('DELETE FROM reservas');
 await db.exec(`INSERT INTO partidos_abiertos(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'abierto',((clock_timestamp()+interval '10 minutes') AT TIME ZONE 'UTC')::date,((clock_timestamp()+interval '10 minutes') AT TIME ZONE 'UTC')::time,60`);
