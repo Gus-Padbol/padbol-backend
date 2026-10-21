@@ -25,6 +25,7 @@ import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.j
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
+import { createQaRelay, RELAY_PATH } from './lib/whatsappQaRelay.js';
 import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, registerWhatsappAdminRoutes } from './lib/whatsappAdmin.js';
 import { CRM_COMMERCIAL_OPERATORS, commercialSafeWhatsappPermissions } from './lib/crmCommercialScope.js';
 import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
@@ -265,6 +266,7 @@ const runWhatsappMetaQaStartupCheck = createWhatsappMetaQaStartupCheck();
 const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
 const whatsappQaCrmManualSenderFactory = createWhatsappQaCrmManualSender();
 const crmWhatsappManualSenderFactory = createCrmWhatsappManualSender();
+const qaRelay = createQaRelay();
 installStagingFetchGuard();
 const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
@@ -318,6 +320,10 @@ app.use(cors({
 applySecurityHeaders(app);
 app.use(WHATSAPP_CLOUD_WEBHOOK_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (req, _res, next) => {
   if (Buffer.isBuffer(req.body)) req.rawBody = req.body;
+  next();
+});
+app.use(RELAY_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (req, _res, next) => {
+  req.rawBody = req.body;
   next();
 });
 app.use(express.json({
@@ -2077,7 +2083,7 @@ mountTournamentPlanningRoutes(app, {db:supabaseAdmin, requireTorneoAdmin:require
 mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
-  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel });
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay });
 
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
