@@ -118,7 +118,7 @@ BEGIN
    RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Fixture crosses timezone transition';
   END IF;
   local_period:=tsrange(NEW.inicio AT TIME ZONE zone,(NEW.inicio+NEW.duration_minutes*interval '1 minute') AT TIME ZONE zone,'[)');
-  IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=venue OR (b.sede_id IS NULL AND b.sede=(SELECT nombre FROM public.sedes WHERE id=venue)))
+  IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=venue OR b.sede=(SELECT nombre FROM public.sedes WHERE id=venue))
     AND (b.cancha_id=court OR b.cancha=court_no) AND lower(coalesce(b.estado,'')) NOT IN ('cancelada','cancelado')
     AND (public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) IS NULL
       OR public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) && local_period)) THEN

@@ -171,7 +171,7 @@ BEGIN
   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Resumption across timezone transition requires manual scheduling';
  END IF;
  local_range:=tsrange(at_now AT TIME ZONE zone,(at_now AT TIME ZONE zone)+p_duration_minutes*interval '1 minute','[)');
- IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=c.sede_id OR b.sede_id IS NULL AND b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id))
+ IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=c.sede_id OR b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id))
    AND (b.cancha_id=c.id OR b.cancha=court_number)
    AND lower(coalesce(b.estado,'')) NOT IN('cancelada','cancelado')
    AND (public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) IS NULL
