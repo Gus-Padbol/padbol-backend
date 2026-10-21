@@ -1,3 +1,4 @@
+import { mountBookingCapabilities } from './routes/bookingCapabilities.js';
 import {mayReadTournamentEnrollment,mapTournamentTeamReadRow} from './lib/dto/tournamentScopedTeams.js';
 import { projectVerifiedTournamentRankingTeams } from './lib/verifiedTournamentRanking.js';
 import { mountTournamentParticipantsRoutes } from './routes/tournamentParticipants.js';
@@ -1141,6 +1142,7 @@ mountStorePublicRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
 });
+mountBookingCapabilities(app);
 mountSedesDuracionesRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
