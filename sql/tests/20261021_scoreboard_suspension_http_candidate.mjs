@@ -1,0 +1,53 @@
+import { PGlite } from '@electric-sql/pglite';
+import { readFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import express from 'express';
+import { installScoreboardSuspensionRoutesCandidate } from '../../src/scoreboard/scoreboardSuspensionRoutesCandidate.js';
+const db = new PGlite();
+await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
+CREATE TABLE user_roles(user_id uuid PRIMARY KEY, role text, sede_id bigint);
+CREATE TABLE torneos(id bigint PRIMARY KEY,sede_id bigint,deporte text,plan_nations jsonb,fecha_inicio date,fecha_fin date);
+CREATE TABLE partidos(id bigint PRIMARY KEY,torneo_id bigint,sede_id bigint,estado text,equipo_a_id bigint,equipo_b_id bigint,cancha_id bigint,cancha text,fecha_hora timestamp,partido_siguiente_id bigint);
+CREATE TABLE sedes(id bigint PRIMARY KEY,nombre text,timezone text);
+CREATE TABLE reservas(id bigint,sede_id bigint,sede text,cancha int,cancha_id int,estado text,fecha text,hora text,hora_inicio text,duracion_minutos int, nota text);
+CREATE TABLE partidos_abiertos(id bigint,sede_id bigint,cancha text,cancha_id int,estado text,fecha date,hora time,duracion_minutos int);
+CREATE TABLE clases(id bigint,sede_id bigint,cancha_id bigint,activo boolean); CREATE TABLE clases_horarios(clase_id bigint,dia_semana int,hora_inicio time,hora_fin time);
+CREATE TABLE torneo_partidos_programacion(partido_id bigint,torneo_id bigint,court_id bigint,inicio timestamptz,duration_minutes int,actor_id uuid,updated_at timestamptz);
+CREATE TABLE torneo_nations_programacion(partido_id bigint,court_id bigint,inicio timestamptz,duration_minutes int);
+CREATE TABLE canchas(id bigint PRIMARY KEY,sede_id bigint,orden int,estado text,deporte text);
+CREATE TABLE equipos(id bigint PRIMARY KEY);
+CREATE TABLE scoreboard_partidos(id uuid PRIMARY KEY,sede_id bigint,torneo_id bigint,partido_torneo_id bigint,partido_abierto_id bigint,reserva_id bigint,cancha text,estado text,updated_at timestamptz,cronometro_inicio timestamptz,cronometro_pausado boolean,cronometro_segundos integer,score_a int,games_a int,saque_actual text,historial_puntos jsonb,control_token_hash text);
+INSERT INTO user_roles VALUES ('11111111-1111-4111-8111-111111111111','admin_club',8),('22222222-2222-4222-8222-222222222222','admin_club',9);
+INSERT INTO torneos VALUES (901,8,'padbol',NULL,current_date-1,current_date+1); INSERT INTO equipos VALUES(1),(2); INSERT INTO partidos VALUES(5,901,8,'en_curso',1,2,13,'1',NULL,NULL);
+INSERT INTO sedes VALUES(8,'QA','UTC'); INSERT INTO canchas VALUES(13,8,1,'activa','padbol'),(14,8,2,'activa','padbol');
+INSERT INTO scoreboard_partidos VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',8,901,5,NULL,NULL,'1','en_curso','2026-10-21','2026-10-21',true,78,40,3,'B','[{"punto":1}]','private');`);
+
+for (const file of ['sql/20261021140000_scoreboard_suspend_candidate.sql','sql/20261021150000_scoreboard_occupancy_candidate.sql','sql/20261021160000_scoreboard_receipt_candidate.sql']) await db.exec(await readFile(file,'utf8'));
+await db.exec(`CREATE TRIGGER protect BEFORE INSERT OR UPDATE OF sede_id,cancha,estado ON scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION proteger_cancha_marcador_activo();`);
+const id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', actor='11111111-1111-4111-8111-111111111111';
+const getBoard=async()=> (await db.query('SELECT * FROM scoreboard_partidos WHERE id=$1',[id])).rows[0];
+const adapter={async rpc(name,args){try {
+ const order=name==='scoreboard_reconcile_isolated_candidate'?['p_action_id','p_action','p_id','p_actor']:['p_action_id','p_action','p_id','p_actor','p_expected','p_court_id','p_duration','p_reason'];
+ const sql=`select ${name}(${order.map((_,i)=>'$'+(i+1)).join(',')}) as value`;
+ return {data:(await db.query(sql,order.map(k=>args[k]))).rows[0].value};
+} catch(error){return {error};}}};
+const app=express();app.use(express.json());
+installScoreboardSuspensionRoutesCandidate(app,{getAuthenticatedUser:async req=>req.headers.authorization?{user:{id:actor}}:{status:401},fetchPartido:getBoard,resolveRole:async()=>({}),assertCanControl:()=>{},db:adapter,publishUpdate:async()=>{}});
+const server=await new Promise(resolve=>{const server=app.listen(0,'127.0.0.1',()=>resolve(server));});
+try {
+ const base=`http://127.0.0.1:${server.address().port}/api/scoreboard/partidos/${id}`;
+ const post=async(action,body,authorized=true)=>{const response=await fetch(`${base}/${action}`,{method:'POST',headers:{'content-type':'application/json',...(authorized?{authorization:'Bearer synthetic'}:{})},body:JSON.stringify(body)});return {status:response.status,body:await response.json()};};
+ const action='33333333-3333-4333-8333-333333333333', canceled='44444444-4444-4444-8444-444444444444';
+ const version=(await getBoard()).updated_at.toISOString();
+ const suspend={action_id:action,updated_at:version,reason:'Lluvia'};
+ assert.equal((await post('suspend',suspend,false)).status,401);
+ const applied=await post('suspend',suspend);assert.equal(applied.status,200);assert.equal(applied.body.estado,'suspendido');assert.equal(applied.body.score_a,40);
+ const replay=await post('suspend',suspend);assert.equal(replay.body.transition_receipt.status,'replayed');
+ const reconciled=await post('reconcile',{action_id:action,action:'suspend'});assert.equal(reconciled.body.transition_receipt.status,'applied');
+ const result=await post('reconcile',{action_id:canceled,action:'resume'});assert.equal(result.body.transition_receipt.status,'cancelled');
+ assert.equal((await post('resume',{action_id:canceled,updated_at:version,court_id:14,duration_minutes:90})).status,409);
+ assert.equal((await getBoard()).estado,'suspendido');
+ const resumed=await post('resume',{action_id:'55555555-5555-4555-8555-555555555555',updated_at:version,court_id:14,duration_minutes:90});
+ assert.equal(resumed.status,200);assert.equal(resumed.body.estado,'en_curso');assert.equal(resumed.body.cancha,'2');assert.equal(resumed.body.score_a,40);
+ console.log('Synthetic HTTP + PostgreSQL candidate: auth, suspension, replay, cancellation, resume and score preservation passed');
+} finally { await new Promise(resolve=>server.close(resolve)); await db.close(); }

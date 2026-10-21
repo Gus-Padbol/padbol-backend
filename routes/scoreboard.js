@@ -435,11 +435,12 @@ export function mountScoreboardRoutes(app, {
   legacySuperAdminEmails = [],
   io = null,
   scoreboardSuspensionCandidateEnabled = false,
+  scoreboardSuspensionRecoveryEnabled = false,
 }) {
   const assertNationsScoreboardRead=(req,row)=>assertNationsScoreboardAudience(req,row,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRole(user,{fetchUserRoleRowForAuthUser,legacySuperAdminEmails})});
-  if (scoreboardSuspensionCandidateEnabled === true) {
+  if (scoreboardSuspensionCandidateEnabled === true || scoreboardSuspensionRecoveryEnabled === true) {
     installScoreboardSuspensionRoutesCandidate(app, {
-      getAuthenticatedUser, fetchPartido, db: supabaseAdmin,
+      getAuthenticatedUser, fetchPartido, db: supabaseAdmin, allowTransitions: scoreboardSuspensionCandidateEnabled === true,
       resolveRole: user => resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }),
       assertCanControl: assertCanControlScoreboard,
       publishUpdate: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin),

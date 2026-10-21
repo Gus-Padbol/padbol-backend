@@ -45,4 +45,8 @@ test('main router keeps experimental endpoints unregistered unless explicitly en
  }
  assert.equal(registered(false).includes('post /api/scoreboard/partidos/:id/resume'),false);
  assert.equal(registered(true).includes('post /api/scoreboard/partidos/:id/resume'),true);
+ const recovery=[]; const app=Object.fromEntries(['get','post','patch','delete'].map(method=>[method,path=>recovery.push(`${method} ${path}`)]));
+ mountScoreboardRoutes(app,{supabaseAdmin:{},getAuthenticatedUser:async()=>({}),fetchUserRoleRowForAuthUser:async()=>null,scoreboardSuspensionRecoveryEnabled:true});
+ assert.equal(recovery.includes('post /api/scoreboard/partidos/:id/resume'),false);
+ assert.equal(recovery.includes('post /api/scoreboard/partidos/:id/reconcile'),true);
 });
