@@ -1,3 +1,4 @@
+import { verifiedSuspendedBookings } from '../lib/verifiedSuspendedBookings.js';
 import express from 'express';
 import { resolvePartidoSportFormat, resolvePartidoCourtContract } from '../lib/partidoSportFormat.js';
 import { enrichSedesWithCourtCatalog, normalizeAvailabilitySport, slotCourtMetadata } from '../lib/sedeCourtCatalog.js';
@@ -488,7 +489,7 @@ async function cancelPartidoWithReserva(supabaseAdmin, partidoId, reservaId, par
     .eq('id', partidoId);
 }
 
-export const BLOCKING_RESERVA_ESTADOS = ['confirmada', 'pendiente', 'prereserva'];
+export const BLOCKING_RESERVA_ESTADOS = ['confirmada', 'pendiente', 'prereserva', 'suspendida'];
 
 export function isBlockingReserva(reserva, nowMs = Date.now()) {
   void nowMs;
@@ -829,8 +830,9 @@ export async function fetchDisponibilidadOccupancy(supabaseAdmin, { sedeId, sede
 
   if (partidosErr) throw partidosErr;
 
+  const released = await verifiedSuspendedBookings(supabaseAdmin, reservas);
   return {
-    reservas: filterBlockingReservas(reservas ?? []),
+    reservas: filterBlockingReservas(reservas ?? []).filter(row => !released.has(String(row.id))),
     partidos: partidos ?? [],
   };
 }
@@ -1021,7 +1023,8 @@ async function isCourtBlocked(
     }
 
     const merged = mergeReservasById(results.flatMap((r) => r.data ?? []));
-    const hit = filterBlockingReservas(merged).some(
+    const released = await verifiedSuspendedBookings(supabaseAdmin, merged);
+    const hit = filterBlockingReservas(merged).filter(row => !released.has(String(row.id))).some(
       (reserva) => Number(resolveReservaCanchaQueryText(reserva.cancha)) === canchaNum
         && reservaSolapaSlot(reserva, horaSlot, duracionMinutos),
     );
