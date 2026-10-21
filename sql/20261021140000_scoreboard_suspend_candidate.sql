@@ -174,8 +174,8 @@ BEGIN
  IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=c.sede_id OR b.sede_id IS NULL AND b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id))
    AND (b.cancha_id=c.id OR b.cancha_id IS NULL AND b.cancha=court_number)
    AND lower(coalesce(b.estado,'')) NOT IN('cancelada','cancelado')
-   AND (public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),coalesce(b.duracion_minutos,90)) IS NULL
-     OR public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),coalesce(b.duracion_minutos,90)) && local_range)) THEN
+   AND (public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) IS NULL
+     OR public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) && local_range)) THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has a conflicting reservation';
  END IF;
  IF EXISTS(SELECT 1 FROM public.partidos_abiertos p WHERE p.sede_id=c.sede_id AND lower(coalesce(p.estado,'')) IN('abierto','completo')

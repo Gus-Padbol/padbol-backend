@@ -49,11 +49,11 @@ BEGIN
    IF n<>1 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Reservation court ambiguous'; END IF;
   END IF;
   IF court IS NULL OR NOT EXISTS(SELECT 1 FROM public.canchas WHERE id=court AND sede_id=venue) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Reservation court ambiguous'; END IF;
-  local_period:=public.scoreboard_local_interval_candidate(NEW.fecha,coalesce(nullif(trim(NEW.hora_inicio),''),nullif(trim(NEW.hora),'')),coalesce(NEW.duracion_minutos,90));
+  local_period:=public.scoreboard_local_interval_candidate(NEW.fecha,coalesce(nullif(trim(NEW.hora_inicio),''),nullif(trim(NEW.hora),'')),CASE WHEN NEW.duracion_minutos>=15 THEN NEW.duracion_minutos ELSE 90 END);
   IF local_period IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Reservation interval invalid'; END IF;
   IF EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate o JOIN public.scoreboard_partidos s ON s.id=o.scoreboard_id
     WHERE o.sede_id=venue AND o.court_id=court AND s.estado='en_curso'
-      AND tsrange(o.starts_at AT TIME ZONE zone,o.ends_at AT TIME ZONE zone,'[)') && local_period) THEN
+      AND tsrange(o.starts_at AT TIME ZONE zone,(CASE WHEN o.ends_at<=clock_timestamp() THEN 'infinity'::timestamptz ELSE o.ends_at END) AT TIME ZONE zone,'[)') && local_period) THEN
    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court occupied by resumed scoreboard';
   END IF;
  ELSIF TG_TABLE_NAME='partidos_abiertos' THEN
@@ -71,7 +71,7 @@ BEGIN
   IF local_period IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Open match interval invalid'; END IF;
   IF EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate o JOIN public.scoreboard_partidos s ON s.id=o.scoreboard_id
    WHERE o.sede_id=venue AND o.court_id=court AND s.estado='en_curso'
-    AND tsrange(o.starts_at AT TIME ZONE zone,o.ends_at AT TIME ZONE zone,'[)') && local_period) THEN
+    AND tsrange(o.starts_at AT TIME ZONE zone,(CASE WHEN o.ends_at<=clock_timestamp() THEN 'infinity'::timestamptz ELSE o.ends_at END) AT TIME ZONE zone,'[)') && local_period) THEN
    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court occupied by resumed scoreboard';
   END IF;
  ELSIF TG_TABLE_NAME IN ('clases','clases_horarios') THEN
@@ -84,16 +84,16 @@ BEGIN
    IF EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate o JOIN public.scoreboard_partidos s ON s.id=o.scoreboard_id
     CROSS JOIN LATERAL generate_series(((o.starts_at AT TIME ZONE zone)::date-1)::timestamp,((o.ends_at AT TIME ZONE zone)::date)::timestamp,interval '1 day') d(day)
     WHERE o.sede_id=cls.sede_id AND (cls.cancha_id IS NULL OR o.court_id=cls.cancha_id) AND s.estado='en_curso'
-    AND NEW.dia_semana=extract(dow FROM d.day)::int
-    AND public.scoreboard_class_overlap_candidate(tsrange(o.starts_at AT TIME ZONE zone,o.ends_at AT TIME ZONE zone,'[)'),d.day::date,NEW.hora_inicio,NEW.hora_fin)) THEN
+    AND (o.ends_at<=clock_timestamp() OR (NEW.dia_semana=extract(dow FROM d.day)::int
+    AND public.scoreboard_class_overlap_candidate(tsrange(o.starts_at AT TIME ZONE zone,o.ends_at AT TIME ZONE zone,'[)'),d.day::date,NEW.hora_inicio,NEW.hora_fin)))) THEN
     RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court occupied by resumed scoreboard'; END IF;
   ELSE
    IF EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate o JOIN public.scoreboard_partidos s ON s.id=o.scoreboard_id
     JOIN public.clases_horarios h ON h.clase_id=cls.id
     CROSS JOIN LATERAL generate_series(((o.starts_at AT TIME ZONE zone)::date-1)::timestamp,((o.ends_at AT TIME ZONE zone)::date)::timestamp,interval '1 day') d(day)
     WHERE o.sede_id=cls.sede_id AND (cls.cancha_id IS NULL OR o.court_id=cls.cancha_id) AND s.estado='en_curso'
-    AND h.dia_semana=extract(dow FROM d.day)::int
-    AND public.scoreboard_class_overlap_candidate(tsrange(o.starts_at AT TIME ZONE zone,o.ends_at AT TIME ZONE zone,'[)'),d.day::date,h.hora_inicio,h.hora_fin)) THEN
+    AND (o.ends_at<=clock_timestamp() OR (h.dia_semana=extract(dow FROM d.day)::int
+    AND public.scoreboard_class_overlap_candidate(tsrange(o.starts_at AT TIME ZONE zone,o.ends_at AT TIME ZONE zone,'[)'),d.day::date,h.hora_inicio,h.hora_fin)))) THEN
     RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court occupied by resumed scoreboard'; END IF;
   END IF;
  ELSE
@@ -102,7 +102,7 @@ BEGIN
   period:=tstzrange(NEW.inicio,NEW.inicio+NEW.duration_minutes*interval '1 minute','[)');
   IF EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate o JOIN public.scoreboard_partidos s ON s.id=o.scoreboard_id
      WHERE o.court_id=court AND s.estado='en_curso' AND s.partido_torneo_id IS DISTINCT FROM own_match
-       AND tstzrange(o.starts_at,o.ends_at,'[)') && period) THEN
+       AND tstzrange(o.starts_at,CASE WHEN o.ends_at<=clock_timestamp() THEN 'infinity'::timestamptz ELSE o.ends_at END,'[)') && period) THEN
    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court occupied by resumed scoreboard';
   END IF;
  END IF;
