@@ -495,7 +495,7 @@ async function cancelPartidoWithReserva(supabaseAdmin, partidoId, reservaId, par
     .eq('id', partidoId);
 }
 
-export const BLOCKING_RESERVA_ESTADOS = ['confirmada', 'pendiente', 'prereserva', 'suspendida'];
+export const BLOCKING_RESERVA_ESTADOS = ['confirmada', 'confirmado', 'pendiente', 'pendiente_pago_manual', 'pendiente_pago_efectivo', 'prereserva', 'suspendida'];
 
 export function isBlockingReserva(reserva, nowMs = Date.now()) {
   void nowMs;
