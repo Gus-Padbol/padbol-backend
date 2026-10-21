@@ -172,14 +172,14 @@ BEGIN
  END IF;
  local_range:=tsrange(at_now AT TIME ZONE zone,(at_now AT TIME ZONE zone)+p_duration_minutes*interval '1 minute','[)');
  IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=c.sede_id OR b.sede_id IS NULL AND b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id))
-   AND (b.cancha_id=c.id OR b.cancha_id IS NULL AND b.cancha=court_number)
+   AND (b.cancha_id=c.id OR b.cancha=court_number)
    AND lower(coalesce(b.estado,'')) NOT IN('cancelada','cancelado')
    AND (public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) IS NULL
      OR public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) && local_range)) THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has a conflicting reservation';
  END IF;
  IF EXISTS(SELECT 1 FROM public.partidos_abiertos p WHERE p.sede_id=c.sede_id AND lower(coalesce(p.estado,'')) IN('abierto','completo')
-   AND (p.cancha_id=c.id OR p.cancha_id IS NULL AND (trim(p.cancha)=court_number::text OR coalesce(trim(p.cancha),'') !~ '^[0-9]+$'))
+   AND (p.cancha_id=c.id OR trim(p.cancha)=court_number::text OR (p.cancha_id IS NULL AND coalesce(trim(p.cancha),'') !~ '^[0-9]+$'))
    AND (public.scoreboard_local_interval_candidate(p.fecha::text,p.hora::text,coalesce(p.duracion_minutos,90)) IS NULL
      OR public.scoreboard_local_interval_candidate(p.fecha::text,p.hora::text,coalesce(p.duracion_minutos,90)) && local_range)) THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has a conflicting open match';
@@ -230,6 +230,11 @@ BEGIN
  PERFORM set_config('padbol.scoreboard_resume_candidate','1',true);
  UPDATE public.scoreboard_partidos SET estado='en_curso',cancha=court_number::text,cronometro_inicio=NULL,cronometro_pausado=true
  WHERE id=p_id RETURNING * INTO current_row;
+ -- Triggers may wait on additional rows after the availability check. Never commit
+ -- an interval whose start became stale while those locks were being acquired.
+ IF clock_timestamp() - at_now > interval '5 seconds' THEN
+  RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Court availability check expired; retry resumption';
+ END IF;
  RETURN to_jsonb(current_row)-'control_token_hash'-'control_token_created_at'-'control_token_revoked_at';
 END $$;
 REVOKE ALL ON FUNCTION public.scoreboard_resume_candidate(uuid,timestamptz,uuid,bigint,integer) FROM PUBLIC,anon,authenticated;
