@@ -32,9 +32,15 @@ const adapter={async rpc(name,args){try {
  return {data:(await db.query(sql,order.map(k=>args[k]))).rows[0].value};
 } catch(error){return {error};}}};
 const app=express();app.use(express.json());
-installScoreboardSuspensionRoutesCandidate(app,{getAuthenticatedUser:async req=>req.headers.authorization?{user:{id:actor}}:{status:401},fetchPartido:getBoard,resolveRole:async()=>({}),assertCanControl:()=>{},db:adapter,publishUpdate:async()=>{}});
+let recovery=false;
+const normal=express.Router(), evacuation=express.Router();
+const deps={getAuthenticatedUser:async req=>req.headers.authorization?{user:{id:actor}}:{status:401},fetchPartido:getBoard,resolveRole:async()=>({}),assertCanControl:()=>{},db:adapter,publishUpdate:async()=>{}};
+installScoreboardSuspensionRoutesCandidate(normal,deps);
+installScoreboardSuspensionRoutesCandidate(evacuation,{...deps,allowTransitions:false,allowResume:true});
+app.post('/test/evacuate',(_req,res)=>{recovery=true;res.json({ok:true});});
+app.use((req,res,next)=>(recovery?evacuation:normal)(req,res,next));
 
-app.get('/api/scoreboard/partidos/:id',async(req,res)=>{ const row=await getBoard(); const {control_token_hash,...safe}=row; return res.json({...safe,scoreboard_suspension_candidate_enabled:true}); });
+app.get('/api/scoreboard/partidos/:id',async(req,res)=>{ const row=await getBoard(); const {control_token_hash,...safe}=row; return res.json({...safe,scoreboard_suspension_candidate_enabled:!recovery,scoreboard_suspension_resume_enabled:recovery}); });
 app.get('/api/sedes/:id/canchas',async(req,res)=>{const rows=(await db.query('select id,orden,estado from canchas where sede_id=8')).rows; return res.json(rows.map(x=>({...x,nombre:`Cancha ${x.orden}`})));});
 const server=app.listen(0,'127.0.0.1',()=>console.log(`READY ${server.address().port}`));
 process.once('SIGTERM',async()=>{await new Promise(resolve=>server.close(resolve));await db.close();process.exit(0);});
