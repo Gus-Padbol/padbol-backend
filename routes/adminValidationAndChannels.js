@@ -46,6 +46,34 @@ export function mountAdminValidationAndChannelsRoutes(app, {
 }) {
   const authDeps = { getAuthenticatedUser, fetchUserRoleRowForAuthUser, legacySuperAdminEmails };
 
+  app.get('/api/admin/validaciones', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, authDeps);
+      if (!auth) return;
+      const rows = [];
+      let lastId = 0;
+      while (true) {
+        const { data, error } = await supabaseAdmin.from('jugadores_perfil')
+          .select('id, email, nombre, apellido, alias, user_id, pais, nivel, genero, categoria_validada')
+          .eq('pendiente_validacion', true).gt('id', lastId)
+          .order('id', { ascending: true }).limit(100);
+        if (error) throw error;
+        if (!Array.isArray(data)) throw new Error('Respuesta inválida de validaciones');
+        if (!data.length) break;
+        if (rows.length + data.length > 10000) return res.status(503).json({ error: 'Demasiadas validaciones; requiere paginación' });
+        const next = Number(data[data.length - 1].id);
+        if (!Number.isSafeInteger(next) || next <= lastId) throw new Error('Orden inválido de validaciones');
+        rows.push(...data);
+        lastId = next;
+      }
+      const pending = rows.filter((row) => row.categoria_validada !== true && row.categoria_validada !== 1 && !['true', '1'].includes(String(row.categoria_validada ?? '').trim().toLowerCase()));
+      return res.json({ validaciones: pending });
+    } catch (error) {
+      console.error('❌ GET /api/admin/validaciones:', error.message);
+      return res.status(500).json({ error: 'No se pudieron cargar las validaciones' });
+    }
+  });
+
   app.patch('/api/admin/validaciones/:userId/rechazar', async (req, res) => {
     try {
       const auth = await requireSuperAdminUser(req, res, authDeps);
