@@ -25,11 +25,51 @@ END $$;
 
 -- Lock tournament and match first, consistent with their integrity triggers;
 -- CAS checks the marker again after acquiring those locks. Scoring/history are untouched.
+DO $$
+DECLARE actual text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO actual FROM pg_constraint
+ WHERE conrelid='public.partidos_abiertos'::regclass AND conname='partidos_abiertos_estado_check' AND contype='c';
+ IF actual IS DISTINCT FROM 'CHECK ((estado = ANY (ARRAY[''abierto''::text, ''completo''::text, ''cancelado''::text, ''finalizado''::text])))' THEN
+  RAISE EXCEPTION 'Unexpected open match state constraint';
+ END IF;
+END $$;
+ALTER TABLE public.partidos_abiertos DROP CONSTRAINT partidos_abiertos_estado_check;
+ALTER TABLE public.partidos_abiertos ADD CONSTRAINT partidos_abiertos_estado_check
+ CHECK (estado IN ('abierto','completo','cancelado','finalizado','suspendido'));
+CREATE TABLE IF NOT EXISTS public.scoreboard_linked_suspend_candidate (
+ scoreboard_id uuid PRIMARY KEY REFERENCES public.scoreboard_partidos(id) ON DELETE RESTRICT,
+ booking_id bigint REFERENCES public.reservas(id) ON DELETE RESTRICT,
+ open_id bigint REFERENCES public.partidos_abiertos(id) ON DELETE RESTRICT,
+ booking_state text, open_state text, created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+ALTER TABLE public.scoreboard_linked_suspend_candidate ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.scoreboard_linked_suspend_candidate FROM PUBLIC, anon, authenticated, service_role;
+CREATE OR REPLACE FUNCTION public.scoreboard_linked_suspension_guard_candidate()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public AS $$
+DECLARE suspended text;
+BEGIN
+ suspended:=CASE WHEN TG_TABLE_NAME='reservas' THEN 'suspendida' ELSE 'suspendido' END;
+ IF TG_OP='DELETE' THEN
+  IF OLD.estado=suspended THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Use linked scoreboard suspension'; END IF;
+  RETURN OLD;
+ END IF;
+ IF (NEW.estado=suspended OR (TG_OP='UPDATE' AND OLD.estado=suspended))
+    AND (current_user NOT IN ('postgres','supabase_admin','service_role') OR current_setting('padbol.linked_suspension_candidate',true) IS DISTINCT FROM '1') THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Use linked scoreboard suspension';
+ END IF;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS scoreboard_linked_suspension_guard_candidate ON public.reservas;
+CREATE TRIGGER scoreboard_linked_suspension_guard_candidate BEFORE INSERT OR UPDATE OR DELETE ON public.reservas FOR EACH ROW EXECUTE FUNCTION public.scoreboard_linked_suspension_guard_candidate();
+DROP TRIGGER IF EXISTS scoreboard_linked_suspension_guard_candidate ON public.partidos_abiertos;
+CREATE TRIGGER scoreboard_linked_suspension_guard_candidate BEFORE INSERT OR UPDATE OR DELETE ON public.partidos_abiertos FOR EACH ROW EXECUTE FUNCTION public.scoreboard_linked_suspension_guard_candidate();
+
 CREATE OR REPLACE FUNCTION public.scoreboard_suspend_candidate(
  p_id uuid, p_expected timestamptz, p_actor uuid
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE initial public.scoreboard_partidos; current_row public.scoreboard_partidos;
-        m public.partidos; r public.user_roles; elapsed integer := 0;
+        m public.partidos; r public.user_roles; linked_open public.partidos_abiertos; linked_booking public.reservas; effective_booking bigint; elapsed integer := 0;
 BEGIN
  SELECT * INTO initial FROM public.scoreboard_partidos WHERE id=p_id;
  IF initial.id IS NULL THEN RETURN NULL; END IF;
@@ -38,9 +78,17 @@ BEGIN
   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Scoreboard control scope denied';
  END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('manual-booking-cross-occupancy-v1',0));
- -- Other linked entities require their own atomic handling; fail closed.
- IF initial.partido_abierto_id IS NOT NULL OR initial.reserva_id IS NOT NULL THEN
-  RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Linked open matches or reservations require supported suspension';
+ -- Keep the original booking, payment and participants untouched.
+ IF (initial.partido_abierto_id IS NOT NULL OR initial.reserva_id IS NOT NULL) AND (initial.torneo_id IS NOT NULL OR initial.partido_torneo_id IS NOT NULL) THEN RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Mixed tournament and booking links require review'; END IF;
+ IF initial.partido_abierto_id IS NOT NULL THEN
+  SELECT * INTO linked_open FROM public.partidos_abiertos WHERE id=initial.partido_abierto_id FOR UPDATE;
+  IF linked_open.id IS NULL OR linked_open.sede_id IS DISTINCT FROM initial.sede_id OR lower(coalesce(linked_open.estado,'')) NOT IN ('abierto','completo') THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Linked open match unavailable'; END IF;
+  IF initial.reserva_id IS NOT NULL AND linked_open.reserva_id IS DISTINCT FROM initial.reserva_id THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Booking links disagree'; END IF;
+ END IF;
+ effective_booking:=coalesce(initial.reserva_id,linked_open.reserva_id);
+ IF effective_booking IS NOT NULL THEN
+  SELECT * INTO linked_booking FROM public.reservas WHERE id=effective_booking FOR UPDATE;
+  IF linked_booking.id IS NULL OR linked_booking.sede_id IS DISTINCT FROM initial.sede_id OR lower(coalesce(linked_booking.estado,'')) NOT IN ('pendiente','pendiente_pago_manual','pendiente_pago_efectivo','confirmada','prereserva') THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Linked reservation unavailable'; END IF;
  END IF;
  IF initial.torneo_id IS NOT NULL THEN
   PERFORM id FROM public.torneos WHERE id=initial.torneo_id FOR UPDATE;
@@ -56,9 +104,26 @@ BEGIN
  SELECT * INTO current_row FROM public.scoreboard_partidos WHERE id=p_id FOR UPDATE;
  IF current_row.updated_at IS DISTINCT FROM p_expected THEN RETURN NULL; END IF;
  IF current_row.torneo_id IS DISTINCT FROM initial.torneo_id OR current_row.partido_torneo_id IS DISTINCT FROM initial.partido_torneo_id
-    OR current_row.sede_id IS DISTINCT FROM initial.sede_id OR current_row.partido_abierto_id IS NOT NULL OR current_row.reserva_id IS NOT NULL THEN RETURN NULL; END IF;
+    OR current_row.sede_id IS DISTINCT FROM initial.sede_id OR current_row.partido_abierto_id IS DISTINCT FROM initial.partido_abierto_id OR current_row.reserva_id IS DISTINCT FROM initial.reserva_id THEN RETURN NULL; END IF;
  IF current_row.estado IS DISTINCT FROM 'en_curso' THEN
   RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Only ongoing matches can be suspended';
+ END IF;
+ IF effective_booking IS NOT NULL OR linked_open.id IS NOT NULL THEN
+  -- Do not suspend an expiring checkout or a booking shared with another match.
+  IF effective_booking IS NOT NULL AND (linked_booking.estado IS DISTINCT FROM 'confirmada' OR linked_booking.pago_estado IS DISTINCT FROM 'pagado') THEN
+   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Only paid confirmed bookings can be suspended';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.scoreboard_partidos s WHERE s.id<>p_id AND
+      (effective_booking IS NOT NULL AND s.reserva_id=effective_booking OR linked_open.id IS NOT NULL AND s.partido_abierto_id=linked_open.id))
+     OR EXISTS (SELECT 1 FROM public.partidos_abiertos a WHERE effective_booking IS NOT NULL AND a.reserva_id=effective_booking AND a.id IS DISTINCT FROM linked_open.id) THEN
+   RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Booking or open match is shared';
+  END IF;
+  INSERT INTO public.scoreboard_linked_suspend_candidate(scoreboard_id,booking_id,open_id,booking_state,open_state)
+   VALUES(p_id,effective_booking,linked_open.id,linked_booking.estado,linked_open.estado);
+  PERFORM set_config('padbol.linked_suspension_candidate','1',true);
+  IF effective_booking IS NOT NULL THEN UPDATE public.reservas SET estado='suspendida' WHERE id=effective_booking; END IF;
+  IF linked_open.id IS NOT NULL THEN UPDATE public.partidos_abiertos SET estado='suspendido' WHERE id=linked_open.id; END IF;
+  PERFORM set_config('padbol.linked_suspension_candidate','0',true);
  END IF;
  IF current_row.cronometro_inicio IS NOT NULL AND NOT coalesce(current_row.cronometro_pausado,false) THEN
   elapsed := greatest(0,floor(extract(epoch FROM (clock_timestamp()-current_row.cronometro_inicio)))::integer);
@@ -112,7 +177,7 @@ CREATE OR REPLACE FUNCTION public.scoreboard_resume_candidate(
 DECLARE initial public.scoreboard_partidos; current_row public.scoreboard_partidos;
         m public.partidos; r public.user_roles; t public.torneos; c public.canchas;
         zone text; court_number integer; at_now timestamptz; local_range tsrange;
-        old_schedule jsonb; nations_schedule jsonb; nations_plan jsonb; new_revision bigint; min_rest integer:=0; has_general boolean:=false; has_nations boolean:=false;
+        linked_open public.partidos_abiertos; linked_booking public.reservas; effective_booking bigint; saved public.scoreboard_linked_suspend_candidate; own_range tsrange; old_schedule jsonb; nations_schedule jsonb; nations_plan jsonb; new_revision bigint; min_rest integer:=0; has_general boolean:=false; has_nations boolean:=false;
 BEGIN
  SELECT * INTO initial FROM public.scoreboard_partidos WHERE id=p_id;
  IF initial.id IS NULL THEN RETURN NULL; END IF;
@@ -120,12 +185,25 @@ BEGIN
  IF NOT (r.role='super_admin' OR r.role IN('admin_club','admin_sede') AND r.sede_id=initial.sede_id) IS TRUE THEN
   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Scoreboard control scope denied';
  END IF;
- IF initial.partido_abierto_id IS NOT NULL OR initial.reserva_id IS NOT NULL THEN
-  RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Linked open matches or reservations require supported resumption';
- END IF;
- -- Shared with the experimental booking candidate; other live writers have not
- -- been migrated to this lock, so this candidate must not be deployed yet.
  PERFORM pg_advisory_xact_lock(hashtextextended('manual-booking-cross-occupancy-v1',0));
+ -- Keep the original booking, payment and participants untouched.
+ IF (initial.partido_abierto_id IS NOT NULL OR initial.reserva_id IS NOT NULL) AND (initial.torneo_id IS NOT NULL OR initial.partido_torneo_id IS NOT NULL) THEN RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Mixed tournament and booking links require review'; END IF;
+ IF initial.partido_abierto_id IS NOT NULL THEN
+  SELECT * INTO linked_open FROM public.partidos_abiertos WHERE id=initial.partido_abierto_id FOR UPDATE;
+  IF linked_open.id IS NULL OR linked_open.sede_id IS DISTINCT FROM initial.sede_id OR linked_open.estado IS DISTINCT FROM 'suspendido' THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Linked open match unavailable'; END IF;
+  IF initial.reserva_id IS NOT NULL AND linked_open.reserva_id IS DISTINCT FROM initial.reserva_id THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Booking links disagree'; END IF;
+ END IF;
+ effective_booking:=coalesce(initial.reserva_id,linked_open.reserva_id);
+ IF effective_booking IS NOT NULL THEN
+  SELECT * INTO linked_booking FROM public.reservas WHERE id=effective_booking FOR UPDATE;
+  IF linked_booking.id IS NULL OR linked_booking.sede_id IS DISTINCT FROM initial.sede_id OR linked_booking.estado IS DISTINCT FROM 'suspendida' OR linked_booking.pago_estado IS DISTINCT FROM 'pagado' THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Linked reservation unavailable'; END IF;
+ END IF;
+ IF effective_booking IS NOT NULL OR linked_open.id IS NOT NULL THEN
+  SELECT * INTO saved FROM public.scoreboard_linked_suspend_candidate WHERE scoreboard_id=p_id FOR UPDATE;
+  IF NOT FOUND OR saved.booking_id IS DISTINCT FROM effective_booking OR saved.open_id IS DISTINCT FROM linked_open.id THEN
+   RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Suspension record missing or inconsistent';
+  END IF;
+ END IF;
  IF initial.torneo_id IS NOT NULL THEN
   SELECT * INTO t FROM public.torneos WHERE id=initial.torneo_id FOR UPDATE;
   IF t.id IS NULL OR t.sede_id IS DISTINCT FROM initial.sede_id THEN
@@ -173,7 +251,7 @@ BEGIN
  END IF;
  SELECT * INTO current_row FROM public.scoreboard_partidos WHERE id=p_id FOR UPDATE;
  IF current_row.updated_at IS DISTINCT FROM p_expected OR current_row.torneo_id IS DISTINCT FROM initial.torneo_id
-    OR current_row.partido_torneo_id IS DISTINCT FROM initial.partido_torneo_id OR current_row.sede_id IS DISTINCT FROM initial.sede_id THEN RETURN NULL; END IF;
+    OR current_row.partido_torneo_id IS DISTINCT FROM initial.partido_torneo_id OR current_row.sede_id IS DISTINCT FROM initial.sede_id OR current_row.partido_abierto_id IS DISTINCT FROM initial.partido_abierto_id OR current_row.reserva_id IS DISTINCT FROM initial.reserva_id THEN RETURN NULL; END IF;
  IF current_row.estado IS DISTINCT FROM 'suspendido' THEN
   RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Scoreboard is not suspended';
  END IF;
@@ -194,15 +272,16 @@ BEGIN
   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Resumption across timezone transition requires manual scheduling';
  END IF;
  local_range:=tsrange(at_now AT TIME ZONE zone,(at_now AT TIME ZONE zone)+p_duration_minutes*interval '1 minute','[)');
- IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=c.sede_id OR b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id))
+ IF EXISTS(SELECT 1 FROM public.reservas b WHERE b.id IS DISTINCT FROM effective_booking AND (b.sede_id=c.sede_id OR b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id))
    AND (b.cancha_id=c.id OR b.cancha=court_number)
    AND lower(coalesce(b.estado,'')) NOT IN('cancelada','cancelado')
+   AND NOT (lower(coalesce(b.estado,''))='suspendida' AND EXISTS (SELECT 1 FROM public.scoreboard_linked_suspend_candidate ss JOIN public.scoreboard_partidos sx ON sx.id=ss.scoreboard_id WHERE ss.booking_id=b.id AND sx.estado='suspendido' AND (sx.reserva_id=b.id OR EXISTS (SELECT 1 FROM public.partidos_abiertos ax WHERE ax.id=sx.partido_abierto_id AND ax.id=ss.open_id AND ax.reserva_id=b.id))))
    AND ((public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) IS NULL
        AND (coalesce(b.duracion_minutos,0)>1440 OR public.scoreboard_local_interval_candidate(b.fecha,'00:00',1) IS NULL OR lower(public.scoreboard_local_interval_candidate(b.fecha,'00:00',1))::date BETWEEN lower(local_range)::date-1 AND upper(local_range)::date))
      OR public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) && local_range)) THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has a conflicting reservation';
  END IF;
- IF EXISTS(SELECT 1 FROM public.partidos_abiertos p WHERE p.sede_id=c.sede_id AND lower(coalesce(p.estado,'')) IN('abierto','completo')
+ IF EXISTS(SELECT 1 FROM public.partidos_abiertos p WHERE p.id IS DISTINCT FROM initial.partido_abierto_id AND p.sede_id=c.sede_id AND lower(coalesce(p.estado,'')) IN('abierto','completo')
    AND (p.cancha_id=c.id OR trim(p.cancha)=court_number::text OR (p.cancha_id IS NULL AND coalesce(trim(p.cancha),'') !~ '^[0-9]+$'))
    AND (public.scoreboard_local_interval_candidate(p.fecha::text,p.hora::text,coalesce(p.duracion_minutos,90)) IS NULL
      OR public.scoreboard_local_interval_candidate(p.fecha::text,p.hora::text,coalesce(p.duracion_minutos,90)) && local_range)) THEN
@@ -271,6 +350,19 @@ BEGIN
   UPDATE public.partidos SET estado='en_curso',cancha_id=c.id,cancha=court_number::text,
    fecha_hora=CASE WHEN has_general OR has_nations THEN at_now AT TIME ZONE 'UTC' ELSE fecha_hora END WHERE id=m.id;
  END IF;
+ PERFORM set_config('padbol.linked_suspension_candidate','1',true);
+ IF effective_booking IS NOT NULL THEN
+  UPDATE public.reservas SET estado=saved.booking_state,cancha_id=c.id,cancha=court_number,
+   fecha=to_char(lower(local_range),'YYYY-MM-DD'),hora=to_char(lower(local_range),'HH24:MI:SS'),
+   hora_inicio=to_char(lower(local_range),'HH24:MI:SS'),hora_fin=to_char(upper(local_range),'HH24:MI:SS'),
+   duracion_minutos=p_duration_minutes WHERE id=effective_booking;
+ END IF;
+ IF linked_open.id IS NOT NULL THEN
+  UPDATE public.partidos_abiertos SET estado=saved.open_state,cancha_id=c.id,cancha=court_number::text,
+   fecha=lower(local_range)::date,hora=lower(local_range)::time,duracion_minutos=p_duration_minutes WHERE id=linked_open.id;
+ END IF;
+ PERFORM set_config('padbol.linked_suspension_candidate','0',true);
+ IF saved.scoreboard_id IS NOT NULL THEN DELETE FROM public.scoreboard_linked_suspend_candidate WHERE scoreboard_id=p_id; END IF;
  INSERT INTO public.scoreboard_court_occupancy_candidate(scoreboard_id,sede_id,court_id,starts_at,ends_at)
  VALUES(p_id,c.sede_id,c.id,at_now,at_now+p_duration_minutes*interval '1 minute')
  ON CONFLICT(scoreboard_id) DO UPDATE SET sede_id=EXCLUDED.sede_id,court_id=EXCLUDED.court_id,
