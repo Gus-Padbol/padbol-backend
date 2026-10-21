@@ -133,6 +133,23 @@ BEGIN
  RETURN NEW;
 END $$;
 REVOKE ALL ON FUNCTION public.scoreboard_occupancy_guard_candidate() FROM PUBLIC,anon,authenticated,service_role;
+-- Statement triggers acquire the shared lock before PostgreSQL locks a changed
+-- row. Callers that take other locks earlier must still follow the same order.
+CREATE OR REPLACE FUNCTION public.scoreboard_occupancy_lock_statement_candidate()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('manual-booking-cross-occupancy-v1',0));
+ RETURN NULL;
+END $$;
+REVOKE ALL ON FUNCTION public.scoreboard_occupancy_lock_statement_candidate() FROM PUBLIC,anon,authenticated,service_role;
+CREATE TRIGGER scoreboard_lock_reservation_candidate BEFORE INSERT OR UPDATE OF sede_id,sede,cancha_id,cancha,estado,fecha,hora,hora_inicio,duracion_minutos ON public.reservas FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
+CREATE TRIGGER scoreboard_lock_schedule_candidate BEFORE INSERT OR UPDATE OF partido_id,court_id,inicio,duration_minutes ON public.torneo_partidos_programacion FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
+CREATE TRIGGER scoreboard_lock_nations_candidate BEFORE INSERT OR UPDATE OF partido_id,court_id,inicio,duration_minutes ON public.torneo_nations_programacion FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
+CREATE TRIGGER scoreboard_lock_open_candidate BEFORE INSERT OR UPDATE OF sede_id,cancha_id,cancha,estado,fecha,hora,duracion_minutos ON public.partidos_abiertos FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
+CREATE TRIGGER scoreboard_lock_classes_candidate BEFORE INSERT OR UPDATE OF sede_id,cancha_id,activo ON public.clases FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
+CREATE TRIGGER scoreboard_lock_class_hours_candidate BEFORE INSERT OR UPDATE OF clase_id,dia_semana,hora_inicio,hora_fin ON public.clases_horarios FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
+CREATE TRIGGER scoreboard_lock_resumed_candidate BEFORE UPDATE OF estado,sede_id,cancha,partido_torneo_id ON public.scoreboard_partidos FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
+
 CREATE TRIGGER scoreboard_guard_reservation_candidate BEFORE INSERT OR UPDATE ON public.reservas FOR EACH ROW EXECUTE FUNCTION public.scoreboard_occupancy_guard_candidate();
 CREATE TRIGGER scoreboard_guard_schedule_candidate BEFORE INSERT OR UPDATE ON public.torneo_partidos_programacion FOR EACH ROW EXECUTE FUNCTION public.scoreboard_occupancy_guard_candidate();
 CREATE TRIGGER scoreboard_guard_nations_candidate BEFORE INSERT OR UPDATE ON public.torneo_nations_programacion FOR EACH ROW EXECUTE FUNCTION public.scoreboard_occupancy_guard_candidate();
