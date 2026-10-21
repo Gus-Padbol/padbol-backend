@@ -3,6 +3,7 @@ import { projectVerifiedTournamentRankingTeams } from './lib/verifiedTournamentR
 import { mountTournamentParticipantsRoutes } from './routes/tournamentParticipants.js';
 import {mountTournamentPlanningRoutes, startPlannedTournament} from './routes/tournamentPlanning.js';
 import { canReadQaCatalogRow, pickPlayerSedeSummary } from './lib/qaCatalogVisibility.js';
+import {createTournamentReadVisibility} from './lib/torneos/tournamentReadVisibility.js';
 import { mountQaManualTeamsRoutes } from './routes/qaManualTeams.js';
 import { rankingTournamentEligible } from './lib/torneos/rankingTournamentEligibility.js';
 import { readPublicReservationOccupancy } from './lib/reservasDisponibilidadPublica.js';
@@ -1045,6 +1046,8 @@ async function qaCatalogAudience(req) {
   const { user } = await getAuthenticatedUser(req);
   return user ? {user, role: await resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS)} : null;
 }
+
+app.use('/api/torneos/:torneoId', createTournamentReadVisibility({db:supabaseAdmin,getAudience:qaCatalogAudience,onError:sendHttpError}));
 
 // GET sedes
 app.get('/api/sedes', async (req, res) => {
