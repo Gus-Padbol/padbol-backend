@@ -110,7 +110,7 @@ CREATE OR REPLACE FUNCTION public.scoreboard_resume_candidate(
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE initial public.scoreboard_partidos; current_row public.scoreboard_partidos;
         m public.partidos; r public.user_roles; t public.torneos; c public.canchas;
-        zone text; court_number integer; at_now timestamptz:=clock_timestamp(); local_range tsrange;
+        zone text; court_number integer; at_now timestamptz; local_range tsrange;
         old_schedule jsonb; has_general boolean:=false; has_nations boolean:=false;
 BEGIN
  SELECT * INTO initial FROM public.scoreboard_partidos WHERE id=p_id;
@@ -150,6 +150,14 @@ BEGIN
     OR (t.id IS NOT NULL AND coalesce(c.deporte,'padbol')<>coalesce(t.deporte,'padbol')) THEN
   RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Court not eligible';
  END IF;
+ SELECT * INTO current_row FROM public.scoreboard_partidos WHERE id=p_id FOR UPDATE;
+ IF current_row.updated_at IS DISTINCT FROM p_expected OR current_row.torneo_id IS DISTINCT FROM initial.torneo_id
+    OR current_row.partido_torneo_id IS DISTINCT FROM initial.partido_torneo_id OR current_row.sede_id IS DISTINCT FROM initial.sede_id THEN RETURN NULL; END IF;
+ IF current_row.estado IS DISTINCT FROM 'suspendido' THEN
+  RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Scoreboard is not suspended';
+ END IF;
+ -- Derive the start only after all potentially blocking row locks have completed.
+ at_now:=clock_timestamp();
  court_number:=coalesce(c.orden,(SELECT count(*)::int FROM public.canchas WHERE sede_id=c.sede_id AND id<=c.id));
  SELECT coalesce(nullif(timezone,''),'America/Argentina/Buenos_Aires') INTO zone FROM public.sedes WHERE id=c.sede_id;
  IF coalesce(p_duration_minutes,0) NOT BETWEEN 1 AND 1440 THEN
@@ -196,12 +204,6 @@ BEGIN
     WHERE p.partido_siguiente_id=m.id AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Bracket schedule order conflict';
   END IF;
- END IF;
- SELECT * INTO current_row FROM public.scoreboard_partidos WHERE id=p_id FOR UPDATE;
- IF current_row.updated_at IS DISTINCT FROM p_expected OR current_row.torneo_id IS DISTINCT FROM initial.torneo_id
-    OR current_row.partido_torneo_id IS DISTINCT FROM initial.partido_torneo_id OR current_row.sede_id IS DISTINCT FROM initial.sede_id THEN RETURN NULL; END IF;
- IF current_row.estado IS DISTINCT FROM 'suspendido' THEN
-  RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Scoreboard is not suspended';
  END IF;
  IF has_general THEN
   INSERT INTO public.scoreboard_resumption_history_candidate(scoreboard_id,actor_id,previous_schedule,new_court_id)
