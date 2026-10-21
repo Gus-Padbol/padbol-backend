@@ -94,6 +94,15 @@ $$;
 REVOKE ALL ON FUNCTION public.scoreboard_class_overlap_candidate(tsrange,date,time,time) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.scoreboard_class_overlap_candidate(tsrange,date,time,time) TO service_role;
 
+-- Experimental history: schedule replacements retain their previous snapshot.
+CREATE TABLE IF NOT EXISTS public.scoreboard_resumption_history_candidate (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, scoreboard_id uuid NOT NULL,
+ actor_id uuid NOT NULL, previous_schedule jsonb NOT NULL,
+ new_court_id bigint NOT NULL, resumed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+ALTER TABLE public.scoreboard_resumption_history_candidate ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.scoreboard_resumption_history_candidate FROM PUBLIC,anon,authenticated,service_role;
+
 -- Experimental only: this function does not yet cover every writer of court
 -- occupancy, and refuses matches with historical fixture schedule rows.
 CREATE OR REPLACE FUNCTION public.scoreboard_resume_candidate(
@@ -102,6 +111,7 @@ CREATE OR REPLACE FUNCTION public.scoreboard_resume_candidate(
 DECLARE initial public.scoreboard_partidos; current_row public.scoreboard_partidos;
         m public.partidos; r public.user_roles; t public.torneos; c public.canchas;
         zone text; court_number integer; at_now timestamptz:=clock_timestamp(); local_range tsrange;
+        old_schedule jsonb; has_general boolean:=false; has_nations boolean:=false;
 BEGIN
  SELECT * INTO initial FROM public.scoreboard_partidos WHERE id=p_id;
  IF initial.id IS NULL THEN RETURN NULL; END IF;
@@ -127,9 +137,12 @@ BEGIN
      OR m.estado IS DISTINCT FROM 'suspendido' THEN
    RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Linked match is not suspended';
   END IF;
-  IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion WHERE partido_id=m.id)
-     OR EXISTS(SELECT 1 FROM public.torneo_nations_programacion WHERE partido_id=m.id) THEN
-   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Fixture schedule resumption not implemented';
+  SELECT to_jsonb(s) INTO old_schedule FROM public.torneo_partidos_programacion s WHERE s.partido_id=m.id FOR UPDATE;
+  has_general:=FOUND;
+  PERFORM 1 FROM public.torneo_nations_programacion WHERE partido_id=m.id FOR UPDATE;
+  has_nations:=FOUND;
+  IF has_nations OR (has_general AND t.plan_nations IS NOT NULL) THEN
+   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Nations fixture resumption not implemented';
   END IF;
  END IF;
  SELECT * INTO c FROM public.canchas WHERE id=p_court_id AND sede_id=initial.sede_id FOR UPDATE;
@@ -167,15 +180,39 @@ BEGIN
  OR EXISTS(SELECT 1 FROM public.torneo_nations_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court reserved by another match';
  END IF;
+ IF has_general THEN
+  IF t.fecha_inicio IS NULL OR t.fecha_fin IS NULL OR (at_now AT TIME ZONE zone)::date NOT BETWEEN t.fecha_inicio::date AND t.fecha_fin::date THEN
+   RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Resumption outside tournament dates';
+  END IF;
+  IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion s JOIN public.partidos p ON p.id=s.partido_id
+   WHERE s.torneo_id=t.id AND p.id<>m.id AND p.estado NOT IN('cancelado','suspendido')
+   AND (m.equipo_a_id IN(p.equipo_a_id,p.equipo_b_id) OR m.equipo_b_id IN(p.equipo_a_id,p.equipo_b_id))
+   AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
+   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Team conflict';
+  END IF;
+  IF EXISTS(SELECT 1 FROM public.partidos p JOIN public.torneo_partidos_programacion s ON s.partido_id=p.id
+    WHERE p.id=m.partido_siguiente_id AND s.inicio<at_now+p_duration_minutes*interval '1 minute') OR
+    EXISTS(SELECT 1 FROM public.partidos p JOIN public.torneo_partidos_programacion s ON s.partido_id=p.id
+    WHERE p.partido_siguiente_id=m.id AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
+   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Bracket schedule order conflict';
+  END IF;
+ END IF;
  SELECT * INTO current_row FROM public.scoreboard_partidos WHERE id=p_id FOR UPDATE;
  IF current_row.updated_at IS DISTINCT FROM p_expected OR current_row.torneo_id IS DISTINCT FROM initial.torneo_id
     OR current_row.partido_torneo_id IS DISTINCT FROM initial.partido_torneo_id OR current_row.sede_id IS DISTINCT FROM initial.sede_id THEN RETURN NULL; END IF;
  IF current_row.estado IS DISTINCT FROM 'suspendido' THEN
   RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Scoreboard is not suspended';
  END IF;
+ IF has_general THEN
+  INSERT INTO public.scoreboard_resumption_history_candidate(scoreboard_id,actor_id,previous_schedule,new_court_id)
+  VALUES(p_id,p_actor,old_schedule,c.id);
+  UPDATE public.torneo_partidos_programacion SET court_id=c.id,inicio=at_now,duration_minutes=p_duration_minutes,
+   actor_id=p_actor,updated_at=clock_timestamp() WHERE partido_id=m.id;
+ END IF;
  IF m.id IS NOT NULL THEN
   PERFORM set_config('padbol.nations_rpc','1',true);
-  UPDATE public.partidos SET estado='en_curso',cancha_id=c.id,cancha=court_number::text WHERE id=m.id;
+  UPDATE public.partidos SET estado='en_curso',cancha_id=c.id,cancha=court_number::text,
+   fecha_hora=CASE WHEN has_general THEN at_now AT TIME ZONE 'UTC' ELSE fecha_hora END WHERE id=m.id;
  END IF;
  UPDATE public.scoreboard_partidos SET estado='en_curso',cancha=court_number::text,cronometro_inicio=NULL,cronometro_pausado=true
  WHERE id=p_id RETURNING * INTO current_row;
