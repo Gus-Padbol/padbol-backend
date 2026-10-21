@@ -50,21 +50,27 @@ export function mountAdminValidationAndChannelsRoutes(app, {
     try {
       const auth = await requireSuperAdminUser(req, res, authDeps);
       if (!auth) return;
+      const { data: legacy, error: legacyError } = await supabaseAdmin.from('jugadores_perfil')
+        .select('email').eq('pendiente_validacion', true).is('user_id', null).limit(1);
+      if (legacyError) throw legacyError;
+      if (!Array.isArray(legacy)) throw new Error('Respuesta inválida de validaciones');
+      if (legacy.length) return res.status(503).json({ error: 'Hay perfiles pendientes sin identidad vinculada; no se puede garantizar un listado completo' });
       const rows = [];
-      let lastId = 0;
+      let lastUserId = null;
       while (true) {
-        const { data, error } = await supabaseAdmin.from('jugadores_perfil')
-          .select('id, email, nombre, apellido, alias, user_id, pais, nivel, genero, categoria_validada')
-          .eq('pendiente_validacion', true).gt('id', lastId)
-          .order('id', { ascending: true }).limit(100);
+        let query = supabaseAdmin.from('jugadores_perfil')
+          .select('email, nombre, apellido, alias, user_id, pais, nivel, genero, categoria_validada')
+          .eq('pendiente_validacion', true).not('user_id', 'is', null);
+        if (lastUserId !== null) query = query.gt('user_id', lastUserId);
+        const { data, error } = await query.order('user_id', { ascending: true }).limit(100);
         if (error) throw error;
         if (!Array.isArray(data)) throw new Error('Respuesta inválida de validaciones');
         if (!data.length) break;
         if (rows.length + data.length > 10000) return res.status(503).json({ error: 'Demasiadas validaciones; requiere paginación' });
-        const next = Number(data[data.length - 1].id);
-        if (!Number.isSafeInteger(next) || next <= lastId) throw new Error('Orden inválido de validaciones');
+        const next = data[data.length - 1].user_id;
+        if (typeof next !== 'string' || !next || next === lastUserId) throw new Error('Orden inválido de validaciones');
         rows.push(...data);
-        lastId = next;
+        lastUserId = next;
       }
       const pending = rows.filter((row) => row.categoria_validada !== true && row.categoria_validada !== 1 && !['true', '1'].includes(String(row.categoria_validada ?? '').trim().toLowerCase()));
       return res.json({ validaciones: pending });
