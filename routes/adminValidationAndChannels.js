@@ -1,5 +1,5 @@
 import { buildCrmEmailCapability } from '../lib/crmEmailSender.js';
-import { requireSuperAdminUser } from '../lib/authAccess.js';
+import { requireAdminUser, requireSuperAdminUser } from '../lib/authAccess.js';
 
 const truthy = (value) => String(value || '').trim().toLowerCase() === 'true';
 const present = (value) => String(value || '').trim().length > 0;
@@ -48,7 +48,7 @@ export function mountAdminValidationAndChannelsRoutes(app, {
 
   app.get('/api/admin/validaciones', async (req, res) => {
     try {
-      const auth = await requireSuperAdminUser(req, res, authDeps);
+      const auth = await requireAdminUser(req, res, authDeps);
       if (!auth) return;
       const rows = [];
       let lastId = null;
@@ -56,6 +56,7 @@ export function mountAdminValidationAndChannelsRoutes(app, {
         let query = supabaseAdmin.from('jugadores_perfil')
           .select('id, email, nombre, apellido, alias, user_id, pais, nivel, genero, categoria_validada')
           .eq('pendiente_validacion', true);
+        if (auth.role.rol === 'admin_club') query = query.eq('sede_id', auth.role.sede_id);
         if (lastId !== null) query = query.gt('id', lastId);
         const { data, error } = await query.order('id', { ascending: true }).limit(100);
         if (error) throw error;
@@ -81,7 +82,7 @@ export function mountAdminValidationAndChannelsRoutes(app, {
 
   app.patch('/api/admin/validaciones/perfil/:id', async (req, res) => {
     try {
-      const auth = await requireSuperAdminUser(req, res, authDeps);
+      const auth = await requireAdminUser(req, res, authDeps);
       if (!auth) return;
       const id = String(req.params.id || '');
       if (!/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n) return res.status(400).json({ error: 'Perfil inválido' });
@@ -90,8 +91,10 @@ export function mountAdminValidationAndChannelsRoutes(app, {
       if (accion === 'rechazar' && !cleanReason(motivo)) return res.status(400).json({ error: 'Motivo inválido' });
       if (accion === 'categoria' && !['Principiante','6ta','5ta','4ta','3ra','2da','1ra','Elite'].includes(nivel)) return res.status(400).json({ error: 'Categoría inválida' });
       const changes = { pendiente_validacion: false, ...(accion === 'categoria' ? { nivel } : {}) };
-      const { data, error } = await supabaseAdmin.from('jugadores_perfil').update(changes)
-        .eq('id', id).eq('pendiente_validacion', true).select('id').maybeSingle();
+      let query = supabaseAdmin.from('jugadores_perfil').update(changes)
+        .eq('id', id).eq('pendiente_validacion', true);
+      if (auth.role.rol === 'admin_club') query = query.eq('sede_id', auth.role.sede_id);
+      const { data, error } = await query.select('id').maybeSingle();
       if (error) throw error;
       if (!data) return res.status(409).json({ error: 'La solicitud ya cambió o no existe. Actualizá la lista.' });
       return res.json({ ok: true });
