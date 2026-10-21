@@ -11,7 +11,13 @@ export function isScoreboardTerminated(estado) {
 }
 
 export function assertScoreboardMutable(partido) {
-  if (isScoreboardTerminated(partido?.estado)) {
+  const estado = String(partido?.estado ?? '').trim().toLowerCase();
+  if (estado === 'suspendido' || estado === 'cancelado') {
+    const err = new Error(estado === 'suspendido' ? 'El partido está suspendido' : 'El partido fue cancelado');
+    err.status = 409;
+    throw err;
+  }
+  if (isScoreboardTerminated(estado)) {
     const err = new Error('El partido ya terminó');
     err.status = 400;
     throw err;
