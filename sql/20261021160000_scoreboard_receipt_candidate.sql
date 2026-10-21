@@ -30,7 +30,7 @@ BEGIN
   RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Invalid transition reference'; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended(p_action_id::text,175921));
  SELECT * INTO board FROM public.scoreboard_partidos WHERE id=p_id;
- SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor;
+ SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor FOR SHARE;
  IF board.id IS NULL OR (r.role='super_admin' OR r.role IN ('admin_club','admin_sede') AND r.sede_id=board.sede_id) IS DISTINCT FROM true THEN
   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Scope denied'; END IF;
  params:=jsonb_build_object('expected',p_expected,'court',p_court_id,'duration',p_duration,'reason',p_reason);
@@ -62,7 +62,7 @@ BEGIN
   RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Invalid transition reference'; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended(p_action_id::text,175921));
  SELECT * INTO board FROM public.scoreboard_partidos WHERE id=p_id;
- SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor;
+ SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor FOR SHARE;
  IF board.id IS NULL OR (r.role='super_admin' OR r.role IN ('admin_club','admin_sede') AND r.sede_id=board.sede_id) IS DISTINCT FROM true THEN
   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Scope denied'; END IF;
  SELECT * INTO receipt FROM public.scoreboard_transition_receipt_isolated_candidate WHERE action_id=p_action_id;

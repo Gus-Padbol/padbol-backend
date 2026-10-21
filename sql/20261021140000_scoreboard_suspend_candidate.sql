@@ -33,7 +33,7 @@ DECLARE initial public.scoreboard_partidos; current_row public.scoreboard_partid
 BEGIN
  SELECT * INTO initial FROM public.scoreboard_partidos WHERE id=p_id;
  IF initial.id IS NULL THEN RETURN NULL; END IF;
- SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor;
+ SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor FOR SHARE;
  IF NOT (r.role='super_admin' OR r.role IN('admin_club','admin_sede') AND r.sede_id=initial.sede_id) IS TRUE THEN
   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Scoreboard control scope denied';
  END IF;
@@ -116,7 +116,7 @@ DECLARE initial public.scoreboard_partidos; current_row public.scoreboard_partid
 BEGIN
  SELECT * INTO initial FROM public.scoreboard_partidos WHERE id=p_id;
  IF initial.id IS NULL THEN RETURN NULL; END IF;
- SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor;
+ SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor FOR SHARE;
  IF NOT (r.role='super_admin' OR r.role IN('admin_club','admin_sede') AND r.sede_id=initial.sede_id) IS TRUE THEN
   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Scoreboard control scope denied';
  END IF;
