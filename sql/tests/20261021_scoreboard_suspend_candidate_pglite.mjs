@@ -57,6 +57,13 @@ await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$
 await db.exec(`INSERT INTO clases VALUES (1,8,14,true); INSERT INTO clases_horarios SELECT 1,extract(dow FROM (clock_timestamp()-interval '1 hour') AT TIME ZONE 'UTC')::int,((clock_timestamp()-interval '1 hour') AT TIME ZONE 'UTC')::time,((clock_timestamp()+interval '1 hour') AT TIME ZONE 'UTC')::time`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/conflicting class/); await db.exec('DELETE FROM clases_horarios; DELETE FROM clases');
 
+// The court stays exclusive whether the fixture or the reservation arrives first.
+await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado) VALUES(98,901,8,'pendiente'); INSERT INTO torneo_partidos_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(98,901,14,clock_timestamp(),60)`);
+await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/tournament fixture/);
+await db.exec(`DELETE FROM torneo_partidos_programacion WHERE partido_id=98; INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);
+await assert.rejects(db.exec(`INSERT INTO torneo_partidos_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(98,901,14,clock_timestamp(),60)`),/Court occupied by reservation/);
+await db.exec('DELETE FROM reservas; DELETE FROM partidos WHERE id=98');
+
 // A legacy fixture with unknown status still reserves its court.
 await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado) VALUES(99,901,8,NULL); INSERT INTO torneo_partidos_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(99,901,14,clock_timestamp(),60)`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Court reserved by another match/);
@@ -73,22 +80,22 @@ const resumed=(await db.query('select public.scoreboard_resume_candidate($1,$2,$
 assert.equal(resumed.estado,'en_curso');assert.equal(resumed.cancha,'2');assert.equal(resumed.score_a,40);assert.equal(resumed.cronometro_pausado,true);assert.equal(resumed.cronometro_segundos,78);
 await db.exec(`DELETE FROM scoreboard_partidos WHERE id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'`);
 await assert.rejects(db.exec(`UPDATE scoreboard_partidos SET cancha='1' WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`),/Suspend and resume/);
-await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/Court occupied by resumed scoreboard/);
+await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/Court occupied by (resumed scoreboard|tournament fixture)/);
 await db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,13,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);
-await assert.rejects(db.exec(`UPDATE reservas SET cancha_id=14`),/Court occupied by resumed scoreboard/);
+await assert.rejects(db.exec(`UPDATE reservas SET cancha_id=14`),/Court occupied by (resumed scoreboard|tournament fixture)/);
 await assert.rejects(db.exec(`UPDATE reservas SET cancha=2 WHERE cancha_id=13`),/court identifiers disagree/);
 await assert.rejects(db.exec(`INSERT INTO partidos_abiertos(sede_id,cancha_id,cancha,estado,fecha,hora,duracion_minutos) SELECT 8,13,'2','abierto',(clock_timestamp() AT TIME ZONE 'UTC')::date,(clock_timestamp() AT TIME ZONE 'UTC')::time,60`),/court identifiers disagree/);
-await assert.rejects(db.exec(`INSERT INTO torneo_partidos_programacion VALUES(99,901,14,clock_timestamp(),60,'11111111-1111-4111-8111-111111111111',clock_timestamp())`),/Court occupied by resumed scoreboard/);
-await assert.rejects(db.exec(`INSERT INTO partidos_abiertos(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'abierto',(clock_timestamp() AT TIME ZONE 'UTC')::date,(clock_timestamp() AT TIME ZONE 'UTC')::time,60`),/Court occupied by resumed scoreboard/);
+await assert.rejects(db.exec(`INSERT INTO torneo_partidos_programacion VALUES(99,901,14,clock_timestamp(),60,'11111111-1111-4111-8111-111111111111',clock_timestamp())`),/Court occupied by (resumed scoreboard|tournament fixture)/);
+await assert.rejects(db.exec(`INSERT INTO partidos_abiertos(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'abierto',(clock_timestamp() AT TIME ZONE 'UTC')::date,(clock_timestamp() AT TIME ZONE 'UTC')::time,60`),/Court occupied by (resumed scoreboard|tournament fixture)/);
 await db.exec(`INSERT INTO clases VALUES (7,8,14,true)`);
-await assert.rejects(db.exec(`INSERT INTO clases_horarios SELECT 7,extract(dow FROM clock_timestamp() AT TIME ZONE 'UTC')::int,(clock_timestamp() AT TIME ZONE 'UTC')::time,((clock_timestamp()+interval '1 hour') AT TIME ZONE 'UTC')::time`),/Court occupied by resumed scoreboard/);
+await assert.rejects(db.exec(`INSERT INTO clases_horarios SELECT 7,extract(dow FROM clock_timestamp() AT TIME ZONE 'UTC')::int,(clock_timestamp() AT TIME ZONE 'UTC')::time,((clock_timestamp()+interval '1 hour') AT TIME ZONE 'UTC')::time`),/Court occupied by (resumed scoreboard|tournament fixture)/);
 
 assert.equal((await db.query('select cancha from partidos where id=5')).rows[0].cancha,'2');
 assert.equal((await db.query('select court_id from torneo_partidos_programacion where partido_id=5')).rows[0].court_id,14);
 assert.equal((await db.query('select previous_schedule from scoreboard_resumption_history_candidate')).rows[0].previous_schedule.court_id,13);
 
 await db.exec(`UPDATE scoreboard_court_occupancy_candidate SET starts_at=clock_timestamp()-interval '2 hours',ends_at=clock_timestamp()-interval '1 hour'`);
-await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char((clock_timestamp()+interval '7 days') AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/Court occupied by resumed scoreboard/);
+await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char((clock_timestamp()+interval '7 days') AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/Court occupied by (resumed scoreboard|tournament fixture)/);
 await db.exec(`UPDATE scoreboard_partidos SET estado='suspendido' WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`);
 await assert.rejects(db.exec(`UPDATE scoreboard_partidos SET estado='en_curso' WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`),/Use safe scoreboard resumption/);
 await db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char((clock_timestamp()+interval '7 days') AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);

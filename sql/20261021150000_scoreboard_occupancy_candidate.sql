@@ -53,6 +53,13 @@ BEGIN
   IF NEW.cancha IS NOT NULL AND NEW.cancha IS DISTINCT FROM court_no THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Reservation court identifiers disagree'; END IF;
   local_period:=public.scoreboard_local_interval_candidate(NEW.fecha,coalesce(nullif(trim(NEW.hora_inicio),''),nullif(trim(NEW.hora),'')),CASE WHEN NEW.duracion_minutos>=15 THEN NEW.duracion_minutos ELSE 90 END);
   IF local_period IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Reservation interval invalid'; END IF;
+  -- Also protect fixtures created by paths that store only a court ID.
+  IF EXISTS(SELECT 1 FROM (SELECT partido_id,court_id,inicio,duration_minutes FROM public.torneo_partidos_programacion UNION ALL SELECT partido_id,court_id,inicio,duration_minutes FROM public.torneo_nations_programacion) f
+    LEFT JOIN public.partidos p ON p.id=f.partido_id WHERE f.court_id=court AND coalesce(p.estado,'') NOT IN ('cancelado','suspendido','finalizado')
+    AND (f.inicio IS NULL OR coalesce(f.duration_minutes,0) NOT BETWEEN 1 AND 1440
+      OR tsrange(f.inicio AT TIME ZONE zone,(f.inicio+f.duration_minutes*interval '1 minute') AT TIME ZONE zone,'[)') && local_period)) THEN
+   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court occupied by tournament fixture';
+  END IF;
   IF EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate o JOIN public.scoreboard_partidos s ON s.id=o.scoreboard_id
     WHERE o.sede_id=venue AND o.court_id=court AND s.estado='en_curso'
       AND tsrange(o.starts_at AT TIME ZONE zone,(CASE WHEN o.ends_at<=clock_timestamp() THEN 'infinity'::timestamptz ELSE o.ends_at END) AT TIME ZONE zone,'[)') && local_period) THEN
@@ -104,6 +111,19 @@ BEGIN
   court:=NEW.court_id; own_match:=NEW.partido_id;
   IF NEW.inicio IS NULL OR coalesce(NEW.duration_minutes,0) NOT BETWEEN 1 AND 1440 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Schedule interval invalid'; END IF;
   period:=tstzrange(NEW.inicio,NEW.inicio+NEW.duration_minutes*interval '1 minute','[)');
+  SELECT c.sede_id,coalesce(c.orden,(SELECT count(*)::int FROM public.canchas x WHERE x.sede_id=c.sede_id AND x.id<=c.id)),coalesce(nullif(v.timezone,''),'America/Argentina/Buenos_Aires')
+    INTO venue,court_no,zone FROM public.canchas c JOIN public.sedes v ON v.id=c.sede_id WHERE c.id=court;
+  IF venue IS NULL OR zone IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Fixture court ambiguous'; END IF;
+  IF ((NEW.inicio+NEW.duration_minutes*interval '1 minute') AT TIME ZONE zone) IS DISTINCT FROM (NEW.inicio AT TIME ZONE zone)+NEW.duration_minutes*interval '1 minute' THEN
+   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Fixture crosses timezone transition';
+  END IF;
+  local_period:=tsrange(NEW.inicio AT TIME ZONE zone,(NEW.inicio+NEW.duration_minutes*interval '1 minute') AT TIME ZONE zone,'[)');
+  IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=venue OR (b.sede_id IS NULL AND b.sede=(SELECT nombre FROM public.sedes WHERE id=venue)))
+    AND (b.cancha_id=court OR b.cancha=court_no) AND lower(coalesce(b.estado,'')) NOT IN ('cancelada','cancelado')
+    AND (public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) IS NULL
+      OR public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) && local_period)) THEN
+   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court occupied by reservation';
+  END IF;
   IF EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate o JOIN public.scoreboard_partidos s ON s.id=o.scoreboard_id
      WHERE o.court_id=court AND s.estado='en_curso' AND s.partido_torneo_id IS DISTINCT FROM own_match
        AND tstzrange(o.starts_at,CASE WHEN o.ends_at<=clock_timestamp() THEN 'infinity'::timestamptz ELSE o.ends_at END,'[)') && period) THEN
