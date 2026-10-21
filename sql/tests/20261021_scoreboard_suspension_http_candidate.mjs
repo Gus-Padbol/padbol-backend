@@ -6,19 +6,19 @@ import { installScoreboardSuspensionRoutesCandidate } from '../../src/scoreboard
 const db = new PGlite();
 await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
 CREATE TABLE user_roles(user_id uuid PRIMARY KEY, role text, sede_id bigint);
-CREATE TABLE torneos(id bigint PRIMARY KEY,sede_id bigint,deporte text,plan_nations jsonb,fecha_inicio date,fecha_fin date);
-CREATE TABLE partidos(id bigint PRIMARY KEY,torneo_id bigint,sede_id bigint,estado text,equipo_a_id bigint,equipo_b_id bigint,cancha_id bigint,cancha text,fecha_hora timestamp,partido_siguiente_id bigint,resultado jsonb,ganador_equipo_id bigint);
+CREATE TABLE torneos(id bigint PRIMARY KEY,sede_id bigint,deporte text,plan_nations jsonb,fecha_inicio date,fecha_fin date,updated_at timestamptz);
+CREATE TABLE partidos(id bigint PRIMARY KEY,torneo_id bigint,sede_id bigint,estado text,equipo_a_id bigint,equipo_b_id bigint,cancha_id bigint,cancha text,fecha_hora timestamp,partido_siguiente_id bigint,resultado jsonb,ganador_equipo_id bigint,bracket_round integer,bracket_position integer);
 CREATE TABLE sedes(id bigint PRIMARY KEY,nombre text,timezone text);
 CREATE TABLE reservas(id bigint,sede_id bigint,sede text,cancha int,cancha_id int,estado text,fecha text,hora text,hora_inicio text,duracion_minutos int, nota text);
 CREATE TABLE partidos_abiertos(id bigint,sede_id bigint,cancha text,cancha_id int,estado text,fecha date,hora time,duracion_minutos int);
 CREATE TABLE clases(id bigint,sede_id bigint,cancha_id bigint,activo boolean); CREATE TABLE clases_horarios(clase_id bigint,dia_semana int,hora_inicio time,hora_fin time);
 CREATE TABLE torneo_partidos_programacion(partido_id bigint,torneo_id bigint,court_id bigint,inicio timestamptz,duration_minutes int,actor_id uuid,updated_at timestamptz);
-CREATE TABLE torneo_nations_programacion(partido_id bigint,court_id bigint,inicio timestamptz,duration_minutes int);
+CREATE TABLE torneo_nations_programacion(partido_id bigint,court_id bigint,inicio timestamptz,duration_minutes int,torneo_id bigint,timezone text,actor_id uuid,revision bigint,updated_at timestamptz); CREATE TABLE torneo_nations_planes(torneo_id bigint PRIMARY KEY,plan jsonb,updated_at timestamptz);
 CREATE TABLE canchas(id bigint PRIMARY KEY,sede_id bigint,orden int,estado text,deporte text);
 CREATE TABLE equipos(id bigint PRIMARY KEY);
 CREATE TABLE scoreboard_partidos(id uuid PRIMARY KEY,sede_id bigint,torneo_id bigint,partido_torneo_id bigint,partido_abierto_id bigint,reserva_id bigint,cancha text,estado text,updated_at timestamptz,cronometro_inicio timestamptz,cronometro_pausado boolean,cronometro_segundos integer,score_a int,games_a int,saque_actual text,historial_puntos jsonb,control_token_hash text);
 INSERT INTO user_roles VALUES ('11111111-1111-4111-8111-111111111111','admin_club',8),('22222222-2222-4222-8222-222222222222','admin_club',9);
-INSERT INTO torneos VALUES (901,8,'padbol',NULL,current_date-1,current_date+1); INSERT INTO equipos VALUES(1),(2); INSERT INTO partidos VALUES(5,901,8,'en_curso',1,2,13,'1',NULL,NULL,NULL,NULL);
+INSERT INTO torneos VALUES (901,8,'padbol',NULL,current_date-1,current_date+1,NULL); INSERT INTO equipos VALUES(1),(2); INSERT INTO partidos VALUES(5,901,8,'en_curso',1,2,13,'1',NULL,NULL,NULL,NULL,NULL,NULL);
 INSERT INTO sedes VALUES(8,'QA','UTC'); INSERT INTO canchas VALUES(13,8,1,'activa','padbol'),(14,8,2,'activa','padbol');
 INSERT INTO scoreboard_partidos VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',8,901,5,NULL,NULL,'1','en_curso','2026-10-21','2026-10-21',true,78,40,3,'B','[{"punto":1}]','private');`);
 

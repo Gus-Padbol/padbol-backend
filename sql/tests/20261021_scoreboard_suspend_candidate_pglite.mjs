@@ -4,19 +4,19 @@ import assert from 'node:assert/strict';
 const db = new PGlite();
 await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
 CREATE TABLE user_roles(user_id uuid PRIMARY KEY, role text, sede_id bigint);
-CREATE TABLE torneos(id bigint PRIMARY KEY,sede_id bigint,deporte text,plan_nations jsonb,fecha_inicio date,fecha_fin date);
-CREATE TABLE partidos(id bigint PRIMARY KEY,torneo_id bigint,sede_id bigint,estado text,equipo_a_id bigint,equipo_b_id bigint,cancha_id bigint,cancha text,fecha_hora timestamp,partido_siguiente_id bigint,resultado jsonb,ganador_equipo_id bigint);
+CREATE TABLE torneos(id bigint PRIMARY KEY,sede_id bigint,deporte text,plan_nations jsonb,fecha_inicio date,fecha_fin date,updated_at timestamptz);
+CREATE TABLE partidos(id bigint PRIMARY KEY,torneo_id bigint,sede_id bigint,estado text,equipo_a_id bigint,equipo_b_id bigint,cancha_id bigint,cancha text,fecha_hora timestamp,partido_siguiente_id bigint,resultado jsonb,ganador_equipo_id bigint,bracket_round integer,bracket_position integer);
 CREATE TABLE sedes(id bigint PRIMARY KEY,nombre text,timezone text);
 CREATE TABLE reservas(id bigint,sede_id bigint,sede text,cancha int,cancha_id int,estado text,fecha text,hora text,hora_inicio text,duracion_minutos int, nota text);
 CREATE TABLE partidos_abiertos(id bigint,sede_id bigint,cancha text,cancha_id int,estado text,fecha date,hora time,duracion_minutos int);
 CREATE TABLE clases(id bigint,sede_id bigint,cancha_id bigint,activo boolean); CREATE TABLE clases_horarios(clase_id bigint,dia_semana int,hora_inicio time,hora_fin time);
 CREATE TABLE torneo_partidos_programacion(partido_id bigint,torneo_id bigint,court_id bigint,inicio timestamptz,duration_minutes int,actor_id uuid,updated_at timestamptz);
-CREATE TABLE torneo_nations_programacion(partido_id bigint,court_id bigint,inicio timestamptz,duration_minutes int);
+CREATE TABLE torneo_nations_programacion(partido_id bigint,court_id bigint,inicio timestamptz,duration_minutes int,torneo_id bigint,timezone text,actor_id uuid,revision bigint,updated_at timestamptz); CREATE TABLE torneo_nations_planes(torneo_id bigint PRIMARY KEY,plan jsonb,updated_at timestamptz);
 CREATE TABLE canchas(id bigint PRIMARY KEY,sede_id bigint,orden int,estado text,deporte text);
 CREATE TABLE equipos(id bigint PRIMARY KEY);
 CREATE TABLE scoreboard_partidos(id uuid PRIMARY KEY,sede_id bigint,torneo_id bigint,partido_torneo_id bigint,partido_abierto_id bigint,reserva_id bigint,cancha text,estado text,updated_at timestamptz,cronometro_inicio timestamptz,cronometro_pausado boolean,cronometro_segundos integer,score_a int,games_a int,saque_actual text,historial_puntos jsonb,control_token_hash text);
 INSERT INTO user_roles VALUES ('11111111-1111-4111-8111-111111111111','admin_club',8),('22222222-2222-4222-8222-222222222222','admin_club',9);
-INSERT INTO torneos VALUES (901,8,'padbol',NULL,current_date-1,current_date+1); INSERT INTO equipos VALUES(1),(2); INSERT INTO partidos VALUES(5,901,8,'en_curso',1,2,13,'1',NULL,NULL,NULL,NULL);
+INSERT INTO torneos VALUES (901,8,'padbol',NULL,current_date-1,current_date+1,NULL); INSERT INTO equipos VALUES(1),(2); INSERT INTO partidos VALUES(5,901,8,'en_curso',1,2,13,'1',NULL,NULL,NULL,NULL,NULL,NULL);
 INSERT INTO sedes VALUES(8,'QA','UTC'); INSERT INTO canchas VALUES(13,8,1,'activa','padbol'),(14,8,2,'activa','padbol');
 INSERT INTO scoreboard_partidos VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',8,901,5,NULL,NULL,'1','en_curso','2026-10-21','2026-10-21',true,78,40,3,'B','[{"punto":1}]','private');`);
 await db.exec(`INSERT INTO reservas(id,nota) VALUES(404,'legacy')`);
@@ -38,8 +38,34 @@ assert.equal((await db.query('select estado from partidos where id=5')).rows[0].
 await db.exec(`INSERT INTO scoreboard_partidos(id,sede_id,cancha,estado) VALUES('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',8,'1','pendiente');`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21','22222222-2222-4222-8222-222222222222',14,90]),/scope denied/);
 await db.exec(`INSERT INTO torneo_nations_programacion(partido_id,court_id,inicio,duration_minutes) VALUES(5,13,clock_timestamp(),90)`);
-await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Nations fixture resumption not implemented/);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Inconsistent fixture type/);
 await db.exec(`DELETE FROM torneo_nations_programacion WHERE partido_id=5`);
+// Nations reactivation moves the original fixture, advances both plan
+// revisions, keeps the score and records the prior schedule atomically.
+await db.exec(`UPDATE torneos SET plan_nations='{"revision":3}' WHERE id=901; INSERT INTO torneo_nations_planes VALUES(901,'{"revision":3,"config":{"rules":{"minimum_rest_minutes":15}}}',now()); INSERT INTO torneo_nations_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes,timezone,actor_id,revision,updated_at) VALUES(5,901,13,clock_timestamp()-interval '1 day',90,'UTC','11111111-1111-4111-8111-111111111111',3,now());`);
+// Inconsistent plans and incomplete semifinals fail without changing the score.
+await db.exec(`UPDATE torneo_nations_programacion SET torneo_id=902 WHERE partido_id=5`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Inconsistent Nations schedule tournament/);
+await db.exec(`UPDATE torneo_nations_programacion SET torneo_id=901 WHERE partido_id=5; UPDATE torneos SET plan_nations='{"revision":2}' WHERE id=901`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Nations plan revision inconsistent/);
+await db.exec(`UPDATE torneos SET plan_nations='{"revision":3}' WHERE id=901; UPDATE partidos SET bracket_round=3, bracket_position=2 WHERE id=5; UPDATE torneo_nations_planes SET plan=jsonb_set(plan,'{config,rules,third_place_match}','true'::jsonb,true) WHERE torneo_id=901`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Third place requires both semifinals and rest/);
+await db.exec(`UPDATE partidos SET bracket_round=NULL, bracket_position=NULL WHERE id=5; UPDATE torneo_nations_planes SET plan=jsonb_set(plan,'{config,rules,third_place_match}','false'::jsonb,true) WHERE torneo_id=901`);
+// Reject a team clash and protect semifinal/third-place order before writing.
+await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado,equipo_a_id,bracket_round,bracket_position) VALUES(76,901,8,'pendiente',1,1,1); INSERT INTO torneo_nations_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(76,901,13,clock_timestamp()+interval '5 minutes',60)`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Team conflict/);
+await db.exec(`DELETE FROM torneo_nations_programacion WHERE partido_id=76; DELETE FROM partidos WHERE id=76; UPDATE partidos SET bracket_round=2 WHERE id=5; UPDATE torneo_nations_planes SET plan=jsonb_set(plan,'{config,rules,third_place_match}','true'::jsonb,true) WHERE torneo_id=901; INSERT INTO partidos(id,torneo_id,sede_id,estado,bracket_round,bracket_position) VALUES(77,901,8,'pendiente',3,2); INSERT INTO torneo_nations_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(77,901,13,clock_timestamp()+interval '10 minutes',60)`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Third place begins before semifinal and rest/);
+await db.exec(`DELETE FROM torneo_nations_programacion WHERE partido_id=77; DELETE FROM partidos WHERE id=77; UPDATE partidos SET bracket_round=NULL WHERE id=5; UPDATE torneo_nations_planes SET plan=jsonb_set(plan,'{config,rules,third_place_match}','false'::jsonb,true) WHERE torneo_id=901`);
+await db.exec('BEGIN');
+const nations=(await db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5) as result',[id,'2026-10-21',actor,14,90])).rows[0].result;
+assert.equal(nations.estado,'en_curso');assert.equal(nations.score_a,40);assert.equal(nations.cancha,'2');
+assert.equal((await db.query('select court_id from torneo_nations_programacion where partido_id=5')).rows[0].court_id,14);
+assert.equal((await db.query("select (plan->>'revision')::int as revision from torneo_nations_planes where torneo_id=901")).rows[0].revision,4);
+assert.equal((await db.query("select (plan_nations->>'revision')::int as revision from torneos where id=901")).rows[0].revision,4);
+assert.equal((await db.query('select count(*)::int as n from scoreboard_resumption_history_candidate')).rows[0].n,1);
+await db.exec('ROLLBACK; DELETE FROM torneo_nations_programacion; DELETE FROM torneo_nations_planes; UPDATE torneos SET plan_nations=NULL WHERE id=901');
+
 await db.exec(`INSERT INTO torneo_partidos_programacion VALUES(5,901,13,clock_timestamp()-interval '1 day',90,'11111111-1111-4111-8111-111111111111',clock_timestamp())`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,13,90]),/Court screen occupied/);
 const afterFailure=(await db.query('select estado,cancha from partidos where id=5')).rows[0]; assert.equal(afterFailure.estado,'suspendido'); assert.equal(afterFailure.cancha,'1');
@@ -68,10 +94,10 @@ await db.exec(`DELETE FROM torneo_partidos_programacion WHERE partido_id=98; INS
 await assert.rejects(db.exec(`INSERT INTO torneo_partidos_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(98,901,14,clock_timestamp(),60)`),/Court occupied by reservation/);
 await db.exec('DELETE FROM reservas; DELETE FROM partidos WHERE id=98');
 // Apply the same reciprocal check to Nations programming.
-await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado) VALUES(97,901,8,'pendiente'); INSERT INTO torneo_nations_programacion VALUES(97,14,clock_timestamp(),60)`);
+await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado) VALUES(97,901,8,'pendiente'); INSERT INTO torneo_nations_programacion(partido_id,court_id,inicio,duration_minutes,torneo_id) VALUES(97,14,clock_timestamp(),60,901)`);
 await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/tournament fixture/);
 await db.exec(`DELETE FROM torneo_nations_programacion WHERE partido_id=97; INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);
-await assert.rejects(db.exec(`INSERT INTO torneo_nations_programacion VALUES(97,14,clock_timestamp(),60)`),/Court occupied by reservation/);
+await assert.rejects(db.exec(`INSERT INTO torneo_nations_programacion(partido_id,court_id,inicio,duration_minutes,torneo_id) VALUES(97,14,clock_timestamp(),60,901)`),/Court occupied by reservation/);
 await db.exec('DELETE FROM reservas; DELETE FROM partidos WHERE id=97');
 
 // A dated historical booking with no time does not block years later, while

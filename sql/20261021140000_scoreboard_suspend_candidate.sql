@@ -112,7 +112,7 @@ CREATE OR REPLACE FUNCTION public.scoreboard_resume_candidate(
 DECLARE initial public.scoreboard_partidos; current_row public.scoreboard_partidos;
         m public.partidos; r public.user_roles; t public.torneos; c public.canchas;
         zone text; court_number integer; at_now timestamptz; local_range tsrange;
-        old_schedule jsonb; has_general boolean:=false; has_nations boolean:=false;
+        old_schedule jsonb; nations_schedule jsonb; nations_plan jsonb; new_revision bigint; min_rest integer:=0; has_general boolean:=false; has_nations boolean:=false;
 BEGIN
  SELECT * INTO initial FROM public.scoreboard_partidos WHERE id=p_id;
  IF initial.id IS NULL THEN RETURN NULL; END IF;
@@ -140,10 +140,30 @@ BEGIN
   END IF;
   SELECT to_jsonb(s) INTO old_schedule FROM public.torneo_partidos_programacion s WHERE s.partido_id=m.id FOR UPDATE;
   has_general:=FOUND;
-  PERFORM 1 FROM public.torneo_nations_programacion WHERE partido_id=m.id FOR UPDATE;
+  SELECT to_jsonb(s) INTO nations_schedule FROM public.torneo_nations_programacion s WHERE s.partido_id=m.id FOR UPDATE;
   has_nations:=FOUND;
-  IF has_nations OR (has_general AND t.plan_nations IS NOT NULL) THEN
-   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Nations fixture resumption not implemented';
+  IF (has_general AND has_nations) OR (has_general AND t.plan_nations IS NOT NULL) OR (has_nations AND t.plan_nations IS NULL) THEN
+   RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Inconsistent fixture type';
+  END IF;
+  IF t.plan_nations IS NOT NULL AND NOT has_nations THEN
+   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Nations match requires an existing schedule';
+  END IF;
+  IF has_nations THEN
+   IF nations_schedule->>'torneo_id' IS DISTINCT FROM t.id::text THEN
+    RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Inconsistent Nations schedule tournament';
+   END IF;
+   old_schedule:=nations_schedule;
+   SELECT plan INTO nations_plan FROM public.torneo_nations_planes WHERE torneo_id=t.id FOR UPDATE;
+   IF nations_plan IS NULL OR coalesce(nations_plan->>'revision','') !~ '^\d{1,15}$'
+      OR coalesce(t.plan_nations->>'revision','') IS DISTINCT FROM nations_plan->>'revision' THEN
+    RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Nations plan revision inconsistent';
+   END IF;
+   new_revision:=(nations_plan->>'revision')::bigint+1;
+   IF coalesce(nations_plan#>>'{config,rules,minimum_rest_minutes}','0') !~ '^\d{1,4}$' THEN
+    RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Invalid Nations rest rule';
+   END IF;
+   min_rest:=coalesce((nations_plan#>>'{config,rules,minimum_rest_minutes}')::integer,0);
+   IF min_rest>1440 THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Invalid Nations rest rule'; END IF;
   END IF;
  END IF;
  SELECT * INTO c FROM public.canchas WHERE id=p_court_id AND sede_id=initial.sede_id FOR UPDATE;
@@ -196,21 +216,36 @@ BEGIN
  OR EXISTS(SELECT 1 FROM public.torneo_nations_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND coalesce(p.estado,'') NOT IN('cancelado','suspendido','finalizado') AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court reserved by another match';
  END IF;
- IF has_general THEN
+ IF has_general OR has_nations THEN
+  IF has_nations AND p_duration_minutes>720 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Nations duration exceeds limit'; END IF;
   IF t.fecha_inicio IS NULL OR t.fecha_fin IS NULL OR (at_now AT TIME ZONE zone)::date NOT BETWEEN t.fecha_inicio::date AND t.fecha_fin::date THEN
    RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Resumption outside tournament dates';
   END IF;
-  IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion s JOIN public.partidos p ON p.id=s.partido_id
+  IF EXISTS(SELECT 1 FROM (SELECT partido_id,torneo_id,inicio,duration_minutes FROM public.torneo_partidos_programacion UNION ALL SELECT partido_id,torneo_id,inicio,duration_minutes FROM public.torneo_nations_programacion) s JOIN public.partidos p ON p.id=s.partido_id
    WHERE s.torneo_id=t.id AND p.id<>m.id AND coalesce(p.estado,'') NOT IN('cancelado','suspendido')
    AND (m.equipo_a_id IN(p.equipo_a_id,p.equipo_b_id) OR m.equipo_b_id IN(p.equipo_a_id,p.equipo_b_id))
-   AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
+   AND s.inicio<at_now+(p_duration_minutes+min_rest)*interval '1 minute' AND at_now<s.inicio+(s.duration_minutes+min_rest)*interval '1 minute') THEN
    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Team conflict';
   END IF;
-  IF EXISTS(SELECT 1 FROM public.partidos p JOIN public.torneo_partidos_programacion s ON s.partido_id=p.id
-    WHERE p.id=m.partido_siguiente_id AND s.inicio<at_now+p_duration_minutes*interval '1 minute') OR
-    EXISTS(SELECT 1 FROM public.partidos p JOIN public.torneo_partidos_programacion s ON s.partido_id=p.id
-    WHERE p.partido_siguiente_id=m.id AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
+  IF EXISTS(SELECT 1 FROM public.partidos p JOIN (SELECT partido_id,inicio,duration_minutes FROM public.torneo_partidos_programacion UNION ALL SELECT partido_id,inicio,duration_minutes FROM public.torneo_nations_programacion) s ON s.partido_id=p.id
+    WHERE p.id=m.partido_siguiente_id AND s.inicio<at_now+(p_duration_minutes+min_rest)*interval '1 minute') OR
+    EXISTS(SELECT 1 FROM public.partidos p JOIN (SELECT partido_id,inicio,duration_minutes FROM public.torneo_partidos_programacion UNION ALL SELECT partido_id,inicio,duration_minutes FROM public.torneo_nations_programacion) s ON s.partido_id=p.id
+    WHERE p.partido_siguiente_id=m.id AND at_now<s.inicio+(s.duration_minutes+min_rest)*interval '1 minute') THEN
    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Bracket schedule order conflict';
+  END IF;
+  IF has_nations AND nations_plan#>'{config,rules,third_place_match}'='true'::jsonb THEN
+   IF m.bracket_round=3 AND m.bracket_position=2 AND ((SELECT count(*) FROM public.partidos semi WHERE semi.torneo_id=t.id AND semi.bracket_round=2) <> 2 OR EXISTS(
+    SELECT 1 FROM public.partidos semi LEFT JOIN public.torneo_nations_programacion sched ON sched.partido_id=semi.id
+    WHERE semi.torneo_id=t.id AND semi.bracket_round=2 AND
+     (sched.partido_id IS NULL OR at_now<sched.inicio+(sched.duration_minutes+min_rest)*interval '1 minute'))) THEN
+    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Third place requires both semifinals and rest';
+   END IF;
+   IF m.bracket_round=2 AND EXISTS(
+    SELECT 1 FROM public.partidos bronze JOIN public.torneo_nations_programacion sched ON sched.partido_id=bronze.id
+    WHERE bronze.torneo_id=t.id AND bronze.bracket_round=3 AND bronze.bracket_position=2
+     AND sched.inicio<at_now+(p_duration_minutes+min_rest)*interval '1 minute') THEN
+    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Third place begins before semifinal and rest';
+   END IF;
   END IF;
  END IF;
  IF has_general THEN
@@ -219,10 +254,19 @@ BEGIN
   UPDATE public.torneo_partidos_programacion SET court_id=c.id,inicio=at_now,duration_minutes=p_duration_minutes,
    actor_id=p_actor,updated_at=clock_timestamp() WHERE partido_id=m.id;
  END IF;
+ IF has_nations THEN
+  PERFORM set_config('padbol.nations_rpc','1',true);
+  INSERT INTO public.scoreboard_resumption_history_candidate(scoreboard_id,actor_id,previous_schedule,new_court_id)
+   VALUES(p_id,p_actor,old_schedule,c.id);
+  UPDATE public.torneo_nations_programacion SET court_id=c.id,inicio=at_now,duration_minutes=p_duration_minutes,
+   actor_id=p_actor,revision=new_revision,updated_at=clock_timestamp() WHERE partido_id=m.id;
+  UPDATE public.torneo_nations_planes SET plan=jsonb_set(plan,'{revision}',to_jsonb(new_revision),true),updated_at=clock_timestamp() WHERE torneo_id=t.id;
+  UPDATE public.torneos SET plan_nations=jsonb_set(plan_nations,'{revision}',to_jsonb(new_revision),true),updated_at=clock_timestamp() WHERE id=t.id;
+ END IF;
  IF m.id IS NOT NULL THEN
   PERFORM set_config('padbol.nations_rpc','1',true);
   UPDATE public.partidos SET estado='en_curso',cancha_id=c.id,cancha=court_number::text,
-   fecha_hora=CASE WHEN has_general THEN at_now AT TIME ZONE 'UTC' ELSE fecha_hora END WHERE id=m.id;
+   fecha_hora=CASE WHEN has_general OR has_nations THEN at_now AT TIME ZONE 'UTC' ELSE fecha_hora END WHERE id=m.id;
  END IF;
  INSERT INTO public.scoreboard_court_occupancy_candidate(scoreboard_id,sede_id,court_id,starts_at,ends_at)
  VALUES(p_id,c.sede_id,c.id,at_now,at_now+p_duration_minutes*interval '1 minute')
