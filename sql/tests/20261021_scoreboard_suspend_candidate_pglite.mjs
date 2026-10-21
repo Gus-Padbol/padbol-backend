@@ -52,6 +52,8 @@ await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$
 
 const resumed=(await db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5) as result',[id,'2026-10-21',actor,14,90])).rows[0].result;
 assert.equal(resumed.estado,'en_curso');assert.equal(resumed.cancha,'2');assert.equal(resumed.score_a,40);assert.equal(resumed.cronometro_pausado,true);assert.equal(resumed.cronometro_segundos,78);
+await db.exec(`DELETE FROM scoreboard_partidos WHERE id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'`);
+await assert.rejects(db.exec(`UPDATE scoreboard_partidos SET cancha='1' WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`),/Suspend and resume/);
 await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/Court occupied by resumed scoreboard/);
 await db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,13,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);
 await assert.rejects(db.exec(`UPDATE reservas SET cancha_id=14`),/Court occupied by resumed scoreboard/);

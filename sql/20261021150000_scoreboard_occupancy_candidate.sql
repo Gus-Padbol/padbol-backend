@@ -115,3 +115,21 @@ CREATE TRIGGER scoreboard_guard_nations_candidate BEFORE INSERT OR UPDATE ON pub
 CREATE TRIGGER scoreboard_guard_open_candidate BEFORE INSERT OR UPDATE ON public.partidos_abiertos FOR EACH ROW EXECUTE FUNCTION public.scoreboard_occupancy_guard_candidate();
 CREATE TRIGGER scoreboard_guard_classes_candidate BEFORE INSERT OR UPDATE ON public.clases FOR EACH ROW EXECUTE FUNCTION public.scoreboard_occupancy_guard_candidate();
 CREATE TRIGGER scoreboard_guard_class_hours_candidate BEFORE INSERT OR UPDATE ON public.clases_horarios FOR EACH ROW EXECUTE FUNCTION public.scoreboard_occupancy_guard_candidate();
+
+-- A resumed marker's recorded occupancy must not be bypassed by a generic
+-- scoreboard edit; reassignment goes through suspension and resumption.
+CREATE OR REPLACE FUNCTION public.scoreboard_guard_resumed_edit_candidate()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ IF (NEW.estado,NEW.sede_id,NEW.cancha,NEW.partido_torneo_id) IS NOT DISTINCT FROM
+    (OLD.estado,OLD.sede_id,OLD.cancha,OLD.partido_torneo_id) THEN RETURN NEW; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('manual-booking-cross-occupancy-v1',0));
+ IF OLD.estado='en_curso' AND NEW.estado='en_curso'
+    AND (NEW.sede_id,NEW.cancha,NEW.partido_torneo_id) IS DISTINCT FROM (OLD.sede_id,OLD.cancha,OLD.partido_torneo_id)
+    AND EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate WHERE scoreboard_id=OLD.id) THEN
+  RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Suspend and resume to change a resumed court';
+ END IF;
+ RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.scoreboard_guard_resumed_edit_candidate() FROM PUBLIC,anon,authenticated,service_role;
+CREATE TRIGGER scoreboard_guard_resumed_edit_candidate BEFORE UPDATE ON public.scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION public.scoreboard_guard_resumed_edit_candidate();
