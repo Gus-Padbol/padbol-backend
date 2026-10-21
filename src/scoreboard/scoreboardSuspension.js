@@ -1,3 +1,5 @@
+import { isCronometroRunning } from '../../utils/scoreboardLogic.js';
+
 // Domain validation only. A caller must commit these transitions with the
 // linked match and court availability in a single transaction.
 function transitionError(message) {
@@ -10,7 +12,7 @@ export function buildSuspension(partido, now = Date.now()) {
   }
   if (!Number.isFinite(now)) throw new TypeError('Invalid suspension time');
   const start = partido.cronometro_inicio ? Date.parse(partido.cronometro_inicio) : NaN;
-  const elapsed = Number.isFinite(start) && !partido.cronometro_pausado
+  const elapsed = Number.isFinite(start) && isCronometroRunning(partido)
     ? Math.max(0, Math.floor((now - start) / 1000)) : 0;
   const accumulated = Number(partido.cronometro_segundos || 0);
   if (!Number.isFinite(accumulated) || accumulated < 0) {
