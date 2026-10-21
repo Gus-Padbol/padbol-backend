@@ -63,6 +63,12 @@ await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fech
 await db.exec(`DELETE FROM torneo_partidos_programacion WHERE partido_id=98; INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);
 await assert.rejects(db.exec(`INSERT INTO torneo_partidos_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(98,901,14,clock_timestamp(),60)`),/Court occupied by reservation/);
 await db.exec('DELETE FROM reservas; DELETE FROM partidos WHERE id=98');
+// Apply the same reciprocal check to Nations programming.
+await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado) VALUES(97,901,8,'pendiente'); INSERT INTO torneo_nations_programacion VALUES(97,14,clock_timestamp(),60)`);
+await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/tournament fixture/);
+await db.exec(`DELETE FROM torneo_nations_programacion WHERE partido_id=97; INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);
+await assert.rejects(db.exec(`INSERT INTO torneo_nations_programacion VALUES(97,14,clock_timestamp(),60)`),/Court occupied by reservation/);
+await db.exec('DELETE FROM reservas; DELETE FROM partidos WHERE id=97');
 
 // A legacy fixture with unknown status still reserves its court.
 await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado) VALUES(99,901,8,NULL); INSERT INTO torneo_partidos_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(99,901,14,clock_timestamp(),60)`);
