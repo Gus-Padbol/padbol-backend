@@ -9,8 +9,9 @@ function harness(options = {}) {
     assertCanControl: () => { if (options.forbidden) throw Object.assign(new Error('private'), { status: 403 }); },
     db: { rpc: async (name, args) => { calls.push({ name, args }); return options.result ?? { data: { status:'applied', result:{ id:'marker',estado:'en_curso',control_token_hash:'private' } } }; } },
     publishUpdate: async () => { if (options.socketError) throw Error('offline'); },
+    ...(options.recoveryOnly ? { allowTransitions: false, allowResume: true } : {}),
   });
-  return { calls, async run(action, body) {
+  return { calls, handlers, async run(action, body) {
     let status = 200, data; const res = { status(n) { status = n; return this; }, json(v) { data = v; return this; } };
     await handlers.get(`/api/scoreboard/partidos/:id/${action}`)({ params: { id: 'marker' }, body }, res);
     return { status, data };
@@ -47,6 +48,20 @@ test('main router keeps experimental endpoints unregistered unless explicitly en
  assert.equal(registered(true).includes('post /api/scoreboard/partidos/:id/resume'),true);
  const recovery=[]; const app=Object.fromEntries(['get','post','patch','delete'].map(method=>[method,path=>recovery.push(`${method} ${path}`)]));
  mountScoreboardRoutes(app,{supabaseAdmin:{},getAuthenticatedUser:async()=>({}),fetchUserRoleRowForAuthUser:async()=>null,scoreboardSuspensionRecoveryEnabled:true});
- assert.equal(recovery.includes('post /api/scoreboard/partidos/:id/resume'),false);
+ assert.equal(recovery.includes('post /api/scoreboard/partidos/:id/resume'),true);
+ assert.equal(recovery.includes('post /api/scoreboard/partidos/:id/suspend'),false);
  assert.equal(recovery.includes('post /api/scoreboard/partidos/:id/reconcile'),true);
+});
+
+test('evacuation allows authorized resume and reconciliation but never registers suspend', async () => {
+ const h=harness({recoveryOnly:true});
+ assert.equal(h.handlers.has('/api/scoreboard/partidos/:id/suspend'),false);
+ assert.equal((await h.run('resume',valid)).status,200);
+ assert.equal((await h.run('reconcile',{action_id:valid.action_id,action:'suspend'})).status,200);
+ for (const option of [{unauthorized:true},{forbidden:true}]) {
+  const denied=harness({...option,recoveryOnly:true});
+  assert.notEqual((await denied.run('resume',valid)).status,200);
+  assert.notEqual((await denied.run('reconcile',{action_id:valid.action_id,action:'resume'})).status,200);
+  assert.equal(denied.calls.length,0);
+ }
 });

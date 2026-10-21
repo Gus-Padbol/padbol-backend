@@ -440,7 +440,7 @@ export function mountScoreboardRoutes(app, {
   const assertNationsScoreboardRead=(req,row)=>assertNationsScoreboardAudience(req,row,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRole(user,{fetchUserRoleRowForAuthUser,legacySuperAdminEmails})});
   if (scoreboardSuspensionCandidateEnabled === true || scoreboardSuspensionRecoveryEnabled === true) {
     installScoreboardSuspensionRoutesCandidate(app, {
-      getAuthenticatedUser, fetchPartido, db: supabaseAdmin, allowTransitions: scoreboardSuspensionCandidateEnabled === true,
+      getAuthenticatedUser, fetchPartido, db: supabaseAdmin, allowTransitions: scoreboardSuspensionCandidateEnabled === true, allowResume: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true,
       resolveRole: user => resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }),
       assertCanControl: assertCanControlScoreboard,
       publishUpdate: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin),
@@ -862,7 +862,7 @@ export function mountScoreboardRoutes(app, {
     try {
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       await assertNationsScoreboardRead(req,partido);
-      return res.json({ ...(await enrichPartidoWithVenue(supabaseAdmin, partido)), scoreboard_suspension_candidate_enabled: scoreboardSuspensionCandidateEnabled === true });
+      return res.json({ ...(await enrichPartidoWithVenue(supabaseAdmin, partido)), scoreboard_suspension_candidate_enabled: scoreboardSuspensionCandidateEnabled === true, scoreboard_suspension_resume_enabled: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true });
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/partidos/:id:', err.message);

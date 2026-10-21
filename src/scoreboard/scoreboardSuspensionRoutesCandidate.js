@@ -2,9 +2,9 @@
 // writer have been reviewed and tested together in the target environment.
 const ACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function installScoreboardSuspensionRoutesCandidate(app, {
-  getAuthenticatedUser, fetchPartido, resolveRole, assertCanControl, db, publishUpdate, presentPartido = async value => value, allowTransitions = true,
+  getAuthenticatedUser, fetchPartido, resolveRole, assertCanControl, db, publishUpdate, presentPartido = async value => value, allowTransitions = true, allowResume = allowTransitions,
 }) {
-  for (const action of (allowTransitions ? ['suspend', 'resume', 'reconcile'] : ['reconcile'])) {
+  for (const action of [...(allowTransitions ? ['suspend'] : []), ...(allowResume ? ['resume'] : []), 'reconcile']) {
     app.post(`/api/scoreboard/partidos/:id/${action}`, async (req, res) => {
       try {
         const auth = await getAuthenticatedUser(req);
