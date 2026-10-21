@@ -72,3 +72,75 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION public.scoreboard_suspend_candidate(uuid,timestamptz,uuid) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.scoreboard_suspend_candidate(uuid,timestamptz,uuid) TO service_role;
+
+-- Experimental only: this function does not yet cover every writer of court
+-- occupancy, and refuses matches with historical fixture schedule rows.
+CREATE OR REPLACE FUNCTION public.scoreboard_resume_candidate(
+ p_id uuid, p_expected timestamptz, p_actor uuid, p_court_id bigint
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE initial public.scoreboard_partidos; current_row public.scoreboard_partidos;
+        m public.partidos; r public.user_roles; t public.torneos; c public.canchas;
+        zone text; court_number integer; at_now timestamptz:=clock_timestamp();
+BEGIN
+ SELECT * INTO initial FROM public.scoreboard_partidos WHERE id=p_id;
+ IF initial.id IS NULL THEN RETURN NULL; END IF;
+ SELECT * INTO r FROM public.user_roles WHERE user_id=p_actor;
+ IF NOT (r.role='super_admin' OR r.role IN('admin_club','admin_sede') AND r.sede_id=initial.sede_id) IS TRUE THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Scoreboard control scope denied';
+ END IF;
+ IF initial.partido_abierto_id IS NOT NULL OR initial.reserva_id IS NOT NULL THEN
+  RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Linked open matches or reservations require supported resumption';
+ END IF;
+ -- Shared with the experimental booking candidate; other live writers have not
+ -- been migrated to this lock, so this candidate must not be deployed yet.
+ PERFORM pg_advisory_xact_lock(hashtextextended('manual-booking-cross-occupancy-v1',0));
+ IF initial.torneo_id IS NOT NULL THEN
+  SELECT * INTO t FROM public.torneos WHERE id=initial.torneo_id FOR UPDATE;
+  IF t.id IS NULL OR t.sede_id IS DISTINCT FROM initial.sede_id THEN
+   RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Tournament unavailable';
+  END IF;
+ END IF;
+ IF initial.partido_torneo_id IS NOT NULL THEN
+  SELECT * INTO m FROM public.partidos WHERE id=initial.partido_torneo_id FOR UPDATE;
+  IF m.id IS NULL OR m.torneo_id IS DISTINCT FROM initial.torneo_id OR m.sede_id IS DISTINCT FROM initial.sede_id
+     OR m.estado IS DISTINCT FROM 'suspendido' THEN
+   RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Linked match is not suspended';
+  END IF;
+  IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion WHERE partido_id=m.id)
+     OR EXISTS(SELECT 1 FROM public.torneo_nations_programacion WHERE partido_id=m.id) THEN
+   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Fixture schedule resumption not implemented';
+  END IF;
+ END IF;
+ SELECT * INTO c FROM public.canchas WHERE id=p_court_id AND sede_id=initial.sede_id FOR UPDATE;
+ IF c.id IS NULL OR lower(coalesce(c.estado,'')) IN('inactiva','inactivo','cerrada','mantenimiento')
+    OR (t.id IS NOT NULL AND coalesce(c.deporte,'padbol')<>coalesce(t.deporte,'padbol')) THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Court not eligible';
+ END IF;
+ court_number:=coalesce(c.orden,(SELECT count(*)::int FROM public.canchas WHERE sede_id=c.sede_id AND id<=c.id));
+ SELECT coalesce(nullif(timezone,''),'America/Argentina/Buenos_Aires') INTO zone FROM public.sedes WHERE id=c.sede_id;
+ IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=c.sede_id OR b.sede_id IS NULL AND b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id)) AND b.cancha=court_number AND lower(coalesce(b.estado,'')) NOT IN('cancelada','cancelado') AND b.fecha ~ '^\d{4}-\d{2}-\d{2}$' AND b.hora ~ '^\d{2}:\d{2}' AND ((b.fecha||' '||substring(b.hora,1,5))::timestamp AT TIME ZONE zone)<=at_now AND at_now<((b.fecha||' '||substring(b.hora,1,5))::timestamp AT TIME ZONE zone)+coalesce(b.duracion_minutos,90)*interval '1 minute') THEN
+  RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has active reservation';
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.clases a JOIN public.clases_horarios h ON h.clase_id=a.id WHERE a.cancha_id=c.id AND a.activo=true AND h.dia_semana=extract(dow FROM at_now AT TIME ZONE zone)::int AND (at_now AT TIME ZONE zone)::time>=h.hora_inicio AND (at_now AT TIME ZONE zone)::time<h.hora_fin) THEN
+  RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has active class';
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<=at_now AND at_now<s.inicio+s.duration_minutes*interval '1 minute')
+ OR EXISTS(SELECT 1 FROM public.torneo_nations_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<=at_now AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
+  RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court reserved by another match';
+ END IF;
+ SELECT * INTO current_row FROM public.scoreboard_partidos WHERE id=p_id FOR UPDATE;
+ IF current_row.updated_at IS DISTINCT FROM p_expected OR current_row.torneo_id IS DISTINCT FROM initial.torneo_id
+    OR current_row.partido_torneo_id IS DISTINCT FROM initial.partido_torneo_id OR current_row.sede_id IS DISTINCT FROM initial.sede_id THEN RETURN NULL; END IF;
+ IF current_row.estado IS DISTINCT FROM 'suspendido' THEN
+  RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Scoreboard is not suspended';
+ END IF;
+ IF m.id IS NOT NULL THEN
+  PERFORM set_config('padbol.nations_rpc','1',true);
+  UPDATE public.partidos SET estado='en_curso',cancha_id=c.id,cancha=court_number::text WHERE id=m.id;
+ END IF;
+ UPDATE public.scoreboard_partidos SET estado='en_curso',cancha=court_number::text,cronometro_inicio=NULL,cronometro_pausado=true
+ WHERE id=p_id RETURNING * INTO current_row;
+ RETURN to_jsonb(current_row)-'control_token_hash'-'control_token_created_at'-'control_token_revoked_at';
+END $$;
+REVOKE ALL ON FUNCTION public.scoreboard_resume_candidate(uuid,timestamptz,uuid,bigint) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.scoreboard_resume_candidate(uuid,timestamptz,uuid,bigint) TO service_role;
