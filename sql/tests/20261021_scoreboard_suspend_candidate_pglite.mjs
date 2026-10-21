@@ -7,7 +7,7 @@ CREATE TABLE user_roles(user_id uuid PRIMARY KEY, role text, sede_id bigint);
 CREATE TABLE torneos(id bigint PRIMARY KEY,sede_id bigint,deporte text,plan_nations jsonb,fecha_inicio date,fecha_fin date);
 CREATE TABLE partidos(id bigint PRIMARY KEY,torneo_id bigint,sede_id bigint,estado text,equipo_a_id bigint,equipo_b_id bigint,cancha_id bigint,cancha text,fecha_hora timestamp,partido_siguiente_id bigint);
 CREATE TABLE sedes(id bigint PRIMARY KEY,nombre text,timezone text);
-CREATE TABLE reservas(id bigint,sede_id bigint,sede text,cancha int,cancha_id int,estado text,fecha text,hora text,hora_inicio text,duracion_minutos int);
+CREATE TABLE reservas(id bigint,sede_id bigint,sede text,cancha int,cancha_id int,estado text,fecha text,hora text,hora_inicio text,duracion_minutos int, nota text);
 CREATE TABLE partidos_abiertos(id bigint,sede_id bigint,cancha text,cancha_id int,estado text,fecha date,hora time,duracion_minutos int);
 CREATE TABLE clases(id bigint,sede_id bigint,cancha_id bigint,activo boolean); CREATE TABLE clases_horarios(clase_id bigint,dia_semana int,hora_inicio time,hora_fin time);
 CREATE TABLE torneo_partidos_programacion(partido_id bigint,torneo_id bigint,court_id bigint,inicio timestamptz,duration_minutes int,actor_id uuid,updated_at timestamptz);
@@ -19,8 +19,10 @@ INSERT INTO user_roles VALUES ('11111111-1111-4111-8111-111111111111','admin_clu
 INSERT INTO torneos VALUES (901,8,'padbol',NULL,current_date-1,current_date+1); INSERT INTO equipos VALUES(1),(2); INSERT INTO partidos VALUES(5,901,8,'en_curso',1,2,13,'1',NULL,NULL);
 INSERT INTO sedes VALUES(8,'QA','UTC'); INSERT INTO canchas VALUES(13,8,1,'activa','padbol'),(14,8,2,'activa','padbol');
 INSERT INTO scoreboard_partidos VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',8,901,5,NULL,NULL,'1','en_curso','2026-10-21','2026-10-21',true,78,40,3,'B','[{"punto":1}]','private');`);
+await db.exec(`INSERT INTO reservas(id,nota) VALUES(404,'legacy')`);
 await db.exec(await readFile('sql/20261021140000_scoreboard_suspend_candidate.sql','utf8'));
 await db.exec(await readFile('sql/20261021150000_scoreboard_occupancy_candidate.sql','utf8'));
+await db.exec(`UPDATE reservas SET nota='pago' WHERE id=404; DELETE FROM reservas WHERE id=404`);
 await db.exec(`CREATE TRIGGER protect BEFORE INSERT OR UPDATE OF sede_id,cancha,estado ON scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION proteger_cancha_marcador_activo();`);
 const call=(id,version,actor)=>db.query('select public.scoreboard_suspend_candidate($1,$2,$3) as result',[id,version,actor]);
 assert.equal((await db.query("select scoreboard_class_overlap_candidate(tsrange('2026-10-22 00:20','2026-10-22 00:50','[)'), '2026-10-21', '23:45', '00:30') as overlap")).rows[0].overlap,true);
@@ -52,6 +54,10 @@ const resumed=(await db.query('select public.scoreboard_resume_candidate($1,$2,$
 assert.equal(resumed.estado,'en_curso');assert.equal(resumed.cancha,'2');assert.equal(resumed.score_a,40);assert.equal(resumed.cronometro_pausado,true);assert.equal(resumed.cronometro_segundos,78);
 await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/Court occupied by resumed scoreboard/);
 await assert.rejects(db.exec(`INSERT INTO torneo_partidos_programacion VALUES(99,901,14,clock_timestamp(),60,'11111111-1111-4111-8111-111111111111',clock_timestamp())`),/Court occupied by resumed scoreboard/);
+await assert.rejects(db.exec(`INSERT INTO partidos_abiertos(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'abierto',(clock_timestamp() AT TIME ZONE 'UTC')::date,(clock_timestamp() AT TIME ZONE 'UTC')::time,60`),/Court occupied by resumed scoreboard/);
+await db.exec(`INSERT INTO clases VALUES (7,8,14,true)`);
+await assert.rejects(db.exec(`INSERT INTO clases_horarios SELECT 7,extract(dow FROM clock_timestamp() AT TIME ZONE 'UTC')::int,(clock_timestamp() AT TIME ZONE 'UTC')::time,((clock_timestamp()+interval '1 hour') AT TIME ZONE 'UTC')::time`),/Court occupied by resumed scoreboard/);
+
 assert.equal((await db.query('select cancha from partidos where id=5')).rows[0].cancha,'2');
 assert.equal((await db.query('select court_id from torneo_partidos_programacion where partido_id=5')).rows[0].court_id,14);
 assert.equal((await db.query('select previous_schedule from scoreboard_resumption_history_candidate')).rows[0].previous_schedule.court_id,13);

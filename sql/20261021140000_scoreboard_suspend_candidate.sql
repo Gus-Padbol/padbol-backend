@@ -79,7 +79,7 @@ CREATE OR REPLACE FUNCTION public.scoreboard_local_interval_candidate(p_date tex
 RETURNS tsrange LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog AS $$
 DECLARE start_at timestamp;
 BEGIN
- IF p_date IS NULL OR p_date !~ '^\d{4}-\d{2}-\d{2}$' OR p_time IS NULL OR p_time !~ '^\d{2}:\d{2}(:\d{2})?$'
+ IF p_date IS NULL OR p_date !~ '^\d{4}-\d{2}-\d{2}$' OR p_time IS NULL OR p_time !~ '^\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?$'
     OR coalesce(p_minutes,0) NOT BETWEEN 1 AND 1440 THEN RETURN NULL; END IF;
  BEGIN start_at:=(p_date||' '||p_time)::timestamp; EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN RETURN NULL; END;
  RETURN tsrange(start_at,start_at+p_minutes*interval '1 minute','[)');
