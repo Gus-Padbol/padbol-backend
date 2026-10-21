@@ -114,9 +114,8 @@ export function mountSedesDuracionesRoutes(app, {
 
       let query = supabaseAdmin
         .from('sedes_duraciones')
-        .select('id, duracion_minutos, precio, deporte')
+        .select('id, duracion_minutos, precio, deporte, activo')
         .eq('sede_id', sid)
-        .eq('activo', true)
         .order('duracion_minutos', { ascending: true });
 
       const deporteFilter = req.query.deporte;
@@ -128,10 +127,12 @@ export function mountSedesDuracionesRoutes(app, {
       const { data, error } = await query;
       if (error) throw error;
 
-      const rows = data ?? [];
+      const configured = (data ?? []).length > 0;
+      const rows = (data ?? []).filter(row => row.activo === true);
       if (deporteFilter != null && String(deporteFilter).trim() !== '') {
         return res.json({
           sede_id: sid,
+          configurada: configured,
           deporte: normalizeSurgeDeporte(deporteFilter),
           duraciones: rows.map((row) => ({
             id: row.id,
@@ -145,6 +146,7 @@ export function mountSedesDuracionesRoutes(app, {
 
       return res.json({
         sede_id: sid,
+        configurada: configured,
         grupos: groupDuracionesByDeporte(rows),
       });
     } catch (err) {

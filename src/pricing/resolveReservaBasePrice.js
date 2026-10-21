@@ -1,3 +1,4 @@
+import { normalizeSlotInicio } from './slotInicio.js';
 const DEFAULT_TZ = 'America/Argentina/Buenos_Aires';
 
 export const VALID_SURGE_DEPORTES = new Set(['padbol', 'padel', 'pickleball', 'tenis']);
@@ -119,7 +120,7 @@ async function resolveFranjaPrecio(supabaseAdmin, {
   if (!slotInicio) return null;
 
   const tz = String(timezone || DEFAULT_TZ).trim() || DEFAULT_TZ;
-  const slotDate = new Date(String(slotInicio).trim());
+  const slotDate = new Date(normalizeSlotInicio(slotInicio, tz));
   if (!Number.isFinite(slotDate.getTime())) return null;
 
   const diaSemana = slotDate.toLocaleDateString('es-AR', { timeZone: tz, weekday: 'short' });
@@ -252,13 +253,14 @@ export async function resolveReservaBasePrice(supabaseAdmin, {
     throw Object.assign(new Error('La duración no está disponible para este deporte'), { status: 400, code: 'DURACION_NO_DISPONIBLE' });
   }
 
-  if (!skipFranjas && slotInicio) {
+  const normalizedSlot = slotInicio ? normalizeSlotInicio(slotInicio, tz) : null;
+  if (!skipFranjas && normalizedSlot) {
     try {
       const franja = await resolveFranjaPrecio(supabaseAdmin, {
         sedeId: sid,
         deporte: dep,
         duracionMinutos: duracion,
-        slotInicio,
+        slotInicio: normalizedSlot,
         timezone: tz,
       });
       if (franja) {
@@ -272,7 +274,7 @@ export async function resolveReservaBasePrice(supabaseAdmin, {
         });
       }
     } catch (franjaErr) {
-      console.warn('⚠️ resolveReservaBasePrice franjas_precio:', franjaErr.message);
+      throw Object.assign(new Error('No se pudo confirmar la tarifa del horario'), { status: 503, code: 'FRANJA_NO_CONFIRMADA', cause: franjaErr });
     }
   }
 
