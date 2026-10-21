@@ -4,6 +4,7 @@ import {persistTournamentPlan} from '../lib/torneos/tournamentPlanningService.js
 import {ensureScoreboardForCompletedBracketPartido} from '../lib/torneos/bracketScoreboardService.js';
 import {assertTournamentTeamsSportReady} from '../lib/tournamentParticipantsReadiness.js';
 import {sendHttpError} from '../lib/httpErrors.js';
+import {isScoreboardTorneoPartidoActivo} from '../src/scoreboard/scoreboardTorneoPartidoResolver.js';
 
 const invalid=(message,status=409)=>Object.assign(new Error(message),{status});
 async function read(query){const {data,error}=await query;if(error)throw error;return data;}
@@ -34,9 +35,15 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin,ensureS
   const canchas=await read(db.from('canchas').select('id,nombre,deporte,estado').eq('sede_id',torneo.sede_id));
   const schedule=await read(db.from('torneo_partidos_programacion').select('court_id,inicio,duration_minutes').eq('partido_id',partido.id).maybeSingle());
   const sede=await read(db.from('sedes').select('timezone').eq('id',torneo.sede_id).single());
+  // Never create or reset a marker when returning to an ongoing match.
+  const markers=await read(db.from('scoreboard_partidos').select('id,estado,torneo_id,sede_id').eq('partido_torneo_id',partido.id));
+  if(!Array.isArray(markers))throw invalid('No se pudo consultar el marcador existente.',503);
+  const active=markers.filter(marker=>isScoreboardTorneoPartidoActivo(marker.estado));
+  if(active.length>1 || active.some(marker=>Number(marker.torneo_id)!==Number(torneo.id)||Number(marker.sede_id)!==Number(torneo.sede_id)||!marker.id))throw invalid('El marcador vinculado requiere revisión antes de abrirlo.',409);
+  const scoreboardId=active[0]?.id??null;
   const matchTeams=equipos.filter(e=>[Number(partido.equipo_a_id),Number(partido.equipo_b_id)].includes(Number(e.id)));
   let ready=matchTeams.length===2,requirements=[];try{await assertTournamentTeamsSportReady(db,{torneo,equipos:matchTeams});if(ready && torneo.modalidad_plantel==='selecciones')await assertNationalLineupsReady(db,partido);}catch(e){ready=false;requirements=[e.message];}
-  res.json({ok:true,partido,timezone:sede.timezone||'America/Argentina/Buenos_Aires',canchas:canchas.filter(c=>c.estado!=='inactiva'&&(c.deporte||'padbol')===(torneo.deporte||'padbol')),schedule,equipos:matchTeams.map(e=>({id:e.id,nombre:e.nombre,jugadores:(e.jugadores||[]).map(p=>({nombre:p.nombre,apellido:p.apellido,participante_id:p.participante_id}))})),can_open:['en_curso','activo'].includes(torneo.estado)&&ready,requirements:ready?[]:requirements});
+  res.json({ok:true,partido,timezone:sede.timezone||'America/Argentina/Buenos_Aires',canchas:canchas.filter(c=>c.estado!=='inactiva'&&(c.deporte||'padbol')===(torneo.deporte||'padbol')),schedule,scoreboard_id:scoreboardId,equipos:matchTeams.map(e=>({id:e.id,nombre:e.nombre,jugadores:(e.jugadores||[]).map(p=>({nombre:p.nombre,apellido:p.apellido,participante_id:p.participante_id}))})),can_open:['en_curso','activo'].includes(torneo.estado)&&ready,requirements:ready?[]:requirements});
  });
  route('put','/api/torneos/:id/partidos/:partidoId/programacion',async(req,res,{auth,torneo})=>{
   const b=req.body??{};if(!Number.isSafeInteger(Number(b.court_id))||Number(b.court_id)<=0||!Number.isSafeInteger(Number(b.duration_minutes))||Number(b.duration_minutes)<1||Number(b.duration_minutes)>720||typeof b.fecha_hora!=='string'||!/(Z|[+-]\d\d:\d\d)$/.test(b.fecha_hora)||!Number.isFinite(Date.parse(b.fecha_hora)))throw invalid('Completa fecha con zona horaria, cancha y duración válida.',400);
