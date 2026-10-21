@@ -13,10 +13,10 @@ function dbFor(tables, cap = 2) {
     return q;
   } };
 }
-function setup(role, tables) {
+function setup(role, tables, legacySuperAdminEmails = []) {
   const routes = {};
   const app = Object.fromEntries(['get','post','delete'].map(m => [m,(p,h) => { routes[`${m} ${p}`]=h; }]));
-  const deps={supabaseAdmin:dbFor(tables),getAuthenticatedUser:async()=>({user:{id:'admin',email:'admin@example.test'}}),fetchUserRoleRowForAuthUser:async()=>role};
+  const deps={supabaseAdmin:dbFor(tables),getAuthenticatedUser:async()=>({user:{id:'admin',email:'admin@example.test'}}),fetchUserRoleRowForAuthUser:async()=>role,legacySuperAdminEmails};
   mountTorneoInteresRoutes(app,deps); mountListaEsperaGeneralRoutes(app,deps);
   return routes;
 }
@@ -41,4 +41,9 @@ test('administrador no puede consultar otra sede', async()=>{
   for (const key of ['get /api/admin/sedes/:id/torneo-interes','get /api/admin/lista-espera-general/:sede_id']) {
     const res=await invoke(routes[key],7); assert.equal(res.code,403); assert.equal(res.body.interesados,undefined); assert.equal(res.body.lista,undefined);
   }
+});
+
+test('email histórico no restituye acceso si el rol fue revocado',async()=>{
+ const routes=setup(null,tables,['admin@example.test']);
+ for(const key of ['get /api/admin/sedes/:id/torneo-interes','get /api/admin/lista-espera-general/:sede_id']) assert.equal((await invoke(routes[key],7)).code,403);
 });

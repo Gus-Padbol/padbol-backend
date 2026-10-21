@@ -1,3 +1,4 @@
+import { resolveAuthRoleForUser } from '../lib/authAccess.js';
 import { readWaitlistForSede, readWaitlistProfiles } from './waitlistRead.js';
 
 function parseSedeId(raw) {
@@ -11,19 +12,6 @@ function parseDeporte(raw) {
   return s || null;
 }
 
-async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }) {
-  const email = String(user.email || '').trim().toLowerCase();
-  const row = await fetchUserRoleRowForAuthUser(user);
-  if (!row && legacySuperAdminEmails.includes(email)) {
-    return { rol: 'super_admin', sede_id: null };
-  }
-  const sedeIdRaw = row?.sede_id;
-  const sedeIdNum = sedeIdRaw != null && sedeIdRaw !== '' ? Number(sedeIdRaw) : null;
-  return {
-    rol: String(row?.role || '').trim().toLowerCase() || null,
-    sede_id: Number.isFinite(sedeIdNum) ? sedeIdNum : null,
-  };
-}
 
 function isSuperAdminRole(role) {
   return role.rol === 'super_admin';
@@ -184,7 +172,7 @@ export function mountTorneoInteresRoutes(app, {
       const sid = parseSedeId(req.params.id);
       if (!sid) return res.status(400).json({ error: 'sede_id inválido' });
 
-      const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
+      const role = await resolveAuthRoleForUser(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanAdministerSede(role, sid);
 
       const list = await readWaitlistForSede(supabaseAdmin, 'torneo_interes', sid);

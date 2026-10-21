@@ -12,9 +12,9 @@ function setup(role, user = {id:'admin',email:'admin@example.test'}, failure = f
   return {handler:routes['get /api/admin/validaciones'],calls:()=>calls};
 }
 async function invoke(handler){const res={code:200,status(c){this.code=c;return this},json(v){this.body=v;return this}};await handler({},res);return res;}
-test('superadmin recibe todas las páginas y no ve como pendiente la categoría ya validada',async()=>{
+test('superadmin recibe todos los pendientes, incluidos perfiles con categoría validada antes',async()=>{
   const x=setup({role:'super_admin'});const res=await invoke(x.handler);
-  assert.equal(res.code,200);assert.deepEqual(res.body.validaciones.map(r=>r.id),[1,3]);assert.equal(x.calls(),4);
+  assert.equal(res.code,200);assert.deepEqual(res.body.validaciones.map(r=>r.id),[1,2,3]);assert.equal(x.calls(),4);
 });
 test('sin sesión o sin rol administrativo no se accede a datos',async()=>{
   for(const x of [setup(null,null),setup({role:'jugador'}),setup({role:'admin_club',sede_id:null})]){const res=await invoke(x.handler);assert.ok([401,403].includes(res.code));assert.equal(x.calls(),0);}

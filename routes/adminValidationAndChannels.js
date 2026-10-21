@@ -72,8 +72,7 @@ export function mountAdminValidationAndChannelsRoutes(app, {
         }
         rows.push(...data);
       }
-      const pending = rows.filter((row) => row.categoria_validada !== true && row.categoria_validada !== 1 && !['true', '1'].includes(String(row.categoria_validada ?? '').trim().toLowerCase()));
-      return res.json({ validaciones: pending });
+      return res.json({ validaciones: rows });
     } catch (error) {
       console.error('❌ GET /api/admin/validaciones:', error.message);
       return res.status(500).json({ error: 'No se pudieron cargar las validaciones' });
