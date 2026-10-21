@@ -3613,7 +3613,7 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
     }
 
     try {
-      assertClientPrecioMatchesQuote(precio ?? reservaData?.precio ?? req.body?.pricing?.total, quote.total);
+      assertClientPrecioMatchesQuote(precio ?? reservaData?.precio ?? req.body?.pricing?.total, quote.total, undefined, { strict: req.body?.price_confirmation_strict === true });
     } catch (priceErr) {
       return res.status(priceErr.status || 400).json({
         error: priceErr.message,
@@ -3831,6 +3831,8 @@ app.post('/api/crear-pago-stripe', paymentsRateLimit, async (req, res) => {
       assertClientPrecioMatchesQuote(
         precio ?? reservaData?.precio ?? req.body?.pricing?.total,
         quote.total,
+        undefined,
+        { strict: req.body?.price_confirmation_strict === true },
       );
     } catch (priceErr) {
       return res.status(priceErr.status || 400).json({
