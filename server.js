@@ -20,6 +20,7 @@ import { mountNationalTeamRoutes } from './routes/nationalTeams.js';
 import { createCrmEmailSender } from './lib/crmEmailSender.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
+import { createCrmWhatsappManualSender } from './lib/crmWhatsappManualSender.js';
 import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.js';
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
@@ -32,6 +33,7 @@ import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
 import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
 import { createCrmLeadAutoAnalyzer } from './lib/crmLeadAutoAnalysis.js';
 import { createCrmImapInboxSync, readCrmImapConfig } from './lib/crmImapInbound.js';
+import {readCrmSupportImapConfig, createCrmSupportSender, routeCrmEmailSender, CRM_SUPPORT_OPERATORS} from './lib/crmSupportMailbox.js';
 import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
 import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
@@ -262,6 +264,7 @@ const runtime = backendRuntime();
 const runWhatsappMetaQaStartupCheck = createWhatsappMetaQaStartupCheck();
 const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
 const whatsappQaCrmManualSenderFactory = createWhatsappQaCrmManualSender();
+const crmWhatsappManualSenderFactory = createCrmWhatsappManualSender();
 installStagingFetchGuard();
 const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
@@ -768,16 +771,17 @@ registerWhatsappAdminRoutes(app, { whatsappAdminService, authUserFromBearer, fet
 
 const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
 const crmLeadAnalyzer = createCrmLeadAutoAnalyzer({ crmService });
-const crmEmailSender = createCrmEmailSender({ runtime });
+const crmEmailSender = routeCrmEmailSender({commercialSender:createCrmEmailSender({ runtime }),supportSender:createCrmSupportSender({ runtime })});
 const crmAdminService = createCrmAdminService({
   repository: createSupabaseCrmRepository(supabaseAdmin),
   operators: whatsappOperators,
   superAdminEmails: whatsappSuperAdminEmails,
-  sendWhatsappReply: whatsappQaCrmManualSenderFactory?.({ supabaseAdmin }) || null,
+  sendWhatsappReply: whatsappQaCrmManualSenderFactory?.({ supabaseAdmin }) || crmWhatsappManualSenderFactory?.({ supabaseAdmin }) || null,
   sendEmailReply: crmEmailSender,
   leadAnalyzer: crmLeadAnalyzer,
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
   commercialOperators: CRM_COMMERCIAL_OPERATORS,
+  supportOperators: CRM_SUPPORT_OPERATORS,
 });
 registerCrmAdminRoutes(app, {
   crmAdminService,
@@ -801,6 +805,8 @@ const crmImapInboxSync = createCrmImapInboxSync({
   config: readCrmImapConfig(process.env),
 });
 crmImapInboxSync.start();
+const crmSupportInboxSync = createCrmImapInboxSync({crmService,config:readCrmSupportImapConfig(process.env)});
+crmSupportInboxSync.start();
 
 /** Rol autenticado: `user_id` (JWT) primero, luego email. Service role bypass RLS. */
 async function fetchUserRoleRowForAuthUser(user) {
