@@ -12,9 +12,13 @@ function checkCleanWorktree(root) {
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   const worktreesDir = path.join(root, '.worktrees');
   const commonDir = fs.realpathSync(path.resolve(root, git('rev-parse', '--git-common-dir').trim()));
-  const registered = new Set(git('worktree', 'list', '--porcelain', '-z')
-    .split('\0').filter((item) => item.startsWith('worktree '))
-    .map((item) => path.resolve(item.slice('worktree '.length))));
+  const records = git('worktree', 'list', '--porcelain', '-z').split('\0\0').filter(Boolean).map((record) => {
+    const fields = record.split('\0');
+    const value = (prefix) => fields.find((field) => field.startsWith(prefix))?.slice(prefix.length) || null;
+    return { path: path.resolve(value('worktree ')), branch: value('branch ')?.replace(/^refs\/heads\//, '') || null,
+      head: value('HEAD '), detached: fields.includes('detached'), prunable: fields.some((field) => field.startsWith('prunable')) };
+  });
+  const registered = new Set(records.map((record) => record.path));
 
   let dir;
   try { dir = fs.lstatSync(worktreesDir); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -37,16 +41,28 @@ function checkCleanWorktree(root) {
   const status = git('status', '--porcelain=v1', '-z').split('\0').filter(Boolean);
   const changes = status.filter((entry) => !(entry.startsWith('?? ') &&
     (entry.slice(3) === '.worktrees/' || entry.slice(3).startsWith('.worktrees/'))));
-  assert.deepEqual(changes, [], 'Deploy bloqueado: hay cambios sin commit');
+  assert.equal(changes.length, 0, 'Deploy bloqueado: hay cambios sin commit');
+
+  return records.map(({ path: worktreePath, branch, head, detached, prunable }) => {
+    let state = 'no disponible';
+    if (!prunable) {
+      try {
+        const status = execFileSync('git', ['-C', worktreePath, 'status', '--porcelain=v1', '-z'],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        state = status ? 'con cambios' : 'limpio';
+      } catch { state = 'no disponible'; }
+    }
+    return { ruta: worktreePath, rama: branch, head, detached, estado: state };
+  });
 }
 
 function preflight() {
   const git = (...args) => execFileSync('git', args, { cwd: EXPECTED_ROOT, encoding: 'utf8' }).trim();
   assert.equal(fs.realpathSync(git('rev-parse', '--show-toplevel')), fs.realpathSync(EXPECTED_ROOT), 'Deploy bloqueado: repositorio backend no oficial');
   assert.equal(git('branch', '--show-current'), 'main', 'Deploy bloqueado: rama no autorizada');
-  checkCleanWorktree(EXPECTED_ROOT);
+  const worktrees = checkCleanWorktree(EXPECTED_ROOT);
   assert.match(git('remote', 'get-url', 'origin'), /Gus-Padbol\/padbol-backend\.git$/, 'Deploy bloqueado: remote incorrecto');
-  console.log(JSON.stringify({ ok: true, root: EXPECTED_ROOT, branch: 'main', head: git('rev-parse', 'HEAD') }, null, 2));
+  console.log(JSON.stringify({ ok: true, root: EXPECTED_ROOT, branch: 'main', head: git('rev-parse', 'HEAD'), worktrees }, null, 2));
 }
 
 if (require.main === module) preflight();
