@@ -3,8 +3,8 @@ import {mountTournamentPlanningRoutes,startPlannedTournament} from './tournament
 const team=id=>({id,jugadores:[{nombre:'Uno',participante_id:`${id}a`},{nombre:'Dos',participante_id:`${id}b`}],inscripcion_estado:'confirmada'});
 const torneo={id:901,sede_id:8,tipo_torneo:'knockout',estado:'abierto'};
 function response(){return{statusCode:200,status(s){this.statusCode=s;return this;},json(body){this.body=body;return this;}};}
-function setup({authorized=true,event=torneo,teams=[1,2,3,4].map(team),match={id:5,torneo_id:901,equipo_a_id:1,equipo_b_id:2,estado:'pendiente'},rpc,lineups=[],markers=[],ensureScoreboard}={}){
- const calls=[];const routes={};const db={from(table){const q={select(){return q;},eq(){return q;},order(){return q;},single(){return q;},maybeSingle(){return q;},then(resolve){return Promise.resolve({data:table==='torneos'?event:table==='equipos'?teams:table==='partidos'?match:table==='torneo_partido_alineaciones'?lineups:table==='sedes'?{timezone:'Europe/Rome'}:table==='canchas'?[]:table==='scoreboard_partidos'?markers:null,error:null}).then(resolve);}};return q;},rpc:async(name,body)=>{calls.push({name,body});return rpc?rpc(name,body):{data:{ok:true,torneo_id:901,estado:'en_curso',partido_id:5}};}};
+function setup({authorized=true,event=torneo,teams=[1,2,3,4].map(team),match={id:5,torneo_id:901,equipo_a_id:1,equipo_b_id:2,estado:'pendiente'},rpc,lineups=[],markers=[],markerCount=markers.length,ensureScoreboard}={}){
+ const calls=[];const routes={};const db={from(table){const q={select(){return q;},eq(){return q;},order(){return q;},single(){return q;},maybeSingle(){return q;},then(resolve){return Promise.resolve({data:table==='torneos'?event:table==='equipos'?teams:table==='partidos'?match:table==='torneo_partido_alineaciones'?lineups:table==='sedes'?{timezone:'Europe/Rome'}:table==='canchas'?[]:table==='scoreboard_partidos'?markers:null,error:null,count:table==='scoreboard_partidos'?markerCount:null}).then(resolve);}};return q;},rpc:async(name,body)=>{calls.push({name,body});return rpc?rpc(name,body):{data:{ok:true,torneo_id:901,estado:'en_curso',partido_id:5}};}};
  const app={get:(p,f)=>routes['GET '+p]=f,post:(p,f)=>routes['POST '+p]=f,put:(p,f)=>routes['PUT '+p]=f};mountTournamentPlanningRoutes(app,{db,ensureScoreboard,requireTorneoAdmin:async(_req,res)=>{if(!authorized){res.status(403).json({error:'Denied'});return null;}return{user:{id:'actor-qa'}};}});return{routes,calls,db};
 }
 test('scope denial stops before any planning write',async()=>{const {routes,calls}=setup({authorized:false});const res=response();await routes['POST /api/torneos/:id/planificar-fixture']({params:{id:901},body:{}},res);assert.equal(res.statusCode,403);assert.equal(calls.length,0);});
@@ -50,4 +50,8 @@ test('operation refuses ambiguous or mismatched active markers',async()=>{
  for (const markers of [[{id:'a',estado:'en_curso',torneo_id:901,sede_id:8},{id:'b',estado:'pendiente',torneo_id:901,sede_id:8}],[{id:'x',estado:'en_curso',torneo_id:902,sede_id:8}]]) {
   const s=setup({markers});const res=response();await s.routes['GET /api/torneos/:id/partidos/:partidoId/operacion']({params:{id:901,partidoId:5}},res);assert.equal(res.statusCode,409);assert.deepEqual(s.calls,[]);
  }
+});
+
+test('operation fails closed when the marker list is truncated',async()=>{
+ const s=setup({markers:[],markerCount:1});const res=response();await s.routes['GET /api/torneos/:id/partidos/:partidoId/operacion']({params:{id:901,partidoId:5}},res);assert.equal(res.statusCode,503);assert.deepEqual(s.calls,[]);
 });

@@ -36,8 +36,9 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin,ensureS
   const schedule=await read(db.from('torneo_partidos_programacion').select('court_id,inicio,duration_minutes').eq('partido_id',partido.id).maybeSingle());
   const sede=await read(db.from('sedes').select('timezone').eq('id',torneo.sede_id).single());
   // Never create or reset a marker when returning to an ongoing match.
-  const markers=await read(db.from('scoreboard_partidos').select('id,estado,torneo_id,sede_id').eq('partido_torneo_id',partido.id));
-  if(!Array.isArray(markers))throw invalid('No se pudo consultar el marcador existente.',503);
+  const markerResult=await db.from('scoreboard_partidos').select('id,estado,torneo_id,sede_id',{count:'exact'}).eq('partido_torneo_id',partido.id);
+  const markers=markerResult.data;
+  if(markerResult.error || !Array.isArray(markers) || !Number.isSafeInteger(markerResult.count) || markerResult.count!==markers.length)throw invalid('No se pudo consultar el marcador existente.',503);
   const active=markers.filter(marker=>isScoreboardTorneoPartidoActivo(marker.estado));
   if(active.length>1 || active.some(marker=>Number(marker.torneo_id)!==Number(torneo.id)||Number(marker.sede_id)!==Number(torneo.sede_id)||!marker.id))throw invalid('El marcador vinculado requiere revisión antes de abrirlo.',409);
   const scoreboardId=active[0]?.id??null;
