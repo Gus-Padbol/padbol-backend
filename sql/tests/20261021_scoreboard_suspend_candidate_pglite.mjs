@@ -20,6 +20,7 @@ INSERT INTO torneos VALUES (901,8,'padbol',NULL,current_date-1,current_date+1); 
 INSERT INTO sedes VALUES(8,'QA','UTC'); INSERT INTO canchas VALUES(13,8,1,'activa','padbol'),(14,8,2,'activa','padbol');
 INSERT INTO scoreboard_partidos VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',8,901,5,NULL,NULL,'1','en_curso','2026-10-21','2026-10-21',true,78,40,3,'B','[{"punto":1}]','private');`);
 await db.exec(await readFile('sql/20261021140000_scoreboard_suspend_candidate.sql','utf8'));
+await db.exec(await readFile('sql/20261021150000_scoreboard_occupancy_candidate.sql','utf8'));
 await db.exec(`CREATE TRIGGER protect BEFORE INSERT OR UPDATE OF sede_id,cancha,estado ON scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION proteger_cancha_marcador_activo();`);
 const call=(id,version,actor)=>db.query('select public.scoreboard_suspend_candidate($1,$2,$3) as result',[id,version,actor]);
 assert.equal((await db.query("select scoreboard_class_overlap_candidate(tsrange('2026-10-22 00:20','2026-10-22 00:50','[)'), '2026-10-21', '23:45', '00:30') as overlap")).rows[0].overlap,true);
@@ -32,7 +33,7 @@ assert.equal(value.estado,'suspendido');assert.equal(value.score_a,40);assert.eq
 assert.equal((await db.query('select estado from partidos where id=5')).rows[0].estado,'suspendido');
 await db.exec(`INSERT INTO scoreboard_partidos(id,sede_id,cancha,estado) VALUES('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',8,'1','pendiente');`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21','22222222-2222-4222-8222-222222222222',14,90]),/scope denied/);
-await db.exec(`INSERT INTO torneo_nations_programacion(partido_id,court_id) VALUES(5,13)`);
+await db.exec(`INSERT INTO torneo_nations_programacion(partido_id,court_id,inicio,duration_minutes) VALUES(5,13,clock_timestamp(),90)`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Nations fixture resumption not implemented/);
 await db.exec(`DELETE FROM torneo_nations_programacion WHERE partido_id=5`);
 await db.exec(`INSERT INTO torneo_partidos_programacion VALUES(5,901,13,clock_timestamp()-interval '1 day',90,'11111111-1111-4111-8111-111111111111',clock_timestamp())`);
@@ -49,6 +50,8 @@ await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$
 
 const resumed=(await db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5) as result',[id,'2026-10-21',actor,14,90])).rows[0].result;
 assert.equal(resumed.estado,'en_curso');assert.equal(resumed.cancha,'2');assert.equal(resumed.score_a,40);assert.equal(resumed.cronometro_pausado,true);assert.equal(resumed.cronometro_segundos,78);
+await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/Court occupied by resumed scoreboard/);
+await assert.rejects(db.exec(`INSERT INTO torneo_partidos_programacion VALUES(99,901,14,clock_timestamp(),60,'11111111-1111-4111-8111-111111111111',clock_timestamp())`),/Court occupied by resumed scoreboard/);
 assert.equal((await db.query('select cancha from partidos where id=5')).rows[0].cancha,'2');
 assert.equal((await db.query('select court_id from torneo_partidos_programacion where partido_id=5')).rows[0].court_id,14);
 assert.equal((await db.query('select previous_schedule from scoreboard_resumption_history_candidate')).rows[0].previous_schedule.court_id,13);

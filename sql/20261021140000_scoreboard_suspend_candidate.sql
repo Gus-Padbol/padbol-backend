@@ -37,6 +37,7 @@ BEGIN
  IF NOT (r.role='super_admin' OR r.role IN('admin_club','admin_sede') AND r.sede_id=initial.sede_id) IS TRUE THEN
   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Scoreboard control scope denied';
  END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('manual-booking-cross-occupancy-v1',0));
  -- Other linked entities require their own atomic handling; fail closed.
  IF initial.partido_abierto_id IS NOT NULL OR initial.reserva_id IS NOT NULL THEN
   RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Linked open matches or reservations require supported suspension';
@@ -216,6 +217,10 @@ BEGIN
   UPDATE public.partidos SET estado='en_curso',cancha_id=c.id,cancha=court_number::text,
    fecha_hora=CASE WHEN has_general THEN at_now AT TIME ZONE 'UTC' ELSE fecha_hora END WHERE id=m.id;
  END IF;
+ INSERT INTO public.scoreboard_court_occupancy_candidate(scoreboard_id,sede_id,court_id,starts_at,ends_at)
+ VALUES(p_id,c.sede_id,c.id,at_now,at_now+p_duration_minutes*interval '1 minute')
+ ON CONFLICT(scoreboard_id) DO UPDATE SET sede_id=EXCLUDED.sede_id,court_id=EXCLUDED.court_id,
+ starts_at=EXCLUDED.starts_at,ends_at=EXCLUDED.ends_at;
  UPDATE public.scoreboard_partidos SET estado='en_curso',cancha=court_number::text,cronometro_inicio=NULL,cronometro_pausado=true
  WHERE id=p_id RETURNING * INTO current_row;
  RETURN to_jsonb(current_row)-'control_token_hash'-'control_token_created_at'-'control_token_revoked_at';
