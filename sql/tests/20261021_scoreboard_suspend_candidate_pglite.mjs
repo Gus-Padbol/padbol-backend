@@ -69,6 +69,7 @@ assert.equal((await db.query('select previous_schedule from scoreboard_resumptio
 await db.exec(`UPDATE scoreboard_court_occupancy_candidate SET starts_at=clock_timestamp()-interval '2 hours',ends_at=clock_timestamp()-interval '1 hour'`);
 await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char((clock_timestamp()+interval '7 days') AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/Court occupied by resumed scoreboard/);
 await db.exec(`UPDATE scoreboard_partidos SET estado='suspendido' WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`);
+await assert.rejects(db.exec(`UPDATE scoreboard_partidos SET estado='en_curso' WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`),/Use safe scoreboard resumption/);
 await db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char((clock_timestamp()+interval '7 days') AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);
 assert.equal((await db.query("select has_function_privilege('authenticated','public.scoreboard_suspend_candidate(uuid,timestamptz,uuid)','execute') as ok")).rows[0].ok,false);
 await db.close();console.log('Candidate suspension/resumption: scope, CAS, score and clock preserved, court conflicts, linked match, unsupported fixture and grants passed');

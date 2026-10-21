@@ -227,6 +227,7 @@ BEGIN
  VALUES(p_id,c.sede_id,c.id,at_now,at_now+p_duration_minutes*interval '1 minute')
  ON CONFLICT(scoreboard_id) DO UPDATE SET sede_id=EXCLUDED.sede_id,court_id=EXCLUDED.court_id,
  starts_at=EXCLUDED.starts_at,ends_at=EXCLUDED.ends_at;
+ PERFORM set_config('padbol.scoreboard_resume_candidate','1',true);
  UPDATE public.scoreboard_partidos SET estado='en_curso',cancha=court_number::text,cronometro_inicio=NULL,cronometro_pausado=true
  WHERE id=p_id RETURNING * INTO current_row;
  RETURN to_jsonb(current_row)-'control_token_hash'-'control_token_created_at'-'control_token_revoked_at';

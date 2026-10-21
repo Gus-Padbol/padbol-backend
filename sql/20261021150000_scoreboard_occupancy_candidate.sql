@@ -124,6 +124,10 @@ BEGIN
  IF (NEW.estado,NEW.sede_id,NEW.cancha,NEW.partido_torneo_id) IS NOT DISTINCT FROM
     (OLD.estado,OLD.sede_id,OLD.cancha,OLD.partido_torneo_id) THEN RETURN NEW; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('manual-booking-cross-occupancy-v1',0));
+ IF OLD.estado='suspendido' AND NEW.estado='en_curso'
+    AND coalesce(current_setting('padbol.scoreboard_resume_candidate',true),'')<>'1' THEN
+  RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Use safe scoreboard resumption';
+ END IF;
  IF OLD.estado='en_curso' AND NEW.estado='en_curso'
     AND (NEW.sede_id,NEW.cancha,NEW.partido_torneo_id) IS DISTINCT FROM (OLD.sede_id,OLD.cancha,OLD.partido_torneo_id)
     AND EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate WHERE scoreboard_id=OLD.id) THEN
