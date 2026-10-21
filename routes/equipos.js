@@ -1225,12 +1225,18 @@ export function createEquiposUsuarioRouter({ supabaseAdmin, getAuthenticatedUser
 
       const { data: torneo, error: torneoErr } = await supabaseAdmin
         .from('torneos')
-        .select('id, sede_id, deporte, nombre, estado')
+        .select('id, sede_id, deporte, nombre, estado, fecha_inicio, fecha_fin, plan_nations')
         .eq('id', torneoId)
         .maybeSingle();
 
       if (torneoErr) throw torneoErr;
       if (!torneo) return res.status(404).json({ error: 'Torneo no encontrado' });
+      if (torneo.fecha_fin && torneo.sede_id) {
+        const { data: sede, error: sedeErr } = await supabaseAdmin
+          .from('sedes').select('timezone').eq('id', torneo.sede_id).maybeSingle();
+        if (sedeErr) throw sedeErr;
+        torneo.timezone = sede?.timezone || 'America/Argentina/Buenos_Aires';
+      }
       if (!isTorneoOpenForTeams(torneo)) {
         return res.status(409).json({ error: 'El torneo no admite nuevas inscripciones' });
       }

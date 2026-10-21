@@ -6,7 +6,7 @@ function fixture({role={rol:'jugador'},user={id:ids[0]},tournament={},team={},ma
  const t={id:10,sede_id:7,deporte:'padbol',modalidad_plantel:'selecciones',estado:'inscripcion',costo_inscripcion:0,inscripcion_monto:null,...tournament};
  const e={id:20,torneo_id:10,nombre:'QA National',creador_id:ids[0],cupo_maximo:8,equipo_abierto:true,plantel_revision:1,inscripcion_estado:'confirmado',jugadores:ids.slice(0,8).map((id)=>({id,user_id:id,nombre:'QA',email:'private@example.invalid',estado:'confirmado'})),solicitudes:[{user_id:ids[8],nombre:'Request',email:'private@example.invalid'}],...team};
  const m={id:30,torneo_id:10,equipo_a_id:20,equipo_b_id:21,estado:'pendiente',...match};
- const calls=[];const routes=new Map();const data={torneos:t,equipos:e,partidos:m,scoreboard_partidos:marker,torneo_partido_alineaciones:stored};
+ const calls=[];const routes=new Map();const data={torneos:t,sedes:{id:7,timezone:'America/New_York'},equipos:e,partidos:m,scoreboard_partidos:marker,torneo_partido_alineaciones:stored};
  const db={from(table){calls.push(['read',table]);const q={select(){return q;},eq(){return q;},order(){return q;},limit(){return q;},maybeSingle:async()=>({data:data[table],error:readError}),then(resolve,reject){return Promise.resolve({data:table==='equipos'?[e]:data[table],error:readError}).then(resolve,reject);}};return q;},rpc:async(name,params)=>{calls.push(['rpc',name,params]);return {data:rpcData??(name==='guardar_plantel_seleccion'?{status:'saved',equipo:e}:{torneo_id:10,partido_id:30,equipo_id:20,iniciales:params.p_iniciales,suplentes:params.p_suplentes,revision:params.p_revision+1}),error:rpcError};}};
  const app=Object.fromEntries(['get','post','put'].map(method=>[method,(path,handler)=>routes.set(method+' '+path,handler)]));mountNationalTeamRoutes(app,{db,getAuthenticatedUser:async()=>({user,status:user?null:401}),getRole:async()=>role});
  const call=async(method,path,body={})=>{const res={statusCode:200,status(n){this.statusCode=n;return this;},json(value){this.body=value;return this;}};await routes.get(method+' '+path)({params:{id:'10',equipoId:'20',partidoId:'30'},body},res);return res;};return {call,calls,t,e};
@@ -57,4 +57,17 @@ test('registry Nations list preserves existing hidden audience and does not expo
  const hidden=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2099-11-20T00:00:00Z'}}}});assert.deepEqual((await hidden.call('get',base)).body.equipos,[]);
  const revealed=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2000-11-20T00:00:00Z'}}}});const e=(await revealed.call('get',base)).body.equipos[0];assert.equal(e.creador_id,null);assert.deepEqual(e.jugadores,[]);
  const publicNormal=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});const p=(await publicNormal.call('get',base)).body.equipos[0];assert.equal(p.jugadores.length,8);assert.equal(p.referencias_plantel_disponibles,false);assert.equal(p.can_add_profiles,false);assert.equal(p.can_confirm,false);assert.ok(p.jugadores.every(j=>!('participante_id'in j)&&!('user_id'in j)&&!('email'in j)));
+});
+
+test('expired tournament reports enrollment closed without claiming a save',async()=>{
+ const f=fixture({rpcError:{code:'55000'}});
+ const r=await f.call('post',base+'/:equipoId/confirmar',{expected_revision:1});
+ assert.equal(r.statusCode,409); assert.equal(r.body.code,'NATIONAL_REGISTRATION_CLOSED');
+ assert.equal(r.body.ok,undefined);
+});
+
+test('expired tournament does not advertise confirmation',async()=>{
+ const f=fixture({tournament:{fecha_fin:'2020-01-01'}});
+ const r=await f.call('get',base+'/:equipoId');
+ assert.equal(r.statusCode,200); assert.equal(r.body.can_confirm,false);
 });
