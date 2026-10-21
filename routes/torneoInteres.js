@@ -97,6 +97,22 @@ export function mountTorneoInteresRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails = [],
 }) {
+  app.get('/api/sedes/:id/torneo-interes', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status).json({ error: authError });
+      const sid = parseSedeId(req.params.id);
+      if (!sid) return res.status(400).json({ error: 'sede_id inválido' });
+      const { data, error } = await supabaseAdmin.from('torneo_interes')
+        .select('id').eq('sede_id', sid).eq('user_id', user.id).maybeSingle();
+      if (error) throw error;
+      return res.json({ registrado: Boolean(data) });
+    } catch (err) {
+      console.error('❌ GET /api/sedes/:id/torneo-interes:', err.message);
+      return res.status(err.status || 500).json({ error: 'Error al consultar interés' });
+    }
+  });
+
   app.post('/api/sedes/:id/torneo-interes', async (req, res) => {
     try {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
