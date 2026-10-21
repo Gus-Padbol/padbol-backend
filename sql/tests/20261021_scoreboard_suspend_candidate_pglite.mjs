@@ -58,6 +58,8 @@ await assert.rejects(db.exec(`UPDATE scoreboard_partidos SET cancha='1' WHERE id
 await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`),/Court occupied by resumed scoreboard/);
 await db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,13,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);
 await assert.rejects(db.exec(`UPDATE reservas SET cancha_id=14`),/Court occupied by resumed scoreboard/);
+await assert.rejects(db.exec(`UPDATE reservas SET cancha=2 WHERE cancha_id=13`),/court identifiers disagree/);
+await assert.rejects(db.exec(`INSERT INTO partidos_abiertos(sede_id,cancha_id,cancha,estado,fecha,hora,duracion_minutos) SELECT 8,13,'2','abierto',(clock_timestamp() AT TIME ZONE 'UTC')::date,(clock_timestamp() AT TIME ZONE 'UTC')::time,60`),/court identifiers disagree/);
 await assert.rejects(db.exec(`INSERT INTO torneo_partidos_programacion VALUES(99,901,14,clock_timestamp(),60,'11111111-1111-4111-8111-111111111111',clock_timestamp())`),/Court occupied by resumed scoreboard/);
 await assert.rejects(db.exec(`INSERT INTO partidos_abiertos(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'abierto',(clock_timestamp() AT TIME ZONE 'UTC')::date,(clock_timestamp() AT TIME ZONE 'UTC')::time,60`),/Court occupied by resumed scoreboard/);
 await db.exec(`INSERT INTO clases VALUES (7,8,14,true)`);

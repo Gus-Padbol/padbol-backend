@@ -49,6 +49,8 @@ BEGIN
    IF n<>1 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Reservation court ambiguous'; END IF;
   END IF;
   IF court IS NULL OR NOT EXISTS(SELECT 1 FROM public.canchas WHERE id=court AND sede_id=venue) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Reservation court ambiguous'; END IF;
+  SELECT coalesce(x.orden,(SELECT count(*)::int FROM public.canchas y WHERE y.sede_id=x.sede_id AND y.id<=x.id)) INTO court_no FROM public.canchas x WHERE x.id=court;
+  IF NEW.cancha IS NOT NULL AND NEW.cancha IS DISTINCT FROM court_no THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Reservation court identifiers disagree'; END IF;
   local_period:=public.scoreboard_local_interval_candidate(NEW.fecha,coalesce(nullif(trim(NEW.hora_inicio),''),nullif(trim(NEW.hora),'')),CASE WHEN NEW.duracion_minutos>=15 THEN NEW.duracion_minutos ELSE 90 END);
   IF local_period IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Reservation interval invalid'; END IF;
   IF EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate o JOIN public.scoreboard_partidos s ON s.id=o.scoreboard_id
@@ -67,6 +69,8 @@ BEGIN
    IF n<>1 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Open match court ambiguous'; END IF;
   END IF;
   IF court IS NULL OR zone IS NULL OR NOT EXISTS(SELECT 1 FROM public.canchas WHERE id=court AND sede_id=venue) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Open match court ambiguous'; END IF;
+  SELECT coalesce(x.orden,(SELECT count(*)::int FROM public.canchas y WHERE y.sede_id=x.sede_id AND y.id<=x.id)) INTO court_no FROM public.canchas x WHERE x.id=court;
+  IF nullif(trim(NEW.cancha),'') IS NOT NULL AND trim(NEW.cancha) IS DISTINCT FROM court_no::text THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Open match court identifiers disagree'; END IF;
   local_period:=public.scoreboard_local_interval_candidate(NEW.fecha::text,NEW.hora::text,coalesce(NEW.duracion_minutos,90));
   IF local_period IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Open match interval invalid'; END IF;
   IF EXISTS(SELECT 1 FROM public.scoreboard_court_occupancy_candidate o JOIN public.scoreboard_partidos s ON s.id=o.scoreboard_id
