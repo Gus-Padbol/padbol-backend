@@ -1,3 +1,5 @@
+import { readWaitlistForSede, readWaitlistProfiles } from './waitlistRead.js';
+
 function parseSedeId(raw) {
   const sid = parseInt(String(raw ?? '').trim(), 10);
   return Number.isFinite(sid) && sid > 0 ? sid : null;
@@ -77,17 +79,7 @@ async function fetchPerfilesByUserIds(supabaseAdmin, userIds) {
   const map = new Map();
   if (!userIds.length) return map;
 
-  const { data, error } = await supabaseAdmin
-    .from('jugadores_perfil')
-    .select('user_id, nombre, apellido, apodo, username, email')
-    .in('user_id', userIds);
-
-  if (error) throw error;
-
-  for (const row of data ?? []) {
-    if (row?.user_id) map.set(String(row.user_id), row);
-  }
-  return map;
+  return readWaitlistProfiles(supabaseAdmin, userIds, 'user_id, nombre, apellido, apodo, username, email');
 }
 
 function parseSedeDeporteFromRequest(req, { requireSedeId = true, requireDeporte = true } = {}) {
@@ -241,15 +233,7 @@ export function mountListaEsperaGeneralRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanAdministerSede(role, sedeId);
 
-      const { data: rows, error } = await supabaseAdmin
-        .from('lista_espera_general')
-        .select('id, sede_id, user_id, deporte, created_at')
-        .eq('sede_id', sedeId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      const list = rows ?? [];
+      const list = await readWaitlistForSede(supabaseAdmin, 'lista_espera_general', sedeId);
       const userIds = [...new Set(list.map((row) => row.user_id).filter(Boolean))];
       const perfilByUserId = await fetchPerfilesByUserIds(supabaseAdmin, userIds);
 
