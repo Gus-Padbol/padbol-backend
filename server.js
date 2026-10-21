@@ -4,6 +4,7 @@ import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.j
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
+import { createQaRelay } from './lib/whatsappQaRelay.js';
 import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, registerWhatsappAdminRoutes } from './lib/whatsappAdmin.js';
 import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
 import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
@@ -241,6 +242,7 @@ const runtime = backendRuntime();
 const runWhatsappMetaQaStartupCheck = createWhatsappMetaQaStartupCheck();
 const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
 const whatsappQaCrmManualSenderFactory = createWhatsappQaCrmManualSender();
+const qaRelay = createQaRelay();
 installStagingFetchGuard();
 const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
@@ -2046,7 +2048,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
-  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel });
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay });
 
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
