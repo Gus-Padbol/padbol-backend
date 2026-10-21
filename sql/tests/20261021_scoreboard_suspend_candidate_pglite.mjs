@@ -22,6 +22,7 @@ INSERT INTO scoreboard_partidos VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',8,
 await db.exec(`INSERT INTO reservas(id,nota) VALUES(404,'legacy')`);
 await db.exec(await readFile('sql/20261021140000_scoreboard_suspend_candidate.sql','utf8'));
 await db.exec(await readFile('sql/20261021150000_scoreboard_occupancy_candidate.sql','utf8'));
+await db.exec(await readFile('sql/20261021160000_scoreboard_receipt_candidate.sql','utf8'));
 await db.exec(`UPDATE reservas SET nota='pago' WHERE id=404; DELETE FROM reservas WHERE id=404`);
 await db.exec(`CREATE TRIGGER protect BEFORE INSERT OR UPDATE OF sede_id,cancha,estado ON scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION proteger_cancha_marcador_activo();`);
 const call=(id,version,actor)=>db.query('select public.scoreboard_suspend_candidate($1,$2,$3) as result',[id,version,actor]);
@@ -71,5 +72,15 @@ await assert.rejects(db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fech
 await db.exec(`UPDATE scoreboard_partidos SET estado='suspendido' WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`);
 await assert.rejects(db.exec(`UPDATE scoreboard_partidos SET estado='en_curso' WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`),/Use safe scoreboard resumption/);
 await db.exec(`INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora,duracion_minutos) SELECT 8,14,'confirmada',to_char((clock_timestamp()+interval '7 days') AT TIME ZONE 'UTC','YYYY-MM-DD'),to_char(clock_timestamp() AT TIME ZONE 'UTC','HH24:MI'),60`);
+
+await db.exec(`UPDATE partidos SET estado='suspendido' WHERE id=5`);
+const actionId='33333333-3333-4333-8333-333333333333', cancellationId='44444444-4444-4444-8444-444444444444';
+const transition=()=>db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7) as r',[actionId,'resume',id,actor,'2026-10-21',14,90]);
+assert.equal((await transition()).rows[0].r.status,'applied');
+assert.equal((await transition()).rows[0].r.status,'replayed');
+assert.equal((await db.query('select scoreboard_reconcile_isolated_candidate($1,$2,$3,$4) as r',[actionId,'resume',id,actor])).rows[0].r.status,'applied');
+await assert.rejects(db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7)',[actionId,'resume',id,actor,'2026-10-21',13,90]),/reference already used/);
+assert.equal((await db.query('select scoreboard_reconcile_isolated_candidate($1,$2,$3,$4) as r',[cancellationId,'suspend',id,actor])).rows[0].r.status,'cancelled');
+await assert.rejects(db.query('select scoreboard_transition_receipt_isolated_candidate($1,$2,$3,$4,$5,$6,$7)',[cancellationId,'suspend',id,actor,'2026-10-21',null,null]),/reference cancelled/);
 assert.equal((await db.query("select has_function_privilege('authenticated','public.scoreboard_suspend_candidate(uuid,timestamptz,uuid)','execute') as ok")).rows[0].ok,false);
 await db.close();console.log('Candidate suspension/resumption: scope, CAS, score and clock preserved, court conflicts, linked match, unsupported fixture and grants passed');
