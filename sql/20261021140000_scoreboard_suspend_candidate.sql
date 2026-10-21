@@ -164,6 +164,12 @@ BEGIN
  IF coalesce(p_duration_minutes,0) NOT BETWEEN 1 AND 1440 THEN
   RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Explicit match duration required';
  END IF;
+ -- Local-time schedules are ambiguous across a daylight-saving transition.
+ -- Refuse the window until all sources can be compared as absolute instants.
+ IF ((at_now+p_duration_minutes*interval '1 minute') AT TIME ZONE zone)
+    IS DISTINCT FROM ((at_now AT TIME ZONE zone)+p_duration_minutes*interval '1 minute') THEN
+  RAISE EXCEPTION USING ERRCODE='0A000',MESSAGE='Resumption across timezone transition requires manual scheduling';
+ END IF;
  local_range:=tsrange(at_now AT TIME ZONE zone,(at_now AT TIME ZONE zone)+p_duration_minutes*interval '1 minute','[)');
  IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=c.sede_id OR b.sede_id IS NULL AND b.sede=(SELECT nombre FROM public.sedes WHERE id=c.sede_id))
    AND (b.cancha_id=c.id OR b.cancha_id IS NULL AND b.cancha=court_number)
