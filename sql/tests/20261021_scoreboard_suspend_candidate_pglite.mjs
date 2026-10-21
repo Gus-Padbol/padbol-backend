@@ -57,6 +57,18 @@ await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$
 await db.exec(`INSERT INTO clases VALUES (1,8,14,true); INSERT INTO clases_horarios SELECT 1,extract(dow FROM (clock_timestamp()-interval '1 hour') AT TIME ZONE 'UTC')::int,((clock_timestamp()-interval '1 hour') AT TIME ZONE 'UTC')::time,((clock_timestamp()+interval '1 hour') AT TIME ZONE 'UTC')::time`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/conflicting class/); await db.exec('DELETE FROM clases_horarios; DELETE FROM clases');
 
+// A legacy fixture with unknown status still reserves its court.
+await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado) VALUES(99,901,8,NULL); INSERT INTO torneo_partidos_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(99,901,14,clock_timestamp(),60)`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Court reserved by another match/);
+await db.exec('DELETE FROM torneo_partidos_programacion WHERE partido_id=99; DELETE FROM partidos WHERE id=99');
+
+// A late trigger must roll back the entire transition and leave the score intact.
+await db.exec(`CREATE FUNCTION delay_resume_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.estado='en_curso' AND OLD.estado='suspendido' THEN PERFORM pg_sleep(5.1); END IF; RETURN NEW; END $$; CREATE TRIGGER delay_resume_test BEFORE UPDATE ON scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION delay_resume_test()`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/availability check expired/);
+assert.equal((await db.query('select estado from scoreboard_partidos where id=$1',[id])).rows[0].estado,'suspendido');
+assert.equal((await db.query('select estado from partidos where id=5')).rows[0].estado,'suspendido');
+await db.exec('DROP TRIGGER delay_resume_test ON scoreboard_partidos; DROP FUNCTION delay_resume_test()');
+
 const resumed=(await db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5) as result',[id,'2026-10-21',actor,14,90])).rows[0].result;
 assert.equal(resumed.estado,'en_curso');assert.equal(resumed.cancha,'2');assert.equal(resumed.score_a,40);assert.equal(resumed.cronometro_pausado,true);assert.equal(resumed.cronometro_segundos,78);
 await db.exec(`DELETE FROM scoreboard_partidos WHERE id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'`);

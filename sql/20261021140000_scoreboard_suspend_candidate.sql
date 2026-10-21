@@ -191,8 +191,8 @@ BEGIN
    AND public.scoreboard_class_overlap_candidate(local_range,d.day::date,h.hora_inicio,h.hora_fin)) THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has a conflicting class';
  END IF;
- IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute')
- OR EXISTS(SELECT 1 FROM public.torneo_nations_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
+ IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND coalesce(p.estado,'') NOT IN('cancelado','suspendido','finalizado') AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute')
+ OR EXISTS(SELECT 1 FROM public.torneo_nations_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND coalesce(p.estado,'') NOT IN('cancelado','suspendido','finalizado') AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court reserved by another match';
  END IF;
  IF has_general THEN
@@ -200,7 +200,7 @@ BEGIN
    RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Resumption outside tournament dates';
   END IF;
   IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion s JOIN public.partidos p ON p.id=s.partido_id
-   WHERE s.torneo_id=t.id AND p.id<>m.id AND p.estado NOT IN('cancelado','suspendido')
+   WHERE s.torneo_id=t.id AND p.id<>m.id AND coalesce(p.estado,'') NOT IN('cancelado','suspendido')
    AND (m.equipo_a_id IN(p.equipo_a_id,p.equipo_b_id) OR m.equipo_b_id IN(p.equipo_a_id,p.equipo_b_id))
    AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute') THEN
    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Team conflict';
