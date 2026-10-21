@@ -1,0 +1,12 @@
+import {PGlite} from '@electric-sql/pglite';
+import {readFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const db=new PGlite();
+const load=async p=>db.exec(await readFile(p,'utf8'));
+await db.exec('CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;');
+for(const p of ['sql/tests/20261016_selection_integrated_bootstrap.sql','sql/20261010150000_padbol_national_rosters_lineups.sql','sql/migrations/20261016100000_tournament_planning.sql','sql/migrations/20261016140000_tournament_generic_participants.sql','sql/migrations/20261016103000_generic_selection_lineups.sql','sql/migrations/20261016160000_generic_selection_compatibility.sql','sql/tests/20261016_nations_registry_bootstrap.sql','sql/20261011150000_nations_cup_event_plan.sql','sql/20261013120000_nations_third_place.sql','sql/migrations/20261016150000_participant_official_accreditation.sql','sql/migrations/20261016170000_nations_registered_participants.sql','sql/migrations/20261016180000_participant_ranking_closure_snapshot.sql','sql/migrations/20261016190000_sync_linked_scoreboard_final_result.sql','sql/20261021174000_scoreboard_final_result_order_candidate.sql']) await load(p);
+assert.equal((await db.query("SELECT has_function_privilege('service_role','public.finalizar_partido_antes_ocupacion_candidate(bigint,jsonb,uuid,text)','execute') AS ok")).rows[0].ok,false);
+await load('sql/tests/20261016_scoreboard_reverse_sync_assertions.sql');
+await load('sql/tests/20261016_nations_registry_assertions.sql');
+await db.close();
+console.log('Nations finalization, scoreboard synchronization and isolated wrapper privileges passed');
