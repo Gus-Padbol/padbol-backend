@@ -74,6 +74,14 @@ await db.exec(`DELETE FROM torneo_nations_programacion WHERE partido_id=97; INSE
 await assert.rejects(db.exec(`INSERT INTO torneo_nations_programacion VALUES(97,14,clock_timestamp(),60)`),/Court occupied by reservation/);
 await db.exec('DELETE FROM reservas; DELETE FROM partidos WHERE id=97');
 
+// A dated historical booking with no time does not block years later, while
+// an incomplete booking on an overlapping date fails closed.
+await db.exec(`ALTER TABLE reservas DISABLE TRIGGER scoreboard_guard_reservation_candidate; INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora) VALUES (8,14,'confirmada','2020-01-01',NULL); ALTER TABLE reservas ENABLE TRIGGER scoreboard_guard_reservation_candidate; INSERT INTO partidos(id,torneo_id,sede_id,estado) VALUES(96,901,8,'pendiente'); INSERT INTO torneo_partidos_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(96,901,14,clock_timestamp()+interval '1 day',60); DELETE FROM torneo_partidos_programacion WHERE partido_id=96; DELETE FROM partidos WHERE id=96; BEGIN`);
+assert.equal((await db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5) as result',[id,'2026-10-21',actor,14,90])).rows[0].result.estado,'en_curso');
+await db.exec('ROLLBACK; DELETE FROM reservas');
+await db.exec(`ALTER TABLE reservas DISABLE TRIGGER scoreboard_guard_reservation_candidate; INSERT INTO reservas(sede_id,cancha_id,estado,fecha,hora) SELECT 8,14,'confirmada',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD'),NULL; ALTER TABLE reservas ENABLE TRIGGER scoreboard_guard_reservation_candidate`);
+await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/conflicting reservation/); await db.exec('DELETE FROM reservas');
+
 // A legacy fixture with unknown status still reserves its court.
 await db.exec(`INSERT INTO partidos(id,torneo_id,sede_id,estado) VALUES(99,901,8,NULL); INSERT INTO torneo_partidos_programacion(partido_id,torneo_id,court_id,inicio,duration_minutes) VALUES(99,901,14,clock_timestamp(),60)`);
 await assert.rejects(db.query('select public.scoreboard_resume_candidate($1,$2,$3,$4,$5)',[id,'2026-10-21',actor,14,90]),/Court reserved by another match/);

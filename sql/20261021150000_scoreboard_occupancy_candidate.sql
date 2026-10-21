@@ -120,7 +120,8 @@ BEGIN
   local_period:=tsrange(NEW.inicio AT TIME ZONE zone,(NEW.inicio+NEW.duration_minutes*interval '1 minute') AT TIME ZONE zone,'[)');
   IF EXISTS(SELECT 1 FROM public.reservas b WHERE (b.sede_id=venue OR b.sede=(SELECT nombre FROM public.sedes WHERE id=venue))
     AND (b.cancha_id=court OR b.cancha=court_no) AND lower(coalesce(b.estado,'')) NOT IN ('cancelada','cancelado')
-    AND (public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) IS NULL
+    AND ((public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) IS NULL
+       AND (coalesce(b.duracion_minutos,0)>1440 OR public.scoreboard_local_interval_candidate(b.fecha,'00:00',1) IS NULL OR lower(public.scoreboard_local_interval_candidate(b.fecha,'00:00',1))::date BETWEEN lower(local_period)::date-1 AND upper(local_period)::date))
       OR public.scoreboard_local_interval_candidate(b.fecha,coalesce(nullif(trim(b.hora_inicio),''),nullif(trim(b.hora),'')),CASE WHEN b.duracion_minutos>=15 THEN b.duracion_minutos ELSE 90 END) && local_period)) THEN
    RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court occupied by reservation';
   END IF;
