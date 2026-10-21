@@ -328,6 +328,9 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
     return { precio: precioBase, precio_base: precioBase, surge_activo: false, precio_metadata: baseResolved };
   }
 
+  // La tarifa dinámica requiere una lectura consistente por sede y deporte.
+  throw Object.assign(new Error('La tarifa dinámica no está disponible temporalmente'), { status: 503, code: 'SURGE_LECTURA_NO_CONSISTENTE' });
+
   const priceRange = computeSurgePriceRangeFromPct(
     precioBase,
     config.descuento_max_pct,
