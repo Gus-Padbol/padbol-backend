@@ -3,13 +3,14 @@ const MAX_ROWS = 10000;
 
 // Page by immutable primary key; a server-side response cap cannot silently truncate the result.
 export async function readWaitlistForSede(db, table, sedeId) {
-  let lastId = 0;
+  let lastId = null;
   const rows = [];
   while (true) {
-    const { data, error } = await db.from(table)
+    let query = db.from(table)
       .select('id, sede_id, user_id, deporte, created_at')
-      .eq('sede_id', sedeId).gt('id', lastId)
-      .order('id', { ascending: true }).limit(PAGE_SIZE);
+      .eq('sede_id', sedeId);
+    if (lastId !== null) query = query.gt('id', lastId);
+    const { data, error } = await query.order('id', { ascending: true }).limit(PAGE_SIZE);
     if (error) throw error;
     if (!Array.isArray(data)) throw new Error('Respuesta inválida de lista de espera');
     if (!data.length) break;
@@ -18,12 +19,13 @@ export async function readWaitlistForSede(db, table, sedeId) {
       err.status = 503;
       throw err;
     }
-    const next = Number(data[data.length - 1].id);
-    if (!Number.isSafeInteger(next) || next <= lastId) throw new Error('Orden inválido de lista de espera');
+    const next = data[data.length - 1].id;
+    if ((typeof next !== 'string' || !next) && (typeof next !== 'number' || !Number.isSafeInteger(next))) throw new Error('Identificador inválido de lista de espera');
+    if (next === lastId) throw new Error('Orden inválido de lista de espera');
     rows.push(...data);
     lastId = next;
   }
-  return rows.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')) || Number(b.id) - Number(a.id));
+  return rows.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')) || String(b.id).localeCompare(String(a.id)));
 }
 
 export async function readWaitlistProfiles(db, userIds, columns) {
