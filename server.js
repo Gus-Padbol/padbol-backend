@@ -1223,6 +1223,9 @@ mountScoreboardRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
   io,
+  // Recovery must stay enabled if transitions are turned off after activation.
+  scoreboardSuspensionCandidateEnabled: process.env.SCOREBOARD_SUSPENSION_ENABLED === 'true' && process.env.SCOREBOARD_SUSPENSION_RECOVERY_ENABLED === 'true',
+  scoreboardSuspensionRecoveryEnabled: process.env.SCOREBOARD_SUSPENSION_RECOVERY_ENABLED === 'true',
 });
 initScoreboardSocket(io,{supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)});
 mountTorneoInteresRoutes(app, {
