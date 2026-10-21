@@ -50,33 +50,54 @@ export function mountAdminValidationAndChannelsRoutes(app, {
     try {
       const auth = await requireSuperAdminUser(req, res, authDeps);
       if (!auth) return;
-      const { data: legacy, error: legacyError } = await supabaseAdmin.from('jugadores_perfil')
-        .select('email').eq('pendiente_validacion', true).is('user_id', null).limit(1);
-      if (legacyError) throw legacyError;
-      if (!Array.isArray(legacy)) throw new Error('Respuesta inválida de validaciones');
-      if (legacy.length) return res.status(503).json({ error: 'Hay perfiles pendientes sin identidad vinculada; no se puede garantizar un listado completo' });
       const rows = [];
-      let lastUserId = null;
+      let lastId = null;
       while (true) {
         let query = supabaseAdmin.from('jugadores_perfil')
-          .select('email, nombre, apellido, alias, user_id, pais, nivel, genero, categoria_validada')
-          .eq('pendiente_validacion', true).not('user_id', 'is', null);
-        if (lastUserId !== null) query = query.gt('user_id', lastUserId);
-        const { data, error } = await query.order('user_id', { ascending: true }).limit(100);
+          .select('id, email, nombre, apellido, alias, user_id, pais, nivel, genero, categoria_validada')
+          .eq('pendiente_validacion', true);
+        if (lastId !== null) query = query.gt('id', lastId);
+        const { data, error } = await query.order('id', { ascending: true }).limit(100);
         if (error) throw error;
         if (!Array.isArray(data)) throw new Error('Respuesta inválida de validaciones');
         if (!data.length) break;
         if (rows.length + data.length > 10000) return res.status(503).json({ error: 'Demasiadas validaciones; requiere paginación' });
-        const next = data[data.length - 1].user_id;
-        if (typeof next !== 'string' || !next || next === lastUserId) throw new Error('Orden inválido de validaciones');
+        for (const row of data) {
+          const raw = row.id;
+          if ((typeof raw === 'number' && !Number.isSafeInteger(raw)) || !/^-?\d+$/.test(String(raw))) throw new Error('Identidad de perfil imprecisa');
+          const id = BigInt(raw);
+          if (lastId !== null && id <= BigInt(lastId)) throw new Error('Orden inválido de validaciones');
+          lastId = id.toString();
+        }
         rows.push(...data);
-        lastUserId = next;
       }
       const pending = rows.filter((row) => row.categoria_validada !== true && row.categoria_validada !== 1 && !['true', '1'].includes(String(row.categoria_validada ?? '').trim().toLowerCase()));
       return res.json({ validaciones: pending });
     } catch (error) {
       console.error('❌ GET /api/admin/validaciones:', error.message);
       return res.status(500).json({ error: 'No se pudieron cargar las validaciones' });
+    }
+  });
+
+  app.patch('/api/admin/validaciones/perfil/:id', async (req, res) => {
+    try {
+      const auth = await requireSuperAdminUser(req, res, authDeps);
+      if (!auth) return;
+      const id = String(req.params.id || '');
+      if (!/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n) return res.status(400).json({ error: 'Perfil inválido' });
+      const { accion, nivel, motivo } = req.body || {};
+      if (!['aprobar', 'rechazar', 'categoria'].includes(accion)) return res.status(400).json({ error: 'Acción inválida' });
+      if (accion === 'rechazar' && !cleanReason(motivo)) return res.status(400).json({ error: 'Motivo inválido' });
+      if (accion === 'categoria' && !['Principiante','6ta','5ta','4ta','3ra','2da','1ra','Elite'].includes(nivel)) return res.status(400).json({ error: 'Categoría inválida' });
+      const changes = { pendiente_validacion: false, ...(accion === 'categoria' ? { nivel } : {}) };
+      const { data, error } = await supabaseAdmin.from('jugadores_perfil').update(changes)
+        .eq('id', id).eq('pendiente_validacion', true).select('id').maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(409).json({ error: 'La solicitud ya cambió o no existe. Actualizá la lista.' });
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error('❌ PATCH /api/admin/validaciones/perfil:', error.message);
+      return res.status(500).json({ error: 'No se pudo confirmar el cambio de validación' });
     }
   });
 
