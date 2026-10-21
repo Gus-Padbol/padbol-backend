@@ -7,6 +7,11 @@ CREATE TABLE public.scoreboard_partidos(id uuid primary key, estado text, saque_
 CREATE TABLE public.scoreboard_historial_puntos(id uuid default gen_random_uuid() primary key, partido_id uuid, equipo text, score_a_antes text,score_b_antes text,set_numero integer,games_a_antes integer,games_b_antes integer,sets_a_antes jsonb,sets_b_antes jsonb,es_tiebreak_antes boolean,estado_antes text,historial_sets_antes jsonb,saque_actual_antes text);
 INSERT INTO public.scoreboard_partidos VALUES ('00000000-0000-0000-0000-000000000001','en_curso','A',0,0,0,0,0,0,'[]',false,null,'[]','2026-01-01','2026-01-01',false,0,'secret');`);
 await db.exec(await readFile('sql/20261021120000_scoreboard_atomic_mutation.sql','utf8'));
+if (process.env.SCOREBOARD_ORDER_CANDIDATE === '1') {
+  await db.exec(await readFile('sql/20261021172000_scoreboard_mutation_order_candidate.sql','utf8'));
+  assert.equal((await db.query("select has_function_privilege('service_role','public.scoreboard_commit_mutation_before_occupancy_candidate(uuid,timestamptz,jsonb,text,jsonb,uuid)','execute') as ok")).rows[0].ok,false);
+}
+
 const id='00000000-0000-0000-0000-000000000001';
 const call=(time,next,kind,history=null,historyId=null)=>db.query('select public.scoreboard_commit_mutation($1,$2,$3,$4,$5,$6) as result',[id,time,JSON.stringify(next),kind,history===null?null:JSON.stringify(history),historyId]);
 const original='2026-01-01';
