@@ -29,7 +29,7 @@ export async function precioFijoSedeParaDuracion(supabaseAdmin, sede, duracionMi
     sede,
     duracionMinutos: duracionMin,
     deporte: options.deporte ?? 'padbol',
-    slotInicio: normalizedSlot,
+    slotInicio: options.slot_inicio ?? null,
     timezone: options.timezone,
     skipFranjas: options.skipFranjas === true,
   });
