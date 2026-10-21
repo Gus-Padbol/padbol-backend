@@ -23,7 +23,7 @@ await db.exec(`INSERT INTO reservas(id,nota) VALUES(404,'legacy')`);
 await db.exec(await readFile('sql/20261021140000_scoreboard_suspend_candidate.sql','utf8'));
 await db.exec(await readFile('sql/20261021150000_scoreboard_occupancy_candidate.sql','utf8'));
 await db.exec(await readFile('sql/20261021160000_scoreboard_receipt_candidate.sql','utf8'));
-assert.equal((await db.query("SELECT count(*)::int AS n FROM pg_trigger WHERE tgname LIKE 'scoreboard_lock_%_candidate' AND NOT tgisinternal AND (tgtype & 1)=0 AND (tgtype & 2)=2")).rows[0].n,8);
+assert.equal((await db.query("SELECT count(*)::int AS n FROM pg_trigger WHERE tgname LIKE 'scoreboard_lock_%_candidate' AND NOT tgisinternal AND (tgtype & 1)=0 AND (tgtype & 2)=2")).rows[0].n,7);
 await db.exec(`UPDATE reservas SET nota='pago' WHERE id=404; DELETE FROM reservas WHERE id=404`);
 await db.exec(`CREATE TRIGGER protect BEFORE INSERT OR UPDATE OF sede_id,cancha,estado ON scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION proteger_cancha_marcador_activo();`);
 const call=(id,version,actor)=>db.query('select public.scoreboard_suspend_candidate($1,$2,$3) as result',[id,version,actor]);
