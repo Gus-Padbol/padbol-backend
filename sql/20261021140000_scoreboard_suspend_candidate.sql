@@ -86,6 +86,14 @@ END $$;
 REVOKE ALL ON FUNCTION public.scoreboard_local_interval_candidate(text,text,integer) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.scoreboard_local_interval_candidate(text,text,integer) TO service_role;
 
+CREATE OR REPLACE FUNCTION public.scoreboard_class_overlap_candidate(p_range tsrange,p_day date,p_start time,p_end time)
+RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path=pg_catalog AS $$
+ SELECT p_range IS NULL OR p_day IS NULL OR p_start IS NULL OR p_end IS NULL OR
+ tsrange(p_day+p_start,(p_day+p_end)+CASE WHEN p_end<=p_start THEN interval '1 day' ELSE interval '0' END,'[)') && p_range
+$$;
+REVOKE ALL ON FUNCTION public.scoreboard_class_overlap_candidate(tsrange,date,time,time) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.scoreboard_class_overlap_candidate(tsrange,date,time,time) TO service_role;
+
 -- Experimental only: this function does not yet cover every writer of court
 -- occupancy, and refuses matches with historical fixture schedule rows.
 CREATE OR REPLACE FUNCTION public.scoreboard_resume_candidate(
@@ -152,8 +160,7 @@ BEGIN
    CROSS JOIN LATERAL generate_series((lower(local_range)::date-1)::timestamp,upper(local_range)::date::timestamp,interval '1 day') AS d(day)
    WHERE a.sede_id=c.sede_id AND a.activo=true AND (a.cancha_id=c.id OR a.cancha_id IS NULL)
    AND h.dia_semana=extract(dow FROM d.day)::int
-   AND (h.hora_inicio IS NULL OR h.hora_fin IS NULL OR
-    tsrange(d.day::date+h.hora_inicio,(d.day::date+h.hora_fin)+CASE WHEN h.hora_fin<=h.hora_inicio THEN interval '1 day' ELSE interval '0' END,'[)') && local_range)) THEN
+   AND public.scoreboard_class_overlap_candidate(local_range,d.day::date,h.hora_inicio,h.hora_fin)) THEN
   RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='Court has a conflicting class';
  END IF;
  IF EXISTS(SELECT 1 FROM public.torneo_partidos_programacion s JOIN public.partidos p ON p.id=s.partido_id WHERE s.court_id=c.id AND p.id IS DISTINCT FROM m.id AND p.estado NOT IN('cancelado','suspendido','finalizado') AND s.inicio<at_now+p_duration_minutes*interval '1 minute' AND at_now<s.inicio+s.duration_minutes*interval '1 minute')

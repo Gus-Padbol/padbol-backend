@@ -22,6 +22,8 @@ INSERT INTO scoreboard_partidos VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',8,
 await db.exec(await readFile('sql/20261021140000_scoreboard_suspend_candidate.sql','utf8'));
 await db.exec(`CREATE TRIGGER protect BEFORE INSERT OR UPDATE OF sede_id,cancha,estado ON scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION proteger_cancha_marcador_activo();`);
 const call=(id,version,actor)=>db.query('select public.scoreboard_suspend_candidate($1,$2,$3) as result',[id,version,actor]);
+assert.equal((await db.query("select scoreboard_class_overlap_candidate(tsrange('2026-10-22 00:20','2026-10-22 00:50','[)'), '2026-10-21', '23:45', '00:30') as overlap")).rows[0].overlap,true);
+assert.equal((await db.query("select scoreboard_class_overlap_candidate(tsrange('2026-10-22 01:00','2026-10-22 01:30','[)'), '2026-10-21', '23:45', '00:30') as overlap")).rows[0].overlap,false);
 const id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', actor='11111111-1111-4111-8111-111111111111';
 await assert.rejects(call(id,'2026-10-21','22222222-2222-4222-8222-222222222222'));
 assert.equal((await call(id,'2026-10-20',actor)).rows[0].result,null);
