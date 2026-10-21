@@ -150,6 +150,8 @@ CREATE TRIGGER scoreboard_lock_open_candidate BEFORE INSERT OR UPDATE OF sede_id
 CREATE TRIGGER scoreboard_lock_classes_candidate BEFORE INSERT OR UPDATE OF sede_id,cancha_id,activo ON public.clases FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
 CREATE TRIGGER scoreboard_lock_class_hours_candidate BEFORE INSERT OR UPDATE OF clase_id,dia_semana,hora_inicio,hora_fin ON public.clases_horarios FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
 CREATE TRIGGER scoreboard_lock_resumed_candidate BEFORE UPDATE OF estado,sede_id,cancha,partido_torneo_id ON public.scoreboard_partidos FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
+-- Result-sync triggers update scoreboards after a match result is written.
+CREATE TRIGGER scoreboard_lock_match_result_candidate BEFORE UPDATE OF estado,resultado,ganador_equipo_id ON public.partidos FOR EACH STATEMENT EXECUTE FUNCTION public.scoreboard_occupancy_lock_statement_candidate();
 
 CREATE TRIGGER scoreboard_guard_reservation_candidate BEFORE INSERT OR UPDATE ON public.reservas FOR EACH ROW EXECUTE FUNCTION public.scoreboard_occupancy_guard_candidate();
 CREATE TRIGGER scoreboard_guard_schedule_candidate BEFORE INSERT OR UPDATE ON public.torneo_partidos_programacion FOR EACH ROW EXECUTE FUNCTION public.scoreboard_occupancy_guard_candidate();
