@@ -35,3 +35,14 @@ test('reports conflict and completed transaction despite socket failure', async 
  const busy=harness({result:{error:{code:'23505'}}}); assert.equal((await busy.run('resume',valid)).status,409);
  const socket=harness({socketError:true}); assert.equal((await socket.run('resume',valid)).status,200);
 });
+
+test('main router keeps experimental endpoints unregistered unless explicitly enabled', async () => {
+ const { mountScoreboardRoutes } = await import('../../routes/scoreboard.js');
+ function registered(enabled) {
+  const routes=[]; const app=Object.fromEntries(['get','post','patch','delete'].map(method=>[method,path=>routes.push(`${method} ${path}`)]));
+  mountScoreboardRoutes(app,{supabaseAdmin:{},getAuthenticatedUser:async()=>({}),fetchUserRoleRowForAuthUser:async()=>null,scoreboardSuspensionCandidateEnabled:enabled});
+  return routes;
+ }
+ assert.equal(registered(false).includes('post /api/scoreboard/partidos/:id/resume'),false);
+ assert.equal(registered(true).includes('post /api/scoreboard/partidos/:id/resume'),true);
+});

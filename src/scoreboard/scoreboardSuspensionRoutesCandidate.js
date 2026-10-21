@@ -2,7 +2,7 @@
 // writer have been reviewed and tested together in the target environment.
 const ACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function installScoreboardSuspensionRoutesCandidate(app, {
-  getAuthenticatedUser, fetchPartido, resolveRole, assertCanControl, db, publishUpdate,
+  getAuthenticatedUser, fetchPartido, resolveRole, assertCanControl, db, publishUpdate, presentPartido = async value => value,
 }) {
   for (const action of ['suspend', 'resume', 'reconcile']) {
     app.post(`/api/scoreboard/partidos/:id/${action}`, async (req, res) => {
@@ -53,7 +53,7 @@ export function installScoreboardSuspensionRoutesCandidate(app, {
         if (data.status === 'applied' && action !== 'reconcile') {
           try { await publishUpdate(safe); } catch { /* screen polling recovers */ }
         }
-        return res.json({ ...safe, transition_receipt: { action_id: actionId, action: mutation, status: data.status } });
+        return res.json({ ...(await presentPartido(safe)), transition_receipt: { action_id: actionId, action: mutation, status: data.status } });
       } catch (error) {
         return res.status(error?.status === 403 ? 403 : 500).json({ error: error?.status === 403 ? 'No autorizado' : 'No se pudo confirmar el marcador.' });
       }
