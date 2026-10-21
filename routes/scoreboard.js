@@ -304,15 +304,6 @@ const HISTORIAL_PUNTO_SELECT = [
   'timestamp',
 ].join(', ');
 
-async function insertHistorialPuntoBefore(supabaseAdmin, partidoId, partido, equipo) {
-  const snapshot = buildHistorialPuntoSnapshot(partido, equipo);
-  const { error } = await supabaseAdmin
-    .from('scoreboard_historial_puntos')
-    .insert({ partido_id: partidoId, ...snapshot });
-
-  if (error) throw error;
-}
-
 async function fetchUltimoHistorialPunto(supabaseAdmin, partidoId) {
   const { data, error } = await supabaseAdmin
     .from('scoreboard_historial_puntos')
@@ -325,13 +316,17 @@ async function fetchUltimoHistorialPunto(supabaseAdmin, partidoId) {
   return data?.[0] ?? null;
 }
 
-async function deleteHistorialPuntoById(supabaseAdmin, historialId) {
-  const { error } = await supabaseAdmin
-    .from('scoreboard_historial_puntos')
-    .delete()
-    .eq('id', historialId);
-
-  if (error) throw error;
+function assertLatestHistoryMatchesSnapshot(partido, entry) {
+  const snapshots = partido.historial_puntos;
+  if (!Array.isArray(snapshots) || snapshots.length === 0) {
+    throw Object.assign(new Error('No hay puntos para deshacer'), { status: 400 });
+  }
+  const expected = buildHistorialPuntoSnapshot(snapshots[snapshots.length - 1], entry.equipo);
+  const keys = ['score_a_antes','score_b_antes','set_numero','games_a_antes','games_b_antes',
+    'sets_a_antes','sets_b_antes','es_tiebreak_antes','estado_antes','saque_actual_antes'];
+  const equal = keys.every(key => String(expected[key]) === String(entry[key]))
+    && JSON.stringify(expected.historial_sets_antes) === JSON.stringify(entry.historial_sets_antes ?? []);
+  if (!equal) throw Object.assign(new Error('El historial no coincide con el marcador. Actualizá y solicitá revisión.'), { status: 409 });
 }
 
 async function fetchHistorialPuntos(supabaseAdmin, partidoId) {
@@ -422,17 +417,14 @@ async function fetchPartido(supabaseAdmin, partidoId) {
   return data;
 }
 
-async function savePartido(supabaseAdmin, partido) {
-  const { id, ...rest } = partido;
-  const { data, error } = await supabaseAdmin
-    .from('scoreboard_partidos')
-    .update({ ...rest, updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .select(SCOREBOARD_PARTIDO_SELECT)
-    .limit(1);
-
+async function savePartido(supabaseAdmin, partido, expectedUpdatedAt, { kind = 'update', history = null, historyId = null } = {}) {
+  const { data, error } = await supabaseAdmin.rpc('scoreboard_commit_mutation', {
+    p_id: partido.id, p_expected_updated_at: expectedUpdatedAt ?? null,
+    p_next: partido, p_kind: kind, p_history: history, p_history_id: historyId,
+  });
   if (error) throw error;
-  return Array.isArray(data) ? data[0] ?? null : data;
+  if (!data) throw Object.assign(new Error('El marcador cambió o el partido no está en juego. Actualizá y volvé a intentar.'), { status: 409 });
+  return Object.fromEntries(SCOREBOARD_PARTIDO_SELECT.split(', ').filter(key => Object.hasOwn(data, key)).map(key => [key, data[key]]));
 }
 
 export function mountScoreboardRoutes(app, {
@@ -443,8 +435,8 @@ export function mountScoreboardRoutes(app, {
   io = null,
 }) {
   const assertNationsScoreboardRead=(req,row)=>assertNationsScoreboardAudience(req,row,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRole(user,{fetchUserRoleRowForAuthUser,legacySuperAdminEmails})});
-  async function saveAndEmit(partido) {
-    const saved = await savePartido(supabaseAdmin, partido);
+  async function saveAndEmit(partido, expectedUpdatedAt, options) {
+    const saved = await savePartido(supabaseAdmin, partido, expectedUpdatedAt, options);
     await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
     return enrichPartidoWithVenue(supabaseAdmin, saved);
   }
@@ -452,10 +444,11 @@ export function mountScoreboardRoutes(app, {
   async function handleRegistrarPunto(partido, equipo) {
     assertScoreboardMutable(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
+    const expectedUpdatedAt = partido.updated_at;
     const estadoAntes = partido.estado;
-    await insertHistorialPuntoBefore(supabaseAdmin, partido.id, partido, equipo);
+    const history = buildHistorialPuntoSnapshot(partido, equipo);
     registrarPunto(partido, equipo);
-    const saved = await savePartido(supabaseAdmin, partido);
+    const saved = await savePartido(supabaseAdmin, partido, expectedUpdatedAt, { kind: 'point', history });
     await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
     await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
     await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
@@ -465,40 +458,61 @@ export function mountScoreboardRoutes(app, {
   async function handleUndo(partido) {
     assertScoreboardMutable(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
+    if (!Array.isArray(partido.historial_puntos) || partido.historial_puntos.length === 0) {
+      throw Object.assign(new Error('No hay puntos para deshacer'), { status: 400 });
+    }
+    const expectedUpdatedAt = partido.updated_at;
     const entry = await fetchUltimoHistorialPunto(supabaseAdmin, partido.id);
     if (!entry) {
       const err = new Error('No hay puntos para deshacer');
       err.status = 400;
       throw err;
     }
+    assertLatestHistoryMatchesSnapshot(partido, entry);
     applyHistorialPuntoSnapshot(partido, entry);
-    await deleteHistorialPuntoById(supabaseAdmin, entry.id);
-    return saveAndEmit(partido);
+    partido.historial_puntos = [];
+    return saveAndEmit(partido, expectedUpdatedAt, { kind: 'undo', historyId: entry.id });
   }
 
   async function handleDeshacer(partido) {
     assertScoreboardMutable(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
+    if (!Array.isArray(partido.historial_puntos) || partido.historial_puntos.length === 0) {
+      throw Object.assign(new Error('No hay puntos para deshacer'), { status: 400 });
+    }
+    const entry = await fetchUltimoHistorialPunto(supabaseAdmin, partido.id);
+    if (entry) {
+      const expectedUpdatedAt = partido.updated_at;
+      assertLatestHistoryMatchesSnapshot(partido, entry);
+      applyHistorialPuntoSnapshot(partido, entry);
+      partido.historial_puntos = [];
+      return saveAndEmit(partido, expectedUpdatedAt, { kind: 'undo', historyId: entry.id });
+    }
+    // Older markers can have the embedded snapshot without an external row.
+    const expectedUpdatedAt = partido.updated_at;
     deshacerPunto(partido);
-    return saveAndEmit(partido);
+    return saveAndEmit(partido, expectedUpdatedAt);
   }
 
   async function handleSaque(partido) {
     assertScoreboardMutable(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
+    const expectedUpdatedAt = partido.updated_at;
     cambiarSaque(partido);
-    return saveAndEmit(partido);
+    return saveAndEmit(partido, expectedUpdatedAt);
   }
 
   async function handleTiebreak(partido) {
     assertScoreboardMutable(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
+    const expectedUpdatedAt = partido.updated_at;
     iniciarTiebreak(partido);
-    return saveAndEmit(partido);
+    return saveAndEmit(partido, expectedUpdatedAt);
   }
 
   async function handleCronometro(partido, accion) {
     assertScoreboardMutable(partido);
+    const expectedUpdatedAt = partido.updated_at;
     if (accion === 'start') {
       startCronometro(partido);
     } else if (accion === 'pause') {
@@ -507,7 +521,7 @@ export function mountScoreboardRoutes(app, {
       await assertScoreboardScoringSupported(supabaseAdmin, partido);
       resetPartidoCompleto(partido);
     }
-    return saveAndEmit(partido);
+    return saveAndEmit(partido, expectedUpdatedAt);
   }
 
   app.post('/api/scoreboard/partidos/:id/control-token', async (req, res) => {
@@ -879,16 +893,20 @@ export function mountScoreboardRoutes(app, {
         }
       }
 
-      const { data, error } = await supabaseAdmin
+      const previousTime = Date.parse(partido.updated_at || '');
+      const nextTime = new Date(Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString();
+      let update = supabaseAdmin
         .from('scoreboard_partidos')
-        .update({ ...patch, updated_at: new Date().toISOString() })
-        .eq('id', partido.id)
+        .update({ ...patch, updated_at: nextTime })
+        .eq('id', partido.id);
+      update = partido.updated_at == null ? update.is('updated_at', null) : update.eq('updated_at', partido.updated_at);
+      const { data, error } = await update
         .select(SCOREBOARD_PARTIDO_SELECT)
         .limit(1);
 
       if (error) throw error;
       const updated = Array.isArray(data) ? data[0] : data;
-      if (!updated) return res.status(404).json({ error: 'Partido no encontrado' });
+      if (!updated) return res.status(409).json({ error: 'El marcador cambió. Actualizá y volvé a intentar.' });
 
       const enriched = await enrichPartidoWithVenue(supabaseAdmin, updated);
       await emitScoreboardUpdate(io, updated.id, updated, supabaseAdmin);
