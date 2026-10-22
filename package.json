@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "release:preflight": "node scripts/release-preflight.cjs",
     "test": "node --test 'lib/**/*.test.js'",
     "qa:data": "node scripts/qa-data-remediation.mjs"
   },
