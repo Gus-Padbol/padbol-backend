@@ -29,7 +29,12 @@ begin
     if not found then raise exception 'inbound identity mismatch'; end if;
     return jsonb_build_object('conversation',to_jsonb(v_conversation),'created',false,'event',to_jsonb(v_event));
   end if;
-  select * into v_conversation from public.crm_conversations where contact_id=v_contact and source_channel='whatsapp' and origin=v_origin and estado <> 'cerrado' order by updated_at desc,id desc limit 1 for update;
+  if p_payload->>'recovery_conversation_id' is not null then
+    select * into v_conversation from public.crm_conversations where id=(p_payload->>'recovery_conversation_id')::uuid and contact_id=v_contact and source_channel='whatsapp' and origin=v_origin for update;
+    if not found or v_conversation.estado='cerrado' then raise exception 'legacy recovery needs review'; end if;
+  else
+    select * into v_conversation from public.crm_conversations where contact_id=v_contact and source_channel='whatsapp' and origin=v_origin and estado <> 'cerrado' order by updated_at desc,id desc limit 1 for update;
+  end if;
   if not found then
     insert into public.crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,subject,inbound_body,qualification_data,received_at,estado)
     values(v_contact,'whatsapp',p_payload->>'source_ref',p_payload->>'attempt_id',p_payload->>'identity_used',v_origin,p_payload->>'subject',p_payload->>'inbound_body',coalesce(p_payload->'qualification_data','{}'::jsonb),(p_payload->>'received_at')::timestamptz,'nuevo') returning * into v_conversation;
@@ -38,7 +43,8 @@ begin
   insert into public.crm_inbound_events(conversation_id,source_channel,source_ref,origin,subject,body,received_at)
     values(v_conversation.id,'whatsapp',p_payload->>'source_ref',v_origin,p_payload->>'subject',p_payload->>'inbound_body',(p_payload->>'received_at')::timestamptz)
     returning * into v_event;
-  if not v_created then
+  if not v_created and (v_conversation.received_at is null or v_event.received_at > v_conversation.received_at) then
+    -- An older message or a timestamp tie must not replace the current summary.
     update public.crm_conversations set received_at=v_event.received_at,inbound_body=v_event.body,updated_at=now() where id=v_conversation.id;
   end if;
   select * into v_conversation from public.crm_conversations where id=v_conversation.id;

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import {createClient} from '@supabase/supabase-js';
 import {createCrmService,createSupabaseCrmRepository} from '../../lib/crmService.js';
+import {attemptIdFor} from '../../lib/crmContact.js';
 import {createSupabaseWhatsappRepository,createWhatsappCloudService} from '../../lib/whatsappCloud.js';
 import {createWhatsappMenuAtomicStore} from '../../lib/whatsappProductionMenuStoreCandidate.js';
 import {createProductionMenuCandidate} from '../../lib/whatsappProductionMenuCandidate.js';
@@ -45,6 +46,22 @@ try {
  assert.equal(concurrent[0].conversation.id,concurrent[1].conversation.id);
  const count=(await client.query("select count(*)::int n from crm_inbound_events where source_ref in ('wamid.concurrent.1','wamid.concurrent.2')")).rows[0].n;assert.equal(count,2);
  const other=await crm.ingestInbound({...common,origin:'whatsapp:other',sourceId:'wamid.other.origin'});assert.notEqual(other.conversation.id,concurrent[0].conversation.id);
+ const before=(await client.query('select received_at,inbound_body from crm_conversations where id=$1',[concurrent[0].conversation.id])).rows[0];
+ await crm.ingestInbound({...common,sourceId:'wamid.late',body:'old text',receivedAt:new Date(before.received_at.getTime()-60000).toISOString()});
+ await crm.ingestInbound({...common,sourceId:'wamid.tie',body:'same time text',receivedAt:before.received_at.toISOString()});
+ const after=(await client.query('select received_at,inbound_body from crm_conversations where id=$1',[concurrent[0].conversation.id])).rows[0];
+ assert.equal(after.inbound_body,before.inbound_body);assert.equal(after.received_at.getTime(),before.received_at.getTime());
+ // Legacy partial receipt must preserve original data and fail closed if the
+ // operator closes its conversation before the missing event is stored.
+ const legacyId='wamid.legacy.partial',legacyAttempt=attemptIdFor({source:'whatsapp_cloud',sourceId:legacyId}),legacyOrigin='whatsapp:legacy';
+ const contactId=concurrent[0].contact.id;
+ await client.query("insert into crm_channel_attempts(attempt_id,contact_id,channel) values($1,$2,'whatsapp')",[legacyAttempt,contactId]);
+ const legacy=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,inbound_body,qualification_data,received_at,estado) values($1,'whatsapp',$2,$3,$4,$5,'original legacy','{}',now(),'nuevo') returning id",[contactId,legacyId,legacyAttempt,common.phone,legacyOrigin])).rows[0].id;
+ await client.query('begin');await client.query("update crm_conversations set estado='cerrado' where id=$1",[legacy]);
+ const legacyArrival=crm.ingestInbound({...common,origin:legacyOrigin,sourceId:legacyId,body:'replacement'});
+ await new Promise(r=>setTimeout(r,300));await client.query('commit');
+ await assert.rejects(legacyArrival,/No se pudo asegurar el hilo entrante/);
+ assert.equal((await client.query('select count(*)::int n from crm_inbound_events where source_ref=$1',[legacyId])).rows[0].n,0);
  // An operator closes the active thread while a new inbound is arriving.
  // The inbound must wait and create a new open thread after the close commits.
  await client.query('begin');
