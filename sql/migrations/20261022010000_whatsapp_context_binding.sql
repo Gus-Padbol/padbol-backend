@@ -52,8 +52,8 @@ begin
      next_context := jsonb_set(next_context,'{initialMessage}',conv.qualification_data #> '{whatsapp_menu,initialMessage}',true);
    end if;
    update public.crm_conversations set qualification_data=jsonb_set(coalesce(qualification_data,'{}'::jsonb),'{whatsapp_menu}',next_context,true),
-     qualification_status=case when estado='nuevo' and operador is null and not derivado and not handoff_ready and qualification_status in ('pending','needs_review') then coalesce(p_qualification_status,qualification_status) else qualification_status end,
-     next_step=case when estado='nuevo' and operador is null and not derivado and not handoff_ready and qualification_status in ('pending','needs_review') then coalesce(p_next_step,next_step) else next_step end,
+     qualification_status=case when estado='nuevo' and operador is null and sede_id is null and assigned_by is null and not derivado and not handoff_ready and qualification_status in ('pending','needs_review') then coalesce(p_qualification_status,qualification_status) else qualification_status end,
+     next_step=case when estado='nuevo' and operador is null and sede_id is null and assigned_by is null and not derivado and not handoff_ready and qualification_status in ('pending','needs_review') then coalesce(p_next_step,next_step) else next_step end,
      updated_at=now() where id=conv.id;
  end if;
  -- Ordering uncertainty is sticky, even if this revision arrives late.
