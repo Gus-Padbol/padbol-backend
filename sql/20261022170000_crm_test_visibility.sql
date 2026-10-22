@@ -17,7 +17,7 @@ RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pub
 DECLARE old_hidden timestamptz; old_updated timestamptz;
 BEGIN
   IF p_id IS NULL OR p_hide IS NULL OR p_actor IS NULL OR (p_hide AND p_expected IS NULL) THEN RAISE EXCEPTION 'Invalid visibility request' USING ERRCODE='22023'; END IF;
-  SELECT test_hidden_at, updated_at INTO old_hidden, old_updated FROM public.crm_conversations WHERE id=p_id FOR UPDATE;
+  SELECT test_hidden_at, updated_at INTO old_hidden, old_updated FROM public.crm_conversations WHERE id=p_id FOR NO KEY UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Conversation not found' USING ERRCODE='P0002'; END IF;
   IF (old_hidden IS NOT NULL) = p_hide THEN RETURN false; END IF;
   IF p_hide AND old_updated IS DISTINCT FROM p_expected THEN RAISE EXCEPTION 'Conversation changed; review again' USING ERRCODE='40001'; END IF;
@@ -30,7 +30,7 @@ GRANT EXECUTE ON FUNCTION public.crm_set_test_visibility(uuid,boolean,uuid,times
 CREATE FUNCTION public.crm_restore_test_on_inbound() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE prior_hidden timestamptz;
 BEGIN
-  SELECT test_hidden_at INTO prior_hidden FROM public.crm_conversations WHERE id=NEW.conversation_id FOR UPDATE;
+  SELECT test_hidden_at INTO prior_hidden FROM public.crm_conversations WHERE id=NEW.conversation_id FOR NO KEY UPDATE;
   IF FOUND THEN
     UPDATE public.crm_conversations SET test_hidden_at=NULL, updated_at=greatest(clock_timestamp(),updated_at + interval '1 microsecond') WHERE id=NEW.conversation_id;
     IF prior_hidden IS NOT NULL THEN
