@@ -778,7 +778,7 @@ const whatsappAdminService = createWhatsappAdminService({
 });
 registerWhatsappAdminRoutes(app, { whatsappAdminService, authUserFromBearer, fetchUserRoleRow });
 
-registerWhatsappContextRoute(app, { repository: createWhatsappContextRepository(supabaseAdmin), secret: process.env.WHATSAPP_CONTEXT_BINDING_SECRET, rawParser: (_req, _res, next) => next() });
+registerWhatsappContextRoute(app, { repository: createWhatsappContextRepository(supabaseAdmin), secret: process.env.WHATSAPP_CONTEXT_BINDING_SECRET, allowedSender: process.env.WHATSAPP_CONTEXT_ALLOWED_SENDER, rawParser: (_req, _res, next) => next() });
 const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
 const crmLeadAnalyzer = createCrmLeadAutoAnalyzer({ crmService });
 const crmEmailSender = routeCrmEmailSender({commercialSender:createCrmEmailSender({ runtime }),supportSender:createCrmSupportSender({ runtime })});
