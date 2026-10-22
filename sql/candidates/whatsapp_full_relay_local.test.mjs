@@ -153,11 +153,31 @@ try {
  const manual=(await client.query("insert into crm_replies(conversation_id,body,status) values($1,'manual fixture','pending') returning id",[conversationId])).rows[0].id;
  await client.query('insert into crm_whatsapp_manual_attempts(conversation_id,reply_id) values($1,$2)',[conversationId,manual]);
  await assert.rejects(client.query('select crm_resume_whatsapp_automation($1,$2)',[conversationId,actor]),/unresolved delivery/);
- await client.query("update crm_replies set status='sent' where id=$1",[manual]);
+ await client.query("update crm_replies set status='cancelled' where id=$1",[manual]);
  assert.equal((await client.query('select crm_resume_whatsapp_automation($1,$2) result',[conversationId,actor])).rows[0].result.resumed,true);
  assert.equal((await client.query('select count(*)::int n from crm_whatsapp_automation_release_audit where conversation_id=$1',[conversationId])).rows[0].n,1);
  const newer=(await client.query("insert into crm_replies(conversation_id,body,status) values($1,'new manual fixture','pending') returning id",[conversationId])).rows[0].id;
  await client.query('insert into crm_whatsapp_manual_attempts(conversation_id,reply_id) values($1,$2)',[conversationId,newer]);
  assert.equal((await client.query('select count(*)::int n from crm_whatsapp_automation_releases where conversation_id=$1',[conversationId])).rows[0].n,0);
+ await assert.rejects(client.query('select crm_resume_whatsapp_automation($1,$2)',[conversationId,actor]),/unresolved delivery/);
+ await client.query("update crm_replies set status='sent' where id=$1",[newer]);
+ const locked=await pool.connect();
+ try {
+   await locked.query('begin');
+   await locked.query('select id from crm_conversations where id=$1 for update',[conversationId]);
+   const inFlight=(await locked.query("insert into crm_replies(conversation_id,body,status) values($1,'racing manual','pending') returning id",[conversationId])).rows[0].id;
+   await locked.query('insert into crm_whatsapp_manual_attempts(conversation_id,reply_id) values($1,$2)',[conversationId,inFlight]);
+   let resolved=false;
+   const concurrent=client.query('select crm_resume_whatsapp_automation($1,$2)',[conversationId,actor]).then(()=>{resolved=true;return null},e=>{resolved=true;return e});
+   await new Promise(r=>setTimeout(r,100)); assert.equal(resolved,false);
+   await locked.query('commit');
+   assert.match((await concurrent).message,/unresolved delivery/);
+ } finally { await locked.query('rollback').catch(()=>{});locked.release(); }
+ // Deleting a conversation removes the operational release but retains its independent audit.
+ const deletionId=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,qualification_data,received_at,estado) values($1,'whatsapp','deletion-source','deletion-attempt',$2,'whatsapp:deletion','{}',now(),'nuevo') returning id",[contactId,common.phone])).rows[0].id;
+ await client.query('select crm_resume_whatsapp_automation($1,$2)',[deletionId,actor]);
+ await client.query('delete from crm_conversations where id=$1',[deletionId]);
+ assert.equal((await client.query('select count(*)::int n from crm_whatsapp_automation_releases where conversation_id=$1',[deletionId])).rows[0].n,0);
+ assert.equal((await client.query('select count(*)::int n from crm_whatsapp_automation_release_audit where conversation_id=$1',[deletionId])).rows[0].n,1);
  console.log('Integrated localhost relay + real Supabase repositories + PostgreSQL + simulated Meta: preserved original and no duplicate after relay timeout.');
 } finally {if(server)await new Promise(r=>server.close(r));if(pool)await pool.end();if(rest){rest.kill();await new Promise(r=>rest.once('exit',r))}if(client)await client.end();if(dbStarted)await pg.stop();await rm(dir,{recursive:true,force:true})}

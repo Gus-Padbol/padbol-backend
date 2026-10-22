@@ -1,11 +1,11 @@
 begin;
 create table public.crm_whatsapp_automation_releases (
- conversation_id uuid primary key references public.crm_conversations(id) on delete restrict,
+ conversation_id uuid primary key references public.crm_conversations(id) on delete cascade,
  released_by uuid not null, released_at timestamptz not null default clock_timestamp()
 );
 create table public.crm_whatsapp_automation_release_audit (
  id bigint generated always as identity primary key,
- conversation_id uuid not null references public.crm_conversations(id) on delete restrict,
+ conversation_id uuid not null,
  released_by uuid not null, released_at timestamptz not null default clock_timestamp()
 );
 alter table public.crm_whatsapp_automation_releases enable row level security;
@@ -33,7 +33,7 @@ begin
     or coalesce((c.qualification_data #>> '{whatsapp_message_order_review,required}')::boolean,false)
  then raise exception 'conversation not eligible for automation'; end if;
  if exists(select 1 from public.crm_whatsapp_manual_attempts a join public.crm_replies r on r.id=a.reply_id
-     where a.conversation_id=p_conversation_id and r.status<>'sent')
+     where a.conversation_id=p_conversation_id and r.status not in ('sent','cancelled'))
     or exists(select 1 from public.crm_whatsapp_menu_events e join public.whatsapp_outbox o on o.id=e.outbox_id
        where e.conversation_id=p_conversation_id and (o.status='sending' or o.last_error='WHATSAPP_SEND_UNCERTAIN_NO_RETRY'))
  then raise exception 'unresolved delivery'; end if;
