@@ -58,5 +58,14 @@ try {
  assert.equal(stale.stale,true);assert.equal(stale.outbox_id,null);
  assert.equal((await setup.query('select funnel_state from crm_conversations where id=$1',[conv2])).rows[0].funnel_state,'new_state');
  assert.equal((await setup.query('select count(*)::int n from crm_replies where conversation_id=$1',[conv2])).rows[0].n,1);
- console.log('PostgreSQL real local: concurrent duplicate, reversed event order, stale revision, rollback, CRM confirmation passed.');
+ const rollback=await readFile('sql/rollback/20261022100000_whatsapp_menu_atomic_candidate.rollback.sql','utf8');
+ await assert.rejects(setup.query(rollback), /menu event ledger is not empty/);
+ await setup.query('rollback');
+ assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n,3);
+ // Only synthetic fixture data is deleted here; real ledgers must be preserved.
+ await setup.query('truncate crm_whatsapp_menu_events');
+ await setup.query(rollback);
+ assert.equal((await setup.query("select to_regclass('public.crm_whatsapp_menu_events') as relation")).rows[0].relation,null);
+ assert.equal((await setup.query("select to_regprocedure('public.crm_confirm_whatsapp_menu_sent(uuid,uuid,text,timestamptz)') as fn")).rows[0].fn,null);
+ console.log('PostgreSQL real local: concurrency, ordering, atomicity, CRM confirmation and guarded migration rollback passed.');
 } finally {for(const c of clients)await c.end().catch(()=>{});if(started)await server.stop().catch(()=>{});await rm(dir,{recursive:true,force:true});}
