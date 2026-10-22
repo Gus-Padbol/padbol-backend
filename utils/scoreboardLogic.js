@@ -110,7 +110,7 @@ function winTiebreakPoint(partido, equipo) {
   else partido.score_b += 1;
 
   const totalPoints = partido.score_a + partido.score_b;
-  if (totalPoints > 0 && totalPoints % 2 === 0) {
+  if (totalPoints > 0 && totalPoints % 2 === 1) {
     partido.saque_actual = toggleSaque(partido.saque_actual);
   }
 
@@ -125,6 +125,10 @@ function winTiebreakPoint(partido, equipo) {
     partido.games_a = gamesA;
     partido.games_b = gamesB;
     partido.es_tiebreak = false;
+    // The receiving team in the first tie-break point serves the next set.
+    const toggles = Math.floor((totalPoints + 1) / 2);
+    const firstServer = toggles % 2 ? toggleSaque(partido.saque_actual) : partido.saque_actual;
+    partido.saque_actual = toggleSaque(firstServer);
     finishSet(partido, leader, gamesA, gamesB);
   }
 }
