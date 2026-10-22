@@ -17,6 +17,7 @@ import {createWhatsappMenuAtomicStore} from '../../lib/whatsappProductionMenuSto
 import {createProductionMenuCandidate} from '../../lib/whatsappProductionMenuCandidate.js';
 import {createProductionMenuIngressCandidate} from '../../lib/whatsappProductionMenuIngressCandidate.js';
 import {createProductionHumanGateCandidate} from '../../lib/whatsappProductionHumanGateCandidate.js';
+import {createWhatsappProductionRecoveryCandidate} from '../../lib/whatsappProductionRecoveryCandidate.js';
 import {createQaRelay,registerQaRelayReceiver} from '../../lib/whatsappQaRelay.js';
 const {Pool}=createRequire(import.meta.url)('pg');
 if (!process.env.PADBOL_EMBEDDED_POSTGRES_MODULE) throw Error('isolated PostgreSQL module required');
@@ -107,6 +108,9 @@ try {
  assert.equal((await client.query("select c.estado from crm_inbound_events e join crm_conversations c on c.id=e.conversation_id where e.source_ref='wamid.after.close'")).rows[0].estado,'nuevo');
  const menu=createProductionMenuCandidate({enabled:true,env:{BACKEND_RUNTIME_MODE:'production'},crmService:crm,atomicMenuStore:createWhatsappMenuAtomicStore(supabase)});
  pool=new Pool({host:'127.0.0.1',port:pgPort,user:'postgres',password:'fixture-only',database:'postgres',max:8});
+ await client.query("insert into whatsapp_inbound_messages(tenant_id,channel_id,provider_message_id,from_wa_id,message_type,text_body,received_at,created_at) values($1,$2,'wamid.recovery.text','15551234567','text','recover safely',now()-interval '2 minutes',now()-interval '2 minutes'),($1,$2,'wamid.recovery.audio','15551234567','text','[WhatsApp: audio no admitido.]',now()-interval '2 minutes',now()-interval '2 minutes'),($1,$2,'wamid.recovery.new','15551234567','text','in flight',now(),now())",[tenant,channel]);
+ const recovered=[];const recovery=createWhatsappProductionRecoveryCandidate({pool,channelId:channel,cutoff:new Date(Date.now()-600000).toISOString(),ingress:async item=>recovered.push(item.inbound.providerMessageId)});
+ assert.deepEqual(await recovery.run(),{examined:1,completed:1,failed:0});assert.deepEqual(recovered,['wamid.recovery.text']);
  let sends=0,finishProvider,providerEntered;const providerWait=new Promise(r=>finishProvider=r),started=new Promise(r=>providerEntered=r);
  const gate=createProductionHumanGateCandidate({pool,channelId:channel,enabled:true,sender:{async sendText(){sends++;providerEntered();await providerWait;return{providerMessageId:'wamid.synthetic.sent'}}}});
  const ingress=createProductionMenuIngressCandidate({menu,dispatcher:gate,phoneNumberId:'1376102838911694',wabaId:'928900479733370'});
@@ -122,5 +126,11 @@ try {
  const replay=relay({rawBody,signature});await new Promise(r=>setTimeout(r,30));finishProvider();await replay;
  const state=await client.query(`select c.inbound_body,c.qualification_data,o.status,r.status reply_status from crm_conversations c join crm_whatsapp_menu_events e on e.conversation_id=c.id join whatsapp_outbox o on o.id=e.outbox_id join crm_replies r on r.id=e.reply_id`);
  assert.equal(state.rows.length,1);assert.equal(state.rows[0].inbound_body,'Hola, quiero abrir una cancha');assert.match(JSON.stringify(state.rows[0].qualification_data),/quiero abrir una cancha/);assert.equal(state.rows[0].status,'sent');assert.equal(state.rows[0].reply_status,'sent');assert.equal(sends,1);
+ await client.query("insert into whatsapp_inbound_messages(tenant_id,channel_id,provider_message_id,from_wa_id,message_type,text_body,received_at,created_at) values($1,$2,'wamid.recovery.fresh','15550000002','text','fresh recovery',now()-interval '2 minutes',now()-interval '2 minutes')",[tenant,channel]);
+ const realRecovery=createWhatsappProductionRecoveryCandidate({pool,channelId:channel,cutoff:new Date(Date.now()-600000).toISOString(),ingress});
+ const firstRecovery=await realRecovery.run();assert.equal(firstRecovery.completed,2);assert.equal(sends,2);
+ await realRecovery.run();await realRecovery.run();assert.equal(sends,2);
+ assert.equal((await client.query("select count(*)::int n from crm_inbound_events where source_ref='wamid.recovery.text'")).rows[0].n,1);
+ assert.equal((await client.query("select count(*)::int n from crm_whatsapp_menu_events e join whatsapp_inbound_messages m on m.id=e.inbound_message_id where m.provider_message_id='wamid.recovery.fresh'")).rows[0].n,1);
  console.log('Integrated localhost relay + real Supabase repositories + PostgreSQL + simulated Meta: preserved original and no duplicate after relay timeout.');
 } finally {if(server)await new Promise(r=>server.close(r));if(pool)await pool.end();if(rest){rest.kill();await new Promise(r=>rest.once('exit',r))}if(client)await client.end();if(dbStarted)await pg.stop();await rm(dir,{recursive:true,force:true})}
