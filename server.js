@@ -1,3 +1,4 @@
+import { isWhatsappQaMenuEnabled } from './lib/whatsappQaMenuGate.js';
 import { createWhatsappLanguageMenu } from './lib/whatsappLanguageMenu.js';
 import { createWhatsappMenuAtomicStore } from './lib/whatsappMenuAtomic.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
@@ -768,7 +769,8 @@ const whatsappMenuAtomicStore = process.env.WHATSAPP_MENU_ATOMIC_QA_ENABLED === 
 const crmFunnel = createCrmFunnel({
   crmService,
   atomicMenuStore: whatsappMenuAtomicStore,
-  languageMenu: process.env.CRM_WHATSAPP_LANGUAGE_MENU_ENABLED === 'true'
+  languageMenu: isWhatsappQaMenuEnabled(process.env, { atomicMenuStore: whatsappMenuAtomicStore,
+    qaRelay, sandboxFactory: whatsappQaSandboxServiceFactory, outboundEnabled: runtime.outboundDeliveryEnabled })
     ? createWhatsappLanguageMenu() : null,
   paths: parseCrmFunnelPaths(process.env.CRM_WHATSAPP_FUNNEL_PATHS_JSON),
 });
