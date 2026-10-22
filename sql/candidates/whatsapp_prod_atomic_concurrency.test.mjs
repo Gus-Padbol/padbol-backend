@@ -46,10 +46,13 @@ try {
  assert.equal((await setup.query('select funnel_state from crm_conversations where id=$1',[conv])).rows[0].funnel_state,'whatsapp_menu_topic');
  assert.equal((await setup.query('select count(*)::int n from crm_replies')).rows[0].n,1);
  await setup.query("update whatsapp_outbox set status='sending' where id=$1",[first.outbox_id]);
+ assert.equal((await setup.query('select crm_whatsapp_menu_needs_review($1) v',[conv])).rows[0].v,true);
+ assert.equal((await setup.query('select * from crm_whatsapp_menu_review_batch($1::uuid[])',[[conv]])).rows[0].conversation_id,conv);
  await assert.rejects(setup.query('insert into crm_whatsapp_manual_attempts(conversation_id) values($1)',[conv]),/unresolved menu delivery/);
  await assert.rejects(setup.query(sql,[inbound2,conv,revision,JSON.stringify(state),'Otro','e'.repeat(64)]),/unresolved menu delivery/);
  await setup.query('select crm_confirm_whatsapp_menu_sent($1,$2,$3,now())',[first.outbox_id,tenant,'wamid.sent']);
  assert.equal((await setup.query('select status from crm_replies where id=$1',[first.reply_id])).rows[0].status,'sent');
+ assert.equal((await setup.query('select crm_whatsapp_menu_needs_review($1) v',[conv])).rows[0].v,false);
  await setup.query('insert into crm_whatsapp_manual_attempts(conversation_id) values($1)',[conv]);
  const conv2='66666666-6666-4666-8666-666666666666', older='77777777-7777-4777-8777-777777777777', newer='88888888-8888-4888-8888-888888888888';
  await setup.query("insert into crm_conversations(id,source_channel,updated_at) values($1,'whatsapp','2026-10-21T12:00:00Z')",[conv2]);

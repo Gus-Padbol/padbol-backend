@@ -792,6 +792,7 @@ const crmAdminService = createCrmAdminService({
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
   commercialOperators: CRM_COMMERCIAL_OPERATORS,
   supportOperators: CRM_SUPPORT_OPERATORS,
+  whatsappMenuReviewEnabled: process.env.WHATSAPP_PRODUCTION_MENU_ENABLED === 'true',
 });
 registerCrmAdminRoutes(app, {
   crmAdminService,

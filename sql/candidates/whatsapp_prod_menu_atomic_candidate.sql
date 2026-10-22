@@ -95,6 +95,21 @@ begin
 end $$;
 revoke all on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, bigint, jsonb, text, text) from public, anon, authenticated;
 grant execute on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, bigint, jsonb, text, text) to service_role;
+-- Used after CRM authorization; no message bodies or identifiers leave this RPC.
+create function public.crm_whatsapp_menu_needs_review(p_conversation_id uuid) returns boolean
+language sql security definer set search_path=public,pg_temp stable as $$
+  select exists (select 1 from public.crm_whatsapp_menu_events e join public.whatsapp_outbox o on o.id=e.outbox_id
+    where e.conversation_id=p_conversation_id and (o.status='sending' or o.last_error='WHATSAPP_SEND_UNCERTAIN_NO_RETRY'))
+$$;
+revoke all on function public.crm_whatsapp_menu_needs_review(uuid) from public,anon,authenticated;
+grant execute on function public.crm_whatsapp_menu_needs_review(uuid) to service_role;
+create function public.crm_whatsapp_menu_review_batch(p_conversation_ids uuid[]) returns table(conversation_id uuid)
+language sql security definer set search_path=public,pg_temp stable as $$
+  select distinct e.conversation_id from public.crm_whatsapp_menu_events e join public.whatsapp_outbox o on o.id=e.outbox_id
+    where e.conversation_id=any(p_conversation_ids) and (o.status='sending' or o.last_error='WHATSAPP_SEND_UNCERTAIN_NO_RETRY')
+$$;
+revoke all on function public.crm_whatsapp_menu_review_batch(uuid[]) from public,anon,authenticated;
+grant execute on function public.crm_whatsapp_menu_review_batch(uuid[]) to service_role;
 -- Manual sending must wait for reconciliation of an ambiguous automated send.
 -- crm_claim_whatsapp_reply holds the same conversation row lock before insert.
 create function public.crm_guard_manual_whatsapp_uncertainty() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
