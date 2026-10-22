@@ -33,14 +33,14 @@ try {
  await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.first','whatsapp:123456789'),($1,'whatsapp','wamid.second','whatsapp:123456789')",[conv]);
  const state={funnel_state:'whatsapp_menu_topic',qualification_data:{whatsapp_menu:{stage:'topic'}},qualification_status:'pending',prompt_options:[],next_prompt:'Elige'};
  const sql='select crm_commit_whatsapp_menu_transition($1,$2,$3,$4,$5,$6) as result';
- const args=[inbound,conv,'2026-10-21T12:00:00Z',JSON.stringify(state),'Bienvenido','a'.repeat(64)];
+ const args=[inbound,conv,0,JSON.stringify(state),'Bienvenido','a'.repeat(64)];
  await a.query('begin');const first=(await a.query(sql,args)).rows[0].result;assert.equal(first.created,true);
  let settled=false;const pending=b.query(sql,args).then(r=>{settled=true;return r});
  await new Promise(resolve=>setTimeout(resolve,150));assert.equal(settled,false,'replay must wait for row lock');
  await a.query('commit');const replay=(await pending).rows[0].result;assert.equal(replay.created,false);assert.equal(replay.outbox_id,first.outbox_id);
  for(const table of ['crm_replies','whatsapp_outbox','crm_whatsapp_menu_events'])assert.equal((await setup.query(`select count(*)::int n from ${table}`)).rows[0].n,1);
- await assert.rejects(b.query(sql,[inbound2,conv,'2026-10-21T12:00:00Z',JSON.stringify(state),'Otro','b'.repeat(64)]),e=>e.code==='40001');
- const revision=(await setup.query('select updated_at from crm_conversations where id=$1',[conv])).rows[0].updated_at;
+ await assert.rejects(b.query(sql,[inbound2,conv,0,JSON.stringify(state),'Otro','b'.repeat(64)]),e=>e.code==='40001');
+ const revision=(await setup.query('select test_visibility_version from crm_conversations where id=$1',[conv])).rows[0].test_visibility_version;
  await assert.rejects(b.query(sql,[inbound2,conv,revision,JSON.stringify({...state,funnel_state:'modified'}),'Otro','a'.repeat(64)]));
  assert.equal((await setup.query('select funnel_state from crm_conversations where id=$1',[conv])).rows[0].funnel_state,'whatsapp_menu_topic');
  assert.equal((await setup.query('select count(*)::int n from crm_replies')).rows[0].n,1);
@@ -51,8 +51,8 @@ try {
  await setup.query("insert into crm_conversations(id,source_channel,updated_at) values($1,'whatsapp','2026-10-21T12:00:00Z')",[conv2]);
  await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values($1,$3,$4,'wamid.older','15551234567',now()-interval '2 minutes'),($2,$3,$4,'wamid.newer','15551234567',now()-interval '1 minute')",[older,newer,tenant,channel]);
  await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.older','whatsapp:123456789'),($1,'whatsapp','wamid.newer','whatsapp:123456789')",[conv2]);
- const olderArgs=[older,conv2,'2026-10-21T12:00:00Z',JSON.stringify({...state,funnel_state:'wrong_old'}),'Old','c'.repeat(64)];
- const newerArgs=[newer,conv2,'2026-10-21T12:00:00Z',JSON.stringify({...state,funnel_state:'new_state'}),'New','d'.repeat(64)];
+ const olderArgs=[older,conv2,0,JSON.stringify({...state,funnel_state:'wrong_old'}),'Old','c'.repeat(64)];
+ const newerArgs=[newer,conv2,0,JSON.stringify({...state,funnel_state:'new_state'}),'New','d'.repeat(64)];
  await a.query('begin');await a.query(sql,newerArgs);
  let oldSettled=false;const oldPending=b.query(sql,olderArgs).then(r=>{oldSettled=true;return r});
  await new Promise(resolve=>setTimeout(resolve,150));assert.equal(oldSettled,false,'older event waits on row lock');
@@ -66,7 +66,7 @@ try {
  await setup.query("insert into crm_conversations(id,source_channel,updated_at,operador) values($1,'whatsapp','2026-10-21T12:00:00Z','human@example.test')",[guardedConv]);
  await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values($1,$2,$3,'wamid.guarded','15551234567',now())",[guardedId,tenant,channel]);
  await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.guarded','whatsapp:123456789')",[guardedConv]);
- const guardedArgs=[guardedId,guardedConv,'2026-10-21T12:00:00Z',JSON.stringify(state),'Hola','f'.repeat(64)];
+ const guardedArgs=[guardedId,guardedConv,0,JSON.stringify(state),'Hola','f'.repeat(64)];
  await assert.rejects(setup.query(sql,guardedArgs),/not eligible/);
  await setup.query("update crm_conversations set operador=null where id=$1",[guardedConv]);
  await setup.query("update whatsapp_inbound_messages set meta_media_type='audio' where id=$1",[guardedId]);

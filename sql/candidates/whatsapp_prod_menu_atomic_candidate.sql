@@ -14,7 +14,7 @@ revoke all on public.crm_whatsapp_menu_events from public, anon, authenticated;
 grant all on public.crm_whatsapp_menu_events to service_role;
 
 create function public.crm_commit_whatsapp_menu_transition(
-  p_inbound_id uuid, p_conversation_id uuid, p_expected_updated_at timestamptz,
+  p_inbound_id uuid, p_conversation_id uuid, p_expected_version bigint,
   p_state jsonb, p_response text, p_idempotency_key text
 ) returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare
@@ -57,7 +57,7 @@ begin
      or v_conversation.assigned_by is not null or coalesce(v_conversation.handoff_ready, false)
      or coalesce((v_conversation.qualification_data #>> '{whatsapp_order_review,required}')::boolean, false)
      then raise exception 'not eligible'; end if;
-  if p_expected_updated_at is null or v_conversation.updated_at <> p_expected_updated_at then
+  if p_expected_version is null or v_conversation.test_visibility_version <> p_expected_version then
     raise exception 'conversation revision changed' using errcode = '40001';
   end if;
   if jsonb_typeof(p_state) <> 'object' or p_state->>'funnel_state' is null
@@ -89,8 +89,8 @@ begin
     values (p_inbound_id, p_conversation_id, v_reply, v_outbox, v_revision);
   return jsonb_build_object('created', true, 'reply_id', v_reply, 'outbox_id', v_outbox, 'revision', v_revision);
 end $$;
-revoke all on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, timestamptz, jsonb, text, text) from public, anon, authenticated;
-grant execute on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, timestamptz, jsonb, text, text) to service_role;
+revoke all on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, bigint, jsonb, text, text) from public, anon, authenticated;
+grant execute on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, bigint, jsonb, text, text) to service_role;
 -- Confirm the provider acknowledgement and the CRM transcript together.
 create function public.crm_confirm_whatsapp_menu_sent(
   p_outbox_id uuid, p_tenant_id uuid, p_provider_message_id text, p_sent_at timestamptz

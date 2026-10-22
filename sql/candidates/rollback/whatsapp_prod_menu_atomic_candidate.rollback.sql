@@ -8,6 +8,6 @@ do $$ begin
   end if;
 end $$;
 drop function public.crm_confirm_whatsapp_menu_sent(uuid, uuid, text, timestamptz);
-drop function public.crm_commit_whatsapp_menu_transition(uuid, uuid, timestamptz, jsonb, text, text);
+drop function public.crm_commit_whatsapp_menu_transition(uuid, uuid, bigint, jsonb, text, text);
 drop table public.crm_whatsapp_menu_events;
 commit;
