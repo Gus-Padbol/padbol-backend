@@ -5,6 +5,7 @@ create table public.crm_whatsapp_menu_events (
   conversation_id uuid not null references public.crm_conversations(id),
   reply_id uuid references public.crm_replies(id),
   outbox_id uuid references public.whatsapp_outbox(id),
+  menu_revision bigint,
   created_at timestamptz not null default now(),
   constraint crm_whatsapp_menu_event_reply_pair check ((reply_id is null) = (outbox_id is null))
 );
@@ -21,7 +22,7 @@ declare
   v_channel public.whatsapp_tenant_channels%rowtype;
   v_conversation public.crm_conversations%rowtype;
   v_event public.crm_whatsapp_menu_events%rowtype;
-  v_reply uuid; v_outbox uuid;
+  v_reply uuid; v_outbox uuid; v_revision bigint;
 begin
   select * into v_inbound from public.whatsapp_inbound_messages where id = p_inbound_id;
   if not found then raise exception 'inbound not found'; end if;
@@ -38,7 +39,7 @@ begin
   select * into v_event from public.crm_whatsapp_menu_events where inbound_message_id = p_inbound_id;
   if found then
     if v_event.conversation_id <> p_conversation_id then raise exception 'event conversation mismatch'; end if;
-    return jsonb_build_object('created', false, 'reply_id', v_event.reply_id, 'outbox_id', v_event.outbox_id);
+    return jsonb_build_object('created', false, 'reply_id', v_event.reply_id, 'outbox_id', v_event.outbox_id, 'revision', v_event.menu_revision);
   end if;
   -- If an older delivery arrives after a newer transition, keep it in the
   -- inbox for human review instead of interpreting it as an answer to a newer menu.
@@ -74,7 +75,7 @@ begin
     qualification_status = p_state->>'qualification_status', next_prompt = p_state->>'next_prompt',
     prompt_options = p_state->'prompt_options', next_step = p_state->>'next_step',
     handoff_ready = coalesce((p_state->>'handoff_ready')::boolean, false), updated_at = clock_timestamp()
-    where id = p_conversation_id;
+    where id = p_conversation_id returning test_visibility_version into v_revision;
   if p_response is not null then
     insert into public.crm_replies(conversation_id, body, operador, status)
       values (p_conversation_id, p_response, 'crm_funnel', 'pending') returning id into v_reply;
@@ -84,9 +85,9 @@ begin
         v_inbound.from_wa_id, v_inbound.provider_message_id, 'text', p_response, 'pending',
         v_inbound.received_at + interval '24 hours') returning id into v_outbox;
   end if;
-  insert into public.crm_whatsapp_menu_events(inbound_message_id, conversation_id, reply_id, outbox_id)
-    values (p_inbound_id, p_conversation_id, v_reply, v_outbox);
-  return jsonb_build_object('created', true, 'reply_id', v_reply, 'outbox_id', v_outbox);
+  insert into public.crm_whatsapp_menu_events(inbound_message_id, conversation_id, reply_id, outbox_id, menu_revision)
+    values (p_inbound_id, p_conversation_id, v_reply, v_outbox, v_revision);
+  return jsonb_build_object('created', true, 'reply_id', v_reply, 'outbox_id', v_outbox, 'revision', v_revision);
 end $$;
 revoke all on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, timestamptz, jsonb, text, text) from public, anon, authenticated;
 grant execute on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, timestamptz, jsonb, text, text) to service_role;
