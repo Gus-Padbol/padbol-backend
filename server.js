@@ -804,6 +804,9 @@ registerWhatsappMediaAccessRoute(app, { crmAdminService, supabaseAdmin, authUser
 const crmFunnel = createCrmFunnel({
   crmService,
   paths: parseCrmFunnelPaths(process.env.CRM_WHATSAPP_FUNNEL_PATHS_JSON),
+  contextBridgeSender: (process.env.WHATSAPP_CONTEXT_BINDING_SECRET?.length >= 32
+    && /^[1-9][0-9]{7,14}$/.test(process.env.WHATSAPP_CONTEXT_ALLOWED_SENDER || ''))
+    ? process.env.WHATSAPP_CONTEXT_ALLOWED_SENDER : null,
 });
 registerCrmInboundRoutes(app, {
   crmService,
