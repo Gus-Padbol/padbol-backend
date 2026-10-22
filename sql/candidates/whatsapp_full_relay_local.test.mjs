@@ -18,6 +18,7 @@ import {createProductionMenuCandidate} from '../../lib/whatsappProductionMenuCan
 import {createProductionMenuIngressCandidate} from '../../lib/whatsappProductionMenuIngressCandidate.js';
 import {createProductionHumanGateCandidate} from '../../lib/whatsappProductionHumanGateCandidate.js';
 import {createWhatsappProductionRecoveryCandidate} from '../../lib/whatsappProductionRecoveryCandidate.js';
+import {createWhatsappProcessingLedgerCandidate} from '../../lib/whatsappProcessingLedgerCandidate.js';
 import {createQaRelay,registerQaRelayReceiver} from '../../lib/whatsappQaRelay.js';
 const {Pool}=createRequire(import.meta.url)('pg');
 if (!process.env.PADBOL_EMBEDDED_POSTGRES_MODULE) throw Error('isolated PostgreSQL module required');
@@ -118,7 +119,8 @@ try {
  assert.deepEqual(await recovery.run(),{examined:1,completed:1,failed:0});assert.deepEqual(recovered,['wamid.recovery.text']);
  let sends=0,finishProvider,providerEntered;const providerWait=new Promise(r=>finishProvider=r),started=new Promise(r=>providerEntered=r);
  const gate=createProductionHumanGateCandidate({pool,channelId:channel,enabled:true,sender:{async sendText(){sends++;providerEntered();await providerWait;return{providerMessageId:'wamid.synthetic.sent'}}}});
- const ingress=createProductionMenuIngressCandidate({menu,dispatcher:gate,phoneNumberId:'1376102838911694',wabaId:'928900479733370',markCompleted:async id=>{await pool.query("update crm_whatsapp_processing_decisions set status='done' where inbound_message_id=$1",[id])}});
+ const processingLedger=createWhatsappProcessingLedgerCandidate(pool);
+ const ingress=createProductionMenuIngressCandidate({menu,dispatcher:gate,phoneNumberId:'1376102838911694',wabaId:'928900479733370',beginProcessing:id=>processingLedger.begin(id),markCompleted:id=>processingLedger.complete(id)});
  const whatsappService=createWhatsappCloudService({repository:createSupabaseWhatsappRepository(supabase),automaticOutboxEnabled:false,sendEnabled:false,onInbound:ingress});
  const secret='fixture-relay-secret';const prod={WHATSAPP_QA_RELAY_RECEIVE_ENABLED:'true',BACKEND_RUNTIME_MODE:'production',RENDER_SERVICE_ID:'srv-d7brh3ea2pns73equ2ug',SUPABASE_URL:'https://auth.padbolmatch.com',WHATSAPP_META_APP_SECRET:secret};
  const app=express();app.use(express.raw({type:'application/json',verify:(req,_res,buf)=>{req.rawBody=buf}}));registerQaRelayReceiver(app,{env:prod,whatsappService:{async handleWebhook(p){try{return await whatsappService.handleWebhook(p)}catch(e){console.error('synthetic receiver failure',e);throw e}}},logger:{warn(){}}});server=await new Promise(r=>{const s=app.listen(httpPort,'127.0.0.1',()=>r(s))});
@@ -133,8 +135,12 @@ try {
  assert.equal(state.rows.length,1);assert.equal(state.rows[0].inbound_body,'Hola, quiero abrir una cancha');assert.match(JSON.stringify(state.rows[0].qualification_data),/quiero abrir una cancha/);assert.equal(state.rows[0].status,'sent');assert.equal(state.rows[0].reply_status,'sent');assert.equal(sends,1);
  await client.query("insert into whatsapp_inbound_messages(tenant_id,channel_id,provider_message_id,from_wa_id,message_type,text_body,received_at,created_at) values($1,$2,'wamid.recovery.fresh','15550000002','text','fresh recovery',now()-interval '2 minutes',now()-interval '2 minutes')",[tenant,channel]);
  const partial=(await client.query("insert into whatsapp_inbound_messages(tenant_id,channel_id,provider_message_id,from_wa_id,message_type,text_body,received_at,created_at) values($1,$2,'wamid.recovery.partial','15550000003','text','partial recovery',now()-interval '2 minutes',now()-interval '2 minutes') returning *",[tenant,channel])).rows[0];
+ assert.equal(await processingLedger.begin(partial.id),true);
  await crm.ingestInbound({source:'whatsapp_cloud',sourceId:partial.provider_message_id,channel:'whatsapp',phone:partial.from_wa_id,identityUsed:partial.from_wa_id,origin:'whatsapp:1376102838911694',body:partial.text_body,receivedAt:partial.received_at.toISOString()});
  assert.equal((await client.query('select status from crm_whatsapp_processing_decisions where inbound_message_id=$1',[partial.id])).rows[0].status,'pending');
+ const legacyHandled=(await client.query("insert into whatsapp_inbound_messages(tenant_id,channel_id,provider_message_id,from_wa_id,message_type,text_body,received_at,created_at) values($1,$2,'wamid.legacy.handled','15550000004','text','legacy handled',now()-interval '2 minutes',now()-interval '2 minutes') returning *",[tenant,channel])).rows[0];
+ await crm.ingestInbound({source:'whatsapp_cloud',sourceId:legacyHandled.provider_message_id,channel:'whatsapp',phone:legacyHandled.from_wa_id,identityUsed:legacyHandled.from_wa_id,origin:'whatsapp:1376102838911694',body:legacyHandled.text_body,receivedAt:legacyHandled.received_at.toISOString()});
+ assert.equal(await processingLedger.begin(legacyHandled.id),false);
  const realRecovery=createWhatsappProductionRecoveryCandidate({pool,channelId:channel,cutoff:new Date(Date.now()-600000).toISOString(),ingress});
  const firstRecovery=await realRecovery.run();assert.equal(firstRecovery.completed,3);assert.equal(sends,3);
  assert.equal((await client.query('select status from crm_whatsapp_processing_decisions where inbound_message_id=$1',[partial.id])).rows[0].status,'done');

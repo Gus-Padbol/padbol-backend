@@ -13,9 +13,8 @@ alter table public.crm_whatsapp_menu_events enable row level security;
 revoke all on public.crm_whatsapp_menu_events from public, anon, authenticated;
 grant all on public.crm_whatsapp_menu_events to service_role;
 
--- Durable processing decision for the production channel. A receipt and its
--- pending decision are created atomically; retries can resume even after CRM
--- persistence but before a menu decision. Non-text notices are excluded.
+-- Durable processing decision, claimed by the new ingress before CRM work.
+-- Migration alone must never claim messages processed by an older service.
 create table public.crm_whatsapp_processing_decisions (
   inbound_message_id uuid primary key references public.whatsapp_inbound_messages(id),
   status text not null default 'pending' check(status in ('pending','done')),
@@ -24,18 +23,6 @@ create table public.crm_whatsapp_processing_decisions (
 alter table public.crm_whatsapp_processing_decisions enable row level security;
 revoke all on public.crm_whatsapp_processing_decisions from public,anon,authenticated;
 grant all on public.crm_whatsapp_processing_decisions to service_role;
-create function public.crm_track_whatsapp_processing() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
-begin
-  if new.message_type='text' and new.meta_media_type is null and new.text_body not like '[WhatsApp:%'
-    and exists(select 1 from public.whatsapp_tenant_channels c where c.id=new.channel_id and c.tenant_id=new.tenant_id
-      and c.meta_phone_number_id='1376102838911694' and c.meta_waba_id='928900479733370') then
-    insert into public.crm_whatsapp_processing_decisions(inbound_message_id) values(new.id) on conflict do nothing;
-  end if;
-  return new;
-end $$;
-revoke all on function public.crm_track_whatsapp_processing() from public,anon,authenticated;
-create trigger crm_track_whatsapp_processing after insert on public.whatsapp_inbound_messages
-for each row execute function public.crm_track_whatsapp_processing();
 create index crm_whatsapp_recovery_scan_idx on public.whatsapp_inbound_messages(channel_id,created_at,id);
 
 -- A database-wide guard also covers old application instances during rollout.

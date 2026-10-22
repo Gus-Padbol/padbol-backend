@@ -11,9 +11,7 @@ do $$ begin
 end $$;
 do $$ begin if exists(select 1 from public.crm_whatsapp_menu_reconciliation) then raise exception 'menu review ledger is not empty'; end if; end $$;
 do $$ begin if exists(select 1 from public.crm_whatsapp_processing_decisions) then raise exception 'processing decision ledger is not empty'; end if; end $$;
-drop trigger crm_track_whatsapp_processing on public.whatsapp_inbound_messages;
 drop index public.crm_whatsapp_recovery_scan_idx;
-drop function public.crm_track_whatsapp_processing();
 drop table public.crm_whatsapp_processing_decisions;
 drop function public.crm_reconcile_whatsapp_menu(uuid,uuid,text,text,text);
 drop table public.crm_whatsapp_menu_reconciliation;
