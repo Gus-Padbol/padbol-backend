@@ -51,7 +51,14 @@ begin
    if conv.qualification_data #>> '{whatsapp_menu,initialMessage}' is not null then
      next_context := jsonb_set(next_context,'{initialMessage}',conv.qualification_data #> '{whatsapp_menu,initialMessage}',true);
    end if;
-   update public.crm_conversations set qualification_data=jsonb_set(coalesce(qualification_data,'{}'::jsonb),'{whatsapp_menu}',next_context,true), qualification_status=coalesce(p_qualification_status,qualification_status), next_step=coalesce(p_next_step,next_step), updated_at=now() where id=conv.id;
+   update public.crm_conversations set qualification_data=jsonb_set(coalesce(qualification_data,'{}'::jsonb),'{whatsapp_menu}',next_context,true),
+     qualification_status=case when estado='nuevo' and operador is null and not derivado then coalesce(p_qualification_status,qualification_status) else qualification_status end,
+     next_step=case when estado='nuevo' and operador is null and not derivado then coalesce(p_next_step,next_step) else next_step end,
+     updated_at=now() where id=conv.id;
+ end if;
+ -- Ordering uncertainty is sticky, even if this revision arrives late.
+ if p_context->'order_review' = 'true'::jsonb then
+   update public.crm_conversations set qualification_data=jsonb_set(coalesce(qualification_data,'{}'::jsonb),'{whatsapp_order_review}', '{"required":true,"reason":"ambiguous_message_order"}'::jsonb,true), updated_at=now() where id=conv.id;
  end if;
  return jsonb_build_object('conversationId',conv.id,'replay',false);
 end $$;
