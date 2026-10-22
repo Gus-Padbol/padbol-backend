@@ -16,5 +16,6 @@ drop trigger crm_manual_whatsapp_uncertainty_guard on public.crm_whatsapp_manual
 drop function public.crm_guard_manual_whatsapp_uncertainty();
 drop function public.crm_confirm_whatsapp_menu_sent(uuid, uuid, text, timestamptz);
 drop function public.crm_commit_whatsapp_menu_transition(uuid, uuid, bigint, jsonb, text, text);
+drop function public.crm_get_or_create_whatsapp_conversation(jsonb);
 drop table public.crm_whatsapp_menu_events;
 commit;

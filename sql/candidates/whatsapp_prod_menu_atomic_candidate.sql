@@ -13,6 +13,27 @@ alter table public.crm_whatsapp_menu_events enable row level security;
 revoke all on public.crm_whatsapp_menu_events from public, anon, authenticated;
 grant all on public.crm_whatsapp_menu_events to service_role;
 
+-- Serialize creation for the same existing contact and WhatsApp origin without
+-- merging historical records or changing the identity of any contact.
+create function public.crm_get_or_create_whatsapp_conversation(p_payload jsonb)
+returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
+declare v_contact uuid; v_origin text; v_conversation public.crm_conversations%rowtype; v_created boolean := false;
+begin
+  v_contact := (p_payload->>'contact_id')::uuid; v_origin := p_payload->>'origin';
+  if v_contact is null or p_payload->>'source_channel' <> 'whatsapp' or length(trim(coalesce(v_origin,''))) not between 1 and 120 then raise exception 'invalid conversation identity'; end if;
+  perform 1 from public.crm_contacts where id=v_contact for update;
+  if not found then raise exception 'contact not found'; end if;
+  select * into v_conversation from public.crm_conversations where contact_id=v_contact and source_channel='whatsapp' and origin=v_origin and estado <> 'cerrado' order by updated_at desc,id desc limit 1;
+  if not found then
+    insert into public.crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,subject,inbound_body,qualification_data,received_at,estado)
+    values(v_contact,'whatsapp',p_payload->>'source_ref',p_payload->>'attempt_id',p_payload->>'identity_used',v_origin,p_payload->>'subject',p_payload->>'inbound_body',coalesce(p_payload->'qualification_data','{}'::jsonb),(p_payload->>'received_at')::timestamptz,'nuevo') returning * into v_conversation;
+    v_created := true;
+  end if;
+  return jsonb_build_object('conversation',to_jsonb(v_conversation),'created',v_created);
+end $$;
+revoke all on function public.crm_get_or_create_whatsapp_conversation(jsonb) from public,anon,authenticated;
+grant execute on function public.crm_get_or_create_whatsapp_conversation(jsonb) to service_role;
+
 create function public.crm_commit_whatsapp_menu_transition(
   p_inbound_id uuid, p_conversation_id uuid, p_expected_version bigint,
   p_state jsonb, p_response text, p_idempotency_key text

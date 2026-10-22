@@ -38,7 +38,13 @@ try {
  rest=spawn('postgrest',[],{env:{...process.env,PGRST_DB_URI:`postgres://postgres:fixture-only@127.0.0.1:${pgPort}/postgres`,PGRST_DB_SCHEMAS:'public',PGRST_DB_ANON_ROLE:'service_role',PGRST_SERVER_HOST:'127.0.0.1',PGRST_SERVER_PORT:String(restPort)},stdio:'pipe'});
  let restLog='';rest.stderr.on('data',x=>restLog+=x.toString());let ready=false;for(let i=0;i<100;i++){try{const r=await fetch(`http://127.0.0.1:${restPort}/`);if(r.ok){ready=true;break}}catch{}await new Promise(r=>setTimeout(r,50));}if(!ready)throw Error('PostgREST not ready: '+restLog);
  const supabase=createClient(`http://127.0.0.1:${restPort}`,'fixture-only',{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:async(url,options)=>{const headers=new Headers(options.headers);headers.delete('authorization');const response=await fetch(String(url).replace('/rest/v1/','/'),{...options,headers});if(!response.ok)console.error('fixture PostgREST error',response.status,await response.clone().text());return response}}});
- const crm=createCrmService({repository:createSupabaseCrmRepository(supabase)});
+ const crm=createCrmService({repository:createSupabaseCrmRepository(supabase),whatsappAtomicConversationEnabled:true});
+ // Two distinct messages arrive concurrently for the same new identity.
+ const common={source:'whatsapp_cloud',channel:'whatsapp',phone:'15559990000',identityUsed:'15559990000',origin:'whatsapp:1376102838911694',body:'synthetic concurrent message'};
+ const concurrent=await Promise.all([crm.ingestInbound({...common,sourceId:'wamid.concurrent.1'}),crm.ingestInbound({...common,sourceId:'wamid.concurrent.2'})]);
+ assert.equal(concurrent[0].conversation.id,concurrent[1].conversation.id);
+ const count=(await client.query("select count(*)::int n from crm_inbound_events where source_ref in ('wamid.concurrent.1','wamid.concurrent.2')")).rows[0].n;assert.equal(count,2);
+ const other=await crm.ingestInbound({...common,origin:'whatsapp:other',sourceId:'wamid.other.origin'});assert.notEqual(other.conversation.id,concurrent[0].conversation.id);
  const menu=createProductionMenuCandidate({enabled:true,env:{BACKEND_RUNTIME_MODE:'production'},crmService:crm,atomicMenuStore:createWhatsappMenuAtomicStore(supabase)});
  pool=new Pool({host:'127.0.0.1',port:pgPort,user:'postgres',password:'fixture-only',database:'postgres',max:8});
  let sends=0,finishProvider,providerEntered;const providerWait=new Promise(r=>finishProvider=r),started=new Promise(r=>providerEntered=r);
