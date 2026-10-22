@@ -1,4 +1,5 @@
 import { createWhatsappContextRepository, registerWhatsappContextRoute } from './lib/whatsappContextBinding.js';
+import { resolveWhatsappProductionMenuFlags } from './lib/whatsappProductionMenuFlagsCandidate.js';
 import { mountBookingCapabilities } from './routes/bookingCapabilities.js';
 import {mayReadTournamentEnrollment,mapTournamentTeamReadRow} from './lib/dto/tournamentScopedTeams.js';
 import { projectVerifiedTournamentRankingTeams } from './lib/verifiedTournamentRanking.js';
@@ -792,7 +793,7 @@ const crmAdminService = createCrmAdminService({
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
   commercialOperators: CRM_COMMERCIAL_OPERATORS,
   supportOperators: CRM_SUPPORT_OPERATORS,
-  whatsappMenuReviewEnabled: process.env.WHATSAPP_PRODUCTION_MENU_ENABLED === 'true',
+  whatsappMenuReviewEnabled: resolveWhatsappProductionMenuFlags(process.env).reviewEnabled,
 });
 registerCrmAdminRoutes(app, {
   crmAdminService,
