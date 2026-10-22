@@ -22,6 +22,7 @@ try {
  create table crm_conversations(id uuid primary key,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean,estado text default 'nuevo',operador text,derivado boolean default false,sede_id uuid,assigned_by uuid,test_visibility_version bigint not null default 0);
  create function increment_fixture_version() returns trigger language plpgsql as $$begin new.test_visibility_version := old.test_visibility_version+1; return new; end$$;
  create trigger fixture_revision before update on crm_conversations for each row execute function increment_fixture_version();
+ create table crm_whatsapp_manual_attempts(conversation_id uuid);
  create table crm_inbound_events(id uuid primary key default gen_random_uuid(),conversation_id uuid,source_channel text,source_ref text,origin text);
  create table crm_replies(id uuid primary key default gen_random_uuid(),conversation_id uuid,body text,operador text,status text);
  create table whatsapp_outbox(id uuid primary key default gen_random_uuid(),tenant_id uuid,channel_id uuid,inbound_message_id uuid,idempotency_key text unique,to_wa_id text,reply_to_provider_message_id text,message_type text,text_body text,status text,customer_service_window_expires_at timestamptz,provider_message_id text,sent_at timestamptz,last_error text,updated_at timestamptz);`);
@@ -45,8 +46,11 @@ try {
  assert.equal((await setup.query('select funnel_state from crm_conversations where id=$1',[conv])).rows[0].funnel_state,'whatsapp_menu_topic');
  assert.equal((await setup.query('select count(*)::int n from crm_replies')).rows[0].n,1);
  await setup.query("update whatsapp_outbox set status='sending' where id=$1",[first.outbox_id]);
+ await assert.rejects(setup.query('insert into crm_whatsapp_manual_attempts(conversation_id) values($1)',[conv]),/unresolved menu delivery/);
+ await assert.rejects(setup.query(sql,[inbound2,conv,revision,JSON.stringify(state),'Otro','e'.repeat(64)]),/unresolved menu delivery/);
  await setup.query('select crm_confirm_whatsapp_menu_sent($1,$2,$3,now())',[first.outbox_id,tenant,'wamid.sent']);
  assert.equal((await setup.query('select status from crm_replies where id=$1',[first.reply_id])).rows[0].status,'sent');
+ await setup.query('insert into crm_whatsapp_manual_attempts(conversation_id) values($1)',[conv]);
  const conv2='66666666-6666-4666-8666-666666666666', older='77777777-7777-4777-8777-777777777777', newer='88888888-8888-4888-8888-888888888888';
  await setup.query("insert into crm_conversations(id,source_channel,updated_at) values($1,'whatsapp','2026-10-21T12:00:00Z')",[conv2]);
  await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values($1,$3,$4,'wamid.older','15551234567',now()-interval '2 minutes'),($2,$3,$4,'wamid.newer','15551234567',now()-interval '1 minute')",[older,newer,tenant,channel]);

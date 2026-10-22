@@ -57,6 +57,10 @@ begin
      or v_conversation.assigned_by is not null or coalesce(v_conversation.handoff_ready, false)
      or coalesce((v_conversation.qualification_data #>> '{whatsapp_order_review,required}')::boolean, false)
      then raise exception 'not eligible'; end if;
+  if exists (select 1 from public.crm_whatsapp_menu_events e join public.whatsapp_outbox o on o.id=e.outbox_id
+      where e.conversation_id=p_conversation_id and (o.status='sending' or o.last_error='WHATSAPP_SEND_UNCERTAIN_NO_RETRY')) then
+    raise exception 'unresolved menu delivery';
+  end if;
   if p_expected_version is null or v_conversation.test_visibility_version <> p_expected_version then
     raise exception 'conversation revision changed' using errcode = '40001';
   end if;
@@ -91,6 +95,21 @@ begin
 end $$;
 revoke all on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, bigint, jsonb, text, text) from public, anon, authenticated;
 grant execute on function public.crm_commit_whatsapp_menu_transition(uuid, uuid, bigint, jsonb, text, text) to service_role;
+-- Manual sending must wait for reconciliation of an ambiguous automated send.
+-- crm_claim_whatsapp_reply holds the same conversation row lock before insert.
+create function public.crm_guard_manual_whatsapp_uncertainty() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
+begin
+  perform 1 from public.crm_conversations where id=new.conversation_id for update;
+  if not found then raise exception 'conversation not found'; end if;
+  if exists (select 1 from public.crm_whatsapp_menu_events e join public.whatsapp_outbox o on o.id=e.outbox_id
+      where e.conversation_id=new.conversation_id and (o.status='sending' or o.last_error='WHATSAPP_SEND_UNCERTAIN_NO_RETRY')) then
+    raise exception 'unresolved menu delivery';
+  end if;
+  return new;
+end $$;
+revoke all on function public.crm_guard_manual_whatsapp_uncertainty() from public,anon,authenticated;
+create trigger crm_manual_whatsapp_uncertainty_guard before insert on public.crm_whatsapp_manual_attempts
+  for each row execute function public.crm_guard_manual_whatsapp_uncertainty();
 -- Confirm the provider acknowledgement and the CRM transcript together.
 create function public.crm_confirm_whatsapp_menu_sent(
   p_outbox_id uuid, p_tenant_id uuid, p_provider_message_id text, p_sent_at timestamptz
