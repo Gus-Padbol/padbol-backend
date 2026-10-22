@@ -110,6 +110,47 @@ language sql security definer set search_path=public,pg_temp stable as $$
 $$;
 revoke all on function public.crm_whatsapp_menu_review_batch(uuid[]) from public,anon,authenticated;
 grant execute on function public.crm_whatsapp_menu_review_batch(uuid[]) to service_role;
+-- A human superadmin reviews provider evidence before releasing an uncertain case.
+-- This does not send or retry a message. Identity/permissions are checked by CRM.
+create table public.crm_whatsapp_menu_reconciliation (
+  id uuid primary key default gen_random_uuid(), outbox_id uuid not null unique references public.whatsapp_outbox(id),
+  conversation_id uuid not null references public.crm_conversations(id), reviewer_id uuid not null,
+  outcome text not null check(outcome in ('delivered','not_delivered')),
+  evidence_sha256 text not null check(evidence_sha256 ~ '^[0-9a-f]{64}$'),
+  provider_message_id text, created_at timestamptz not null default now()
+);
+alter table public.crm_whatsapp_menu_reconciliation enable row level security;
+revoke all on public.crm_whatsapp_menu_reconciliation from public,anon,authenticated,service_role;
+grant select on public.crm_whatsapp_menu_reconciliation to service_role;
+create function public.crm_reconcile_whatsapp_menu(p_conversation_id uuid,p_reviewer_id uuid,p_outcome text,p_evidence_sha256 text,p_provider_id text)
+returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
+declare o public.whatsapp_outbox%rowtype; v_reply uuid; v_count integer;
+begin
+  if p_reviewer_id is null or p_outcome not in ('delivered','not_delivered') or p_evidence_sha256 !~ '^[0-9a-f]{64}$'
+    or (p_outcome='delivered' and (p_provider_id is null or length(trim(p_provider_id)) not between 1 and 512))
+    or (p_outcome='not_delivered' and p_provider_id is not null) then raise exception 'invalid review'; end if;
+  perform 1 from public.crm_conversations where id=p_conversation_id and source_channel='whatsapp' for update;
+  if not found then raise exception 'conversation not found'; end if;
+  select count(*) into v_count from public.crm_whatsapp_menu_events e join public.whatsapp_outbox b on b.id=e.outbox_id
+    where e.conversation_id=p_conversation_id and (b.status='sending' or b.last_error='WHATSAPP_SEND_UNCERTAIN_NO_RETRY');
+  if v_count<>1 then raise exception 'review requires exactly one unresolved delivery'; end if;
+  select b.* into o from public.crm_whatsapp_menu_events e join public.whatsapp_outbox b on b.id=e.outbox_id
+    where e.conversation_id=p_conversation_id and (b.status='sending' or b.last_error='WHATSAPP_SEND_UNCERTAIN_NO_RETRY') for update of b;
+  select e.reply_id into v_reply from public.crm_whatsapp_menu_events e where e.outbox_id=o.id and e.conversation_id=p_conversation_id;
+  insert into public.crm_whatsapp_menu_reconciliation(outbox_id,conversation_id,reviewer_id,outcome,evidence_sha256,provider_message_id)
+    values(o.id,p_conversation_id,p_reviewer_id,p_outcome,p_evidence_sha256,p_provider_id);
+  update public.whatsapp_outbox set status=case when p_outcome='delivered' then 'sent' else 'cancelled' end,
+    provider_message_id=case when p_outcome='delivered' then p_provider_id else null end,
+    sent_at=case when p_outcome='delivered' then clock_timestamp() else null end,
+    last_error=case when p_outcome='delivered' then null else 'REVIEWED_NOT_DELIVERED' end, updated_at=clock_timestamp() where id=o.id;
+  update public.crm_replies set status=case when p_outcome='delivered' then 'sent' else 'cancelled' end where id=v_reply and status='pending';
+  if not found then raise exception 'review reply not pending'; end if;
+  update public.crm_conversations set qualification_data=qualification_data - 'whatsapp_order_review',updated_at=clock_timestamp()
+    where id=p_conversation_id and qualification_data #>> '{whatsapp_order_review,reason}'='uncertain_automated_delivery';
+  return jsonb_build_object('reviewed',true,'outcome',p_outcome);
+end $$;
+revoke all on function public.crm_reconcile_whatsapp_menu(uuid,uuid,text,text,text) from public,anon,authenticated;
+grant execute on function public.crm_reconcile_whatsapp_menu(uuid,uuid,text,text,text) to service_role;
 -- Manual sending must wait for reconciliation of an ambiguous automated send.
 -- crm_claim_whatsapp_reply holds the same conversation row lock before insert.
 create function public.crm_guard_manual_whatsapp_uncertainty() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$

@@ -85,11 +85,23 @@ try {
  await assert.rejects(setup.query(sql,guardedArgs),/not eligible/);
  await setup.query("update whatsapp_tenant_channels set active=true where id=$1",[channel]);
  assert.equal((await setup.query('select count(*)::int n from crm_replies where conversation_id=$1',[guardedConv])).rows[0].n,0);
+ // An explicitly audited review of an uncertain send never re-sends it.
+ const ver=(await setup.query('select test_visibility_version from crm_conversations where id=$1',[guardedConv])).rows[0].test_visibility_version;
+ const reviewEvent=(await setup.query(sql,[guardedId,guardedConv,ver,JSON.stringify(state),'Review case','f'.repeat(64)])).rows[0].result;
+ await setup.query("update whatsapp_outbox set status='sending' where id=$1",[reviewEvent.outbox_id]);
+ await assert.rejects(setup.query('select crm_reconcile_whatsapp_menu($1,$2,$3,$4,$5)',[guardedConv,tenant,'delivered','bad',null]),/invalid review/);
+ assert.equal((await setup.query('select crm_whatsapp_menu_needs_review($1) v',[guardedConv])).rows[0].v,true);
+ await setup.query('select crm_reconcile_whatsapp_menu($1,$2,$3,$4,$5)',[guardedConv,tenant,'delivered','a'.repeat(64),'wamid.confirmed']);
+ assert.equal((await setup.query('select status from crm_replies where id=$1',[reviewEvent.reply_id])).rows[0].status,'sent');
+ assert.equal((await setup.query('select crm_whatsapp_menu_needs_review($1) v',[guardedConv])).rows[0].v,false);
+ assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_reconciliation')).rows[0].n,1);
+ await assert.rejects(setup.query('select crm_reconcile_whatsapp_menu($1,$2,$3,$4,$5)',[guardedConv,tenant,'delivered','a'.repeat(64),'wamid.confirmed']),/exactly one/);
  const rollback=await readFile('sql/candidates/rollback/whatsapp_prod_menu_atomic_candidate.rollback.sql','utf8');
  await assert.rejects(setup.query(rollback), /menu event ledger is not empty/);
  await setup.query('rollback');
- assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n,3);
+ assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n,4);
  // Only synthetic fixture data is deleted here; real ledgers must be preserved.
+ await setup.query('truncate crm_whatsapp_menu_reconciliation');
  await setup.query('truncate crm_whatsapp_menu_events');
  await setup.query(rollback);
  assert.equal((await setup.query("select to_regclass('public.crm_whatsapp_menu_events') as relation")).rows[0].relation,null);

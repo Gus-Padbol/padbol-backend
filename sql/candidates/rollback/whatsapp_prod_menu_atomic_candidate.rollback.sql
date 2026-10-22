@@ -7,6 +7,9 @@ do $$ begin
     raise exception 'menu event ledger is not empty; preserve it and reconcile before rollback';
   end if;
 end $$;
+do $$ begin if exists(select 1 from public.crm_whatsapp_menu_reconciliation) then raise exception 'menu review ledger is not empty'; end if; end $$;
+drop function public.crm_reconcile_whatsapp_menu(uuid,uuid,text,text,text);
+drop table public.crm_whatsapp_menu_reconciliation;
 drop function public.crm_whatsapp_menu_review_batch(uuid[]);
 drop function public.crm_whatsapp_menu_needs_review(uuid);
 drop trigger crm_manual_whatsapp_uncertainty_guard on public.crm_whatsapp_manual_attempts;
