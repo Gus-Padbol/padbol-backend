@@ -1,3 +1,4 @@
+import { createWhatsappContextRepository, registerWhatsappContextRoute } from './lib/whatsappContextBinding.js';
 import { mountBookingCapabilities } from './routes/bookingCapabilities.js';
 import {mayReadTournamentEnrollment,mapTournamentTeamReadRow} from './lib/dto/tournamentScopedTeams.js';
 import { projectVerifiedTournamentRankingTeams } from './lib/verifiedTournamentRanking.js';
@@ -327,6 +328,7 @@ app.use(RELAY_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (re
   req.rawBody = req.body;
   next();
 });
+app.use('/api/internal/whatsapp-context', express.raw({ type: 'application/json', limit: '16kb' }));
 app.use(express.json({
   verify: (req, _res, buf) => {
     if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe') {
@@ -776,6 +778,7 @@ const whatsappAdminService = createWhatsappAdminService({
 });
 registerWhatsappAdminRoutes(app, { whatsappAdminService, authUserFromBearer, fetchUserRoleRow });
 
+registerWhatsappContextRoute(app, { repository: createWhatsappContextRepository(supabaseAdmin), secret: process.env.WHATSAPP_CONTEXT_BINDING_SECRET, rawParser: (_req, _res, next) => next() });
 const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
 const crmLeadAnalyzer = createCrmLeadAutoAnalyzer({ crmService });
 const crmEmailSender = routeCrmEmailSender({commercialSender:createCrmEmailSender({ runtime }),supportSender:createCrmSupportSender({ runtime })});
