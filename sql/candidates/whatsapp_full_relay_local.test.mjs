@@ -45,6 +45,16 @@ try {
  assert.equal(concurrent[0].conversation.id,concurrent[1].conversation.id);
  const count=(await client.query("select count(*)::int n from crm_inbound_events where source_ref in ('wamid.concurrent.1','wamid.concurrent.2')")).rows[0].n;assert.equal(count,2);
  const other=await crm.ingestInbound({...common,origin:'whatsapp:other',sourceId:'wamid.other.origin'});assert.notEqual(other.conversation.id,concurrent[0].conversation.id);
+ // An operator closes the active thread while a new inbound is arriving.
+ // The inbound must wait and create a new open thread after the close commits.
+ await client.query('begin');
+ await client.query("update crm_conversations set estado='cerrado' where id=$1",[concurrent[0].conversation.id]);
+ let arrivalDone=false;
+ const arrival=crm.ingestInbound({...common,sourceId:'wamid.after.close'}).then(value=>{arrivalDone=true;return value});
+ await new Promise(r=>setTimeout(r,300));assert.equal(arrivalDone,false);
+ await client.query('commit');
+ const afterClose=await arrival;assert.notEqual(afterClose.conversation.id,concurrent[0].conversation.id);
+ assert.equal((await client.query("select c.estado from crm_inbound_events e join crm_conversations c on c.id=e.conversation_id where e.source_ref='wamid.after.close'")).rows[0].estado,'nuevo');
  const menu=createProductionMenuCandidate({enabled:true,env:{BACKEND_RUNTIME_MODE:'production'},crmService:crm,atomicMenuStore:createWhatsappMenuAtomicStore(supabase)});
  pool=new Pool({host:'127.0.0.1',port:pgPort,user:'postgres',password:'fixture-only',database:'postgres',max:8});
  let sends=0,finishProvider,providerEntered;const providerWait=new Promise(r=>finishProvider=r),started=new Promise(r=>providerEntered=r);

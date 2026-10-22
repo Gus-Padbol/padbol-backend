@@ -17,19 +17,32 @@ grant all on public.crm_whatsapp_menu_events to service_role;
 -- merging historical records or changing the identity of any contact.
 create function public.crm_get_or_create_whatsapp_conversation(p_payload jsonb)
 returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
-declare v_contact uuid; v_origin text; v_conversation public.crm_conversations%rowtype; v_created boolean := false;
+declare v_contact uuid; v_origin text; v_conversation public.crm_conversations%rowtype; v_event public.crm_inbound_events%rowtype; v_created boolean := false;
 begin
   v_contact := (p_payload->>'contact_id')::uuid; v_origin := p_payload->>'origin';
   if v_contact is null or p_payload->>'source_channel' <> 'whatsapp' or length(trim(coalesce(v_origin,''))) not between 1 and 120 then raise exception 'invalid conversation identity'; end if;
   perform 1 from public.crm_contacts where id=v_contact for update;
   if not found then raise exception 'contact not found'; end if;
-  select * into v_conversation from public.crm_conversations where contact_id=v_contact and source_channel='whatsapp' and origin=v_origin and estado <> 'cerrado' order by updated_at desc,id desc limit 1;
+  select * into v_event from public.crm_inbound_events where source_channel='whatsapp' and origin=v_origin and source_ref=p_payload->>'source_ref';
+  if found then
+    select * into v_conversation from public.crm_conversations where id=v_event.conversation_id and contact_id=v_contact;
+    if not found then raise exception 'inbound identity mismatch'; end if;
+    return jsonb_build_object('conversation',to_jsonb(v_conversation),'created',false,'event',to_jsonb(v_event));
+  end if;
+  select * into v_conversation from public.crm_conversations where contact_id=v_contact and source_channel='whatsapp' and origin=v_origin and estado <> 'cerrado' order by updated_at desc,id desc limit 1 for update;
   if not found then
     insert into public.crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,subject,inbound_body,qualification_data,received_at,estado)
     values(v_contact,'whatsapp',p_payload->>'source_ref',p_payload->>'attempt_id',p_payload->>'identity_used',v_origin,p_payload->>'subject',p_payload->>'inbound_body',coalesce(p_payload->'qualification_data','{}'::jsonb),(p_payload->>'received_at')::timestamptz,'nuevo') returning * into v_conversation;
     v_created := true;
   end if;
-  return jsonb_build_object('conversation',to_jsonb(v_conversation),'created',v_created);
+  insert into public.crm_inbound_events(conversation_id,source_channel,source_ref,origin,subject,body,received_at)
+    values(v_conversation.id,'whatsapp',p_payload->>'source_ref',v_origin,p_payload->>'subject',p_payload->>'inbound_body',(p_payload->>'received_at')::timestamptz)
+    returning * into v_event;
+  if not v_created then
+    update public.crm_conversations set received_at=v_event.received_at,inbound_body=v_event.body,updated_at=now() where id=v_conversation.id;
+  end if;
+  select * into v_conversation from public.crm_conversations where id=v_conversation.id;
+  return jsonb_build_object('conversation',to_jsonb(v_conversation),'created',v_created,'event',to_jsonb(v_event));
 end $$;
 revoke all on function public.crm_get_or_create_whatsapp_conversation(jsonb) from public,anon,authenticated;
 grant execute on function public.crm_get_or_create_whatsapp_conversation(jsonb) to service_role;
