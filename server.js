@@ -1,3 +1,5 @@
+import { createWhatsappLanguageMenu } from './lib/whatsappLanguageMenu.js';
+import { createWhatsappMenuAtomicStore } from './lib/whatsappMenuAtomic.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
 import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.js';
@@ -760,8 +762,14 @@ registerCrmAdminRoutes(app, {
 });
 
 const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
+const whatsappMenuAtomicStore = process.env.WHATSAPP_MENU_ATOMIC_QA_ENABLED === 'true'
+  && process.env.BACKEND_RUNTIME_MODE === 'staging' && SUPABASE_SERVICE_ROLE_KEY
+  ? createWhatsappMenuAtomicStore(supabaseAdmin) : null;
 const crmFunnel = createCrmFunnel({
   crmService,
+  atomicMenuStore: whatsappMenuAtomicStore,
+  languageMenu: process.env.CRM_WHATSAPP_LANGUAGE_MENU_ENABLED === 'true'
+    ? createWhatsappLanguageMenu() : null,
   paths: parseCrmFunnelPaths(process.env.CRM_WHATSAPP_FUNNEL_PATHS_JSON),
 });
 registerCrmInboundRoutes(app, {
@@ -2048,7 +2056,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
-  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay });
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay, whatsappMenuAtomicStore });
 
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
