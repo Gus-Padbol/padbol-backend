@@ -76,13 +76,12 @@ begin
     if v_event.conversation_id <> p_conversation_id then raise exception 'event conversation mismatch'; end if;
     return jsonb_build_object('created', false, 'reply_id', v_event.reply_id, 'outbox_id', v_event.outbox_id, 'revision', v_event.menu_revision);
   end if;
-  -- If an older delivery arrives after a newer transition, keep it in the
-  -- inbox for human review instead of interpreting it as an answer to a newer menu.
+  -- Out-of-order and same-timestamp deliveries have no trustworthy causal
+  -- order. Keep them in the inbox for human review; do not mutate state or send.
   if exists (select 1 from public.crm_whatsapp_menu_events e
       join public.whatsapp_inbound_messages prior on prior.id = e.inbound_message_id
       where e.conversation_id = p_conversation_id
-      and (prior.received_at, prior.created_at, prior.id) >
-          (v_inbound.received_at, v_inbound.created_at, v_inbound.id)) then
+      and prior.received_at >= v_inbound.received_at) then
     insert into public.crm_whatsapp_menu_events(inbound_message_id, conversation_id)
       values (p_inbound_id, p_conversation_id);
     return jsonb_build_object('created', true, 'stale', true, 'reply_id', null, 'outbox_id', null);
