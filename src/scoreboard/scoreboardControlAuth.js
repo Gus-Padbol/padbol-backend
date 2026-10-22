@@ -24,6 +24,13 @@ export function assertScoreboardMutable(partido) {
   }
 }
 
+export function assertScoreboardScoringActive(partido) {
+  assertScoreboardMutable(partido);
+  if (partido?.estado !== 'en_curso' || !partido?.cronometro_inicio || partido?.cronometro_pausado) {
+    throw Object.assign(new Error('Inicia o reanuda el partido para modificar el puntaje.'), { status: 409 });
+  }
+}
+
 const SCOREBOARD_TOKEN_LOOKUP_SELECT = [
   'id', 'sede_id', 'torneo_id', 'torneo_nombre', 'cancha',
   'partido_abierto_id', 'reserva_id', 'partido_torneo_id',

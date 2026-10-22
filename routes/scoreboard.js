@@ -18,6 +18,7 @@ import { scoreboardControlWriteRateLimit } from '../lib/rateLimit.js';
 import { mapScoreboardJugadoresTempPublic } from '../lib/scoreboardPublic.js';
 import {
   assertScoreboardMutable,
+  assertScoreboardScoringActive,
   resolveScoreboardByControlToken,
 } from '../src/scoreboard/scoreboardControlAuth.js';
 import {
@@ -454,7 +455,7 @@ export function mountScoreboardRoutes(app, {
   }
 
   async function handleRegistrarPunto(partido, equipo) {
-    assertScoreboardMutable(partido);
+    assertScoreboardScoringActive(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
     const expectedUpdatedAt = partido.updated_at;
     const estadoAntes = partido.estado;
@@ -468,7 +469,7 @@ export function mountScoreboardRoutes(app, {
   }
 
   async function handleUndo(partido) {
-    assertScoreboardMutable(partido);
+    assertScoreboardScoringActive(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
     if (!Array.isArray(partido.historial_puntos) || partido.historial_puntos.length === 0) {
       throw Object.assign(new Error('No hay puntos para deshacer'), { status: 400 });
@@ -487,7 +488,7 @@ export function mountScoreboardRoutes(app, {
   }
 
   async function handleDeshacer(partido) {
-    assertScoreboardMutable(partido);
+    assertScoreboardScoringActive(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
     if (!Array.isArray(partido.historial_puntos) || partido.historial_puntos.length === 0) {
       throw Object.assign(new Error('No hay puntos para deshacer'), { status: 400 });
