@@ -174,7 +174,8 @@ try {
    assert.match((await concurrent).message,/unresolved delivery/);
  } finally { await locked.query('rollback').catch(()=>{});locked.release(); }
  // Deleting a conversation removes the operational release but retains its independent audit.
- const deletionId=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,qualification_data,received_at,estado) values($1,'whatsapp','deletion-source','deletion-attempt',$2,'whatsapp:deletion','{}',now(),'nuevo') returning id",[contactId,common.phone])).rows[0].id;
+ const deletionContact=(await client.query("insert into crm_contacts(phone_normalized) values('15550009001') returning id")).rows[0].id;
+ const deletionId=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,qualification_data,received_at,estado) values($1,'whatsapp','deletion-source','deletion-attempt',$2,'whatsapp:1376102838911694','{}',now(),'nuevo') returning id",[deletionContact,'15550009001'])).rows[0].id;
  await client.query('select crm_resume_whatsapp_automation($1,$2)',[deletionId,actor]);
  await client.query('delete from crm_conversations where id=$1',[deletionId]);
  assert.equal((await client.query('select count(*)::int n from crm_whatsapp_automation_releases where conversation_id=$1',[deletionId])).rows[0].n,0);
