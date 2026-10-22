@@ -19,7 +19,8 @@ try {
  await setup.query(`create role anon; create role authenticated; create role service_role;
  create table whatsapp_tenant_channels(id uuid primary key,tenant_id uuid,meta_phone_number_id text,active boolean not null default true);
  create table whatsapp_inbound_messages(id uuid primary key,tenant_id uuid,channel_id uuid,provider_message_id text,from_wa_id text,received_at timestamptz,created_at timestamptz default now(),message_type text not null default 'text',meta_media_type text);
- create table crm_conversations(id uuid primary key,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean,estado text default 'nuevo',operador text,derivado boolean default false,sede_id uuid,assigned_by uuid,test_visibility_version bigint not null default 0,ticket_number bigint default 100087,
+ create table crm_contacts(id uuid primary key);
+ create table crm_conversations(id uuid primary key,contact_id uuid,origin text,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean,estado text default 'nuevo',operador text,derivado boolean default false,sede_id uuid,assigned_by uuid,test_visibility_version bigint not null default 0,ticket_number bigint default 100087,
  check(source_channel in ('whatsapp','email')), check(estado in ('nuevo','en_atencion','derivado','cerrado')),
  check(length(trim(funnel_state)) between 1 and 120),check(selected_path is null or length(trim(selected_path)) between 1 and 120),
  check(jsonb_typeof(qualification_data)='object'), check(jsonb_typeof(prompt_options)='array'),

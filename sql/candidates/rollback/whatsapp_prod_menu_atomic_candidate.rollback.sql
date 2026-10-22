@@ -1,6 +1,8 @@
 -- QA candidate rollback only. Stop all menu workers before executing.
 -- Preserve the event ledger once it contains any processed message.
 begin;
+drop trigger if exists crm_guard_whatsapp_open_insert on public.crm_conversations;
+drop function if exists public.crm_guard_whatsapp_open_insert();
 lock table public.crm_whatsapp_menu_events in access exclusive mode;
 do $$ begin
   if exists (select 1 from public.crm_whatsapp_menu_events) then

@@ -55,6 +55,15 @@ try {
  // operator closes its conversation before the missing event is stored.
  const legacyId='wamid.legacy.partial',legacyAttempt=attemptIdFor({source:'whatsapp_cloud',sourceId:legacyId}),legacyOrigin='whatsapp:legacy';
  const contactId=concurrent[0].contact.id;
+ // Legacy writer wins the lock: a new writer waits and joins that thread.
+ const mixedOrigin='whatsapp:mixed-legacy-first';
+ await client.query('begin');
+ const mixed=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,inbound_body,qualification_data,received_at,estado) values($1,'whatsapp','legacy-source','legacy-attempt',$2,$3,'legacy','{}',now(),'nuevo') returning id",[contactId,common.phone,mixedOrigin])).rows[0].id;
+ let mixedDone=false;const mixedArrival=crm.ingestInbound({...common,origin:mixedOrigin,sourceId:'wamid.mixed'}).then(x=>{mixedDone=true;return x});
+ await new Promise(r=>setTimeout(r,300));assert.equal(mixedDone,false);await client.query('commit');assert.equal((await mixedArrival).conversation.id,mixed);
+ // A legacy insert racing after an open thread exists is rejected rather than
+ // creating a second thread. The transport must still retry the failed webhook.
+ await assert.rejects(client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,inbound_body,qualification_data,received_at,estado) values($1,'whatsapp','legacy-loser','legacy-attempt-loser',$2,$3,'legacy','{}',now(),'nuevo')",[contactId,common.phone,mixedOrigin]),/open WhatsApp conversation already exists/);
  await client.query("insert into crm_channel_attempts(attempt_id,contact_id,channel) values($1,$2,'whatsapp')",[legacyAttempt,contactId]);
  const legacy=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,inbound_body,qualification_data,received_at,estado) values($1,'whatsapp',$2,$3,$4,$5,'original legacy','{}',now(),'nuevo') returning id",[contactId,legacyId,legacyAttempt,common.phone,legacyOrigin])).rows[0].id;
  await client.query('begin');await client.query("update crm_conversations set estado='cerrado' where id=$1",[legacy]);
