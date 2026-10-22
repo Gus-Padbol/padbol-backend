@@ -57,7 +57,7 @@ declare
   v_channel public.whatsapp_tenant_channels%rowtype;
   v_conversation public.crm_conversations%rowtype;
   v_event public.crm_whatsapp_menu_events%rowtype;
-  v_reply uuid; v_outbox uuid; v_revision bigint; v_menu jsonb; v_followup jsonb; v_context jsonb;
+  v_reply uuid; v_outbox uuid; v_revision bigint; v_menu jsonb; v_followup jsonb; v_context jsonb; v_status text; v_step text;
 begin
   select * into v_inbound from public.whatsapp_inbound_messages where id = p_inbound_id;
   if not found then raise exception 'inbound not found'; end if;
@@ -82,9 +82,41 @@ begin
       join public.whatsapp_inbound_messages prior on prior.id = e.inbound_message_id
       where e.conversation_id = p_conversation_id
       and prior.received_at >= v_inbound.received_at) then
-    insert into public.crm_whatsapp_menu_events(inbound_message_id, conversation_id)
-      values (p_inbound_id, p_conversation_id);
-    return jsonb_build_object('created', true, 'stale', true, 'reply_id', null, 'outbox_id', null);
+    -- Preserve every inbound event, retain the previously recorded intent, and
+    -- create an explicit review signal. Never send a customer-facing reply.
+    v_menu := v_conversation.qualification_data->'whatsapp_menu';
+    v_revision := coalesce((v_menu->>'revision')::bigint, 0) + 1;
+    v_status := v_conversation.qualification_status;
+    v_step := v_conversation.next_step;
+    if v_conversation.estado = 'nuevo' and v_conversation.operador is null and v_conversation.derivado is false then
+      v_status := 'needs_review'; v_step := 'advisor_handoff';
+    end if;
+    update public.crm_conversations set
+      qualification_data = jsonb_set(jsonb_set(coalesce(qualification_data, '{}'::jsonb),
+        '{whatsapp_menu,revision}',to_jsonb(v_revision),true),
+        '{whatsapp_order_review}',jsonb_build_object('required',true,'reason','ambiguous_message_order'),true),
+      qualification_status = v_status, next_step = v_step,
+      handoff_ready = case when v_status='needs_review' then false else handoff_ready end, updated_at = clock_timestamp()
+      where id = p_conversation_id;
+    insert into public.crm_whatsapp_menu_events(inbound_message_id, conversation_id, menu_revision)
+      values (p_inbound_id, p_conversation_id, v_revision);
+    if v_menu->>'stage' in ('topic','confirm_topic','subtopic','details','selected') then
+      v_followup := v_menu->'followup';
+      v_context := jsonb_build_object('stage',v_menu->>'stage','topic',v_menu->>'topic',
+        'subtopic',v_menu->>'subtopic','initialMessage',v_menu->>'initialMessage',
+        'detailMessage',v_menu->>'detailMessage','needs_review',true,
+        'followup',case when jsonb_typeof(v_followup)='object' then
+          jsonb_build_object('topic',v_followup->>'topic','subtopic',v_followup->>'subtopic','detail',v_followup->>'detail') else null end);
+      insert into public.crm_whatsapp_context_outbox(inbound_message_id, conversation_id, revision, payload)
+        values (p_inbound_id,p_conversation_id,v_revision,
+          jsonb_build_object('revision',v_revision,'wabaId',v_channel.meta_waba_id,
+            'phoneNumberId',v_channel.meta_phone_number_id,'messageId',v_inbound.provider_message_id,
+            'sender',v_inbound.from_wa_id,'context',v_context,
+            'qualificationStatus',case when v_status in ('pending','needs_review') then v_status else null end,
+            'nextStep',case when v_step in ('whatsapp_menu_topic','whatsapp_menu_confirm_topic','whatsapp_menu_subtopic','whatsapp_menu_details','advisor_handoff') then v_step else null end));
+    end if;
+    return jsonb_build_object('created', true, 'stale', true, 'reply_id', null, 'outbox_id', null, 'revision', v_revision);
+
   end if;
   if p_expected_updated_at is null or v_conversation.updated_at <> p_expected_updated_at then
     raise exception 'conversation revision changed' using errcode = '40001';

@@ -5,7 +5,7 @@ const db = new PGlite();
 await db.exec(`create role anon; create role authenticated; create role service_role;
 create table whatsapp_tenant_channels(id uuid primary key,tenant_id uuid,meta_phone_number_id text,meta_waba_id text);
 create table whatsapp_inbound_messages(id uuid primary key,tenant_id uuid,channel_id uuid,provider_message_id text,from_wa_id text,received_at timestamptz,created_at timestamptz default now());
-create table crm_conversations(id uuid primary key,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean, constraint crm_conversations_handoff_ready_check check (not handoff_ready or qualification_status = 'qualified'));
+create table crm_conversations(id uuid primary key,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean,estado text default 'nuevo',operador text,derivado boolean default false, constraint crm_conversations_handoff_ready_check check (not handoff_ready or qualification_status = 'qualified'));
 create table crm_inbound_events(id uuid primary key default gen_random_uuid(),conversation_id uuid,source_channel text,source_ref text,origin text);
 create table crm_replies(id uuid primary key default gen_random_uuid(),conversation_id uuid,body text,operador text,status text);
 create table whatsapp_outbox(id uuid primary key default gen_random_uuid(),tenant_id uuid,channel_id uuid,inbound_message_id uuid,idempotency_key text unique,to_wa_id text,reply_to_provider_message_id text,message_type text,text_body text,status text,customer_service_window_expires_at timestamptz,provider_message_id text,sent_at timestamptz,last_error text,updated_at timestamptz);
@@ -65,9 +65,29 @@ for (const [itemId, source, delta] of [
   const current = (await db.query('select updated_at,qualification_data from crm_conversations where id=$1',[conv])).rows[0];
   const stale = (await db.query(q,[itemId,conv,current.updated_at,JSON.stringify(state),'No enviar', 'd'.repeat(64)])).rows[0].result;
   assert.equal(stale.stale,true); assert.equal(stale.outbox_id,null);
-  assert.deepEqual((await db.query('select qualification_data from crm_conversations where id=$1',[conv])).rows[0].qualification_data,current.qualification_data);
+  const after = (await db.query('select qualification_data,qualification_status,next_step from crm_conversations where id=$1',[conv])).rows[0];
+  assert.equal(after.qualification_data.whatsapp_order_review.required,true);
+  const {revision: _beforeRevision, ...beforeMenu} = current.qualification_data.whatsapp_menu;
+  const {revision: _afterRevision, ...afterMenu} = after.qualification_data.whatsapp_menu;
+  assert.deepEqual(afterMenu,beforeMenu);
+  assert.equal(after.qualification_status,'needs_review');
+  assert.equal(after.next_step,'advisor_handoff');
+  const context = (await db.query('select payload from crm_whatsapp_context_outbox where inbound_message_id=$1',[itemId])).rows[0].payload;
+  assert.equal(context.context.needs_review,true);
+  assert.equal(context.qualificationStatus,'needs_review');
 }
-assert.equal((await db.query('select count(*)::int as n from crm_whatsapp_context_outbox')).rows[0].n,2);
+// A review marker must not unassign an already active human operator.
+await db.query("update crm_conversations set estado='en_atencion',operador='human',derivado=false,qualification_status='qualified',handoff_ready=true,next_step='advisor_handoff' where id=$1",[conv]);
+const activeId='88888888-8888-4888-8888-888888888888';
+await db.query(`insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at)
+  select $1,$2,$3,'wamid.active','15551234567',received_at from whatsapp_inbound_messages where id=$4`,[activeId,tenant,channel,inbound]);
+await db.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.active','whatsapp:1376102838911694')",[conv]);
+const activeRev=(await db.query('select updated_at from crm_conversations where id=$1',[conv])).rows[0].updated_at;
+assert.equal((await db.query(q,[activeId,conv,activeRev,JSON.stringify(state),'No enviar','e'.repeat(64)])).rows[0].result.stale,true);
+assert.deepEqual((await db.query('select estado,operador,qualification_status,handoff_ready from crm_conversations where id=$1',[conv])).rows[0],
+  {estado:'en_atencion',operador:'human',qualification_status:'qualified',handoff_ready:true});
+assert.equal((await db.query('select count(*)::int as n from crm_whatsapp_context_outbox')).rows[0].n,5);
+assert.equal((await db.query('select count(*)::int as n from crm_replies')).rows[0].n,2);
 await db.query("update whatsapp_outbox set status='sending' where id=$1",[first.outbox_id]);
 await db.query('select crm_confirm_whatsapp_menu_sent($1,$2,$3,now())',[first.outbox_id,tenant,'wamid.sent']);
 assert.equal((await db.query('select status from crm_replies where id=$1',[first.reply_id])).rows[0].status,'sent');
