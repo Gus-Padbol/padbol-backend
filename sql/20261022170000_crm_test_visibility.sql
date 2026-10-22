@@ -12,6 +12,14 @@ CREATE TABLE public.crm_test_visibility_audit (
 );
 ALTER TABLE public.crm_test_visibility_audit ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.crm_test_visibility_audit FROM PUBLIC, anon, authenticated;
+CREATE FUNCTION public.crm_advance_test_visibility_version() RETURNS trigger
+LANGUAGE plpgsql SET search_path=pg_catalog,public AS $$
+BEGIN
+  NEW.test_visibility_version := OLD.test_visibility_version + 1;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.crm_advance_test_visibility_version() FROM PUBLIC,anon,authenticated;
+CREATE TRIGGER crm_advance_test_visibility_version BEFORE UPDATE ON public.crm_conversations FOR EACH ROW EXECUTE FUNCTION public.crm_advance_test_visibility_version();
 CREATE FUNCTION public.crm_set_test_visibility(p_id uuid, p_hide boolean, p_actor uuid, p_expected bigint)
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE old_hidden timestamptz; old_version bigint;
@@ -32,7 +40,7 @@ DECLARE prior_hidden timestamptz;
 BEGIN
   SELECT test_hidden_at INTO prior_hidden FROM public.crm_conversations WHERE id=NEW.conversation_id FOR NO KEY UPDATE;
   IF FOUND THEN
-    UPDATE public.crm_conversations SET test_hidden_at=NULL, test_visibility_version=test_visibility_version + 1 WHERE id=NEW.conversation_id;
+    UPDATE public.crm_conversations SET test_hidden_at=NULL WHERE id=NEW.conversation_id;
     IF prior_hidden IS NOT NULL THEN
       INSERT INTO public.crm_test_visibility_audit(conversation_id,conversation_reference,action) VALUES(NEW.conversation_id,NEW.conversation_id,'new_message_restore');
     END IF;
