@@ -2091,7 +2091,7 @@ mountTournamentPlanningRoutes(app, {db:supabaseAdmin, requireTorneoAdmin:require
 mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
-  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay });
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay, crmService });
 
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
