@@ -4,7 +4,8 @@ SET LOCAL statement_timeout = '30s';
 ALTER TABLE public.crm_conversations ADD COLUMN test_hidden_at timestamptz;
 CREATE TABLE public.crm_test_visibility_audit (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  conversation_id uuid NOT NULL REFERENCES public.crm_conversations(id) ON DELETE RESTRICT,
+  conversation_id uuid REFERENCES public.crm_conversations(id) ON DELETE SET NULL,
+  conversation_reference uuid NOT NULL,
   actor_id uuid,
   action text NOT NULL CHECK (action IN ('hide', 'restore', 'new_message_restore')),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
@@ -21,18 +22,20 @@ BEGIN
   IF (old_hidden IS NOT NULL) = p_hide THEN RETURN false; END IF;
   IF p_hide AND old_updated IS DISTINCT FROM p_expected THEN RAISE EXCEPTION 'Conversation changed; review again' USING ERRCODE='40001'; END IF;
   UPDATE public.crm_conversations SET test_hidden_at=CASE WHEN p_hide THEN clock_timestamp() ELSE NULL END WHERE id=p_id;
-  INSERT INTO public.crm_test_visibility_audit(conversation_id,actor_id,action) VALUES(p_id,p_actor,CASE WHEN p_hide THEN 'hide' ELSE 'restore' END);
+  INSERT INTO public.crm_test_visibility_audit(conversation_id,conversation_reference,actor_id,action) VALUES(p_id,p_id,p_actor,CASE WHEN p_hide THEN 'hide' ELSE 'restore' END);
   RETURN true;
 END $$;
 REVOKE ALL ON FUNCTION public.crm_set_test_visibility(uuid,boolean,uuid,timestamptz) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.crm_set_test_visibility(uuid,boolean,uuid,timestamptz) TO service_role;
 CREATE FUNCTION public.crm_restore_test_on_inbound() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE prior_hidden timestamptz;
 BEGIN
-  UPDATE public.crm_conversations SET test_hidden_at=NULL, updated_at=greatest(clock_timestamp(),updated_at + interval '1 microsecond') WHERE id=NEW.conversation_id AND test_hidden_at IS NOT NULL;
+  SELECT test_hidden_at INTO prior_hidden FROM public.crm_conversations WHERE id=NEW.conversation_id FOR UPDATE;
   IF FOUND THEN
-    INSERT INTO public.crm_test_visibility_audit(conversation_id,action) VALUES(NEW.conversation_id,'new_message_restore');
-  ELSE
-    UPDATE public.crm_conversations SET updated_at=greatest(clock_timestamp(),updated_at + interval '1 microsecond') WHERE id=NEW.conversation_id;
+    UPDATE public.crm_conversations SET test_hidden_at=NULL, updated_at=greatest(clock_timestamp(),updated_at + interval '1 microsecond') WHERE id=NEW.conversation_id;
+    IF prior_hidden IS NOT NULL THEN
+      INSERT INTO public.crm_test_visibility_audit(conversation_id,conversation_reference,action) VALUES(NEW.conversation_id,NEW.conversation_id,'new_message_restore');
+    END IF;
   END IF;
   RETURN NEW;
 END $$;
