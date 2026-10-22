@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 const db = new PGlite();
 await db.exec(`create role anon; create role authenticated; create role service_role;
-create table whatsapp_tenant_channels(id uuid primary key,tenant_id uuid,meta_phone_number_id text);
+create table whatsapp_tenant_channels(id uuid primary key,tenant_id uuid,meta_phone_number_id text,meta_waba_id text);
 create table whatsapp_inbound_messages(id uuid primary key,tenant_id uuid,channel_id uuid,provider_message_id text,from_wa_id text,received_at timestamptz,created_at timestamptz default now());
 create table crm_conversations(id uuid primary key,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean, constraint crm_conversations_handoff_ready_check check (not handoff_ready or qualification_status = 'qualified'));
 create table crm_inbound_events(id uuid primary key default gen_random_uuid(),conversation_id uuid,source_channel text,source_ref text,origin text);
@@ -14,7 +14,7 @@ await db.exec(await readFile('sql/20261022100000_whatsapp_menu_atomic_candidate.
 await db.exec(await readFile('sql/20261022120000_whatsapp_menu_revision_candidate.sql','utf8'));
 const id = ['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444','55555555-5555-4555-8555-555555555555'];
 const [tenant,channel,inbound,conv,inbound2] = id;
-await db.query('insert into whatsapp_tenant_channels values($1,$2,$3)',[channel,tenant,'1376102838911694']);
+await db.query('insert into whatsapp_tenant_channels values($1,$2,$3,$4)',[channel,tenant,'1376102838911694','928900479733370']);
 await db.query('insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values($1,$2,$3,$4,$5,now()),($6,$2,$3,$7,$5,now())',[inbound,tenant,channel,'wamid.first','15551234567',inbound2,'wamid.second']);
 await db.query("insert into crm_conversations(id,source_channel,updated_at) values($1,'whatsapp','2026-10-21T12:00:00Z')",[conv]);
 await db.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.first','whatsapp:1376102838911694'),($1,'whatsapp','wamid.second','whatsapp:1376102838911694')",[conv]);
@@ -41,6 +41,14 @@ assert.equal((await db.query('select count(*)::int as n from crm_whatsapp_menu_e
 handoff.handoff_ready = false;
 const routed = (await db.query(q,[inbound2,conv,revision,JSON.stringify(handoff),'Advisor', 'c'.repeat(64)])).rows[0].result;
 assert.equal(routed.created,true); assert.equal(routed.revision,2);
+assert.equal((await db.query('select count(*)::int as n from crm_whatsapp_context_outbox')).rows[0].n,2);
+const claim1 = (await db.query('select * from crm_claim_whatsapp_context()')).rows[0];
+const claim2 = (await db.query('select * from crm_claim_whatsapp_context()')).rows[0];
+assert.notEqual(claim1.inbound_message_id,claim2.inbound_message_id);
+assert.equal((await db.query('select * from crm_claim_whatsapp_context()')).rows.length,0);
+assert.equal((await db.query('select crm_finish_whatsapp_context($1,$2,$3,$4) as ok',[claim1.inbound_message_id,claim2.lease_token,'sent','PB-'+'A'.repeat(32)])).rows[0].ok,false);
+assert.equal((await db.query('select crm_finish_whatsapp_context($1,$2,$3,$4) as ok',[claim1.inbound_message_id,claim1.lease_token,'sent','PB-'+'A'.repeat(32)])).rows[0].ok,true);
+assert.equal((await db.query('select crm_finish_whatsapp_context($1,$2,$3,$4) as ok',[claim2.inbound_message_id,claim2.lease_token,'retry',null])).rows[0].ok,true);
 const replayRouted = (await db.query(q,[inbound2,conv,revision,JSON.stringify(handoff),'Advisor','c'.repeat(64)])).rows[0].result;
 assert.equal(replayRouted.revision,2); assert.equal(replayRouted.outbox_id,routed.outbox_id);
 assert.deepEqual((await db.query('select qualification_status,next_step,handoff_ready from crm_conversations where id=$1',[conv])).rows[0],
