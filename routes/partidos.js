@@ -1,3 +1,4 @@
+import { verifiedSuspendedBookings } from '../lib/verifiedSuspendedBookings.js';
 import express from 'express';
 import { resolvePartidoSportFormat, resolvePartidoCourtContract } from '../lib/partidoSportFormat.js';
 import { enrichSedesWithCourtCatalog, normalizeAvailabilitySport, slotCourtMetadata } from '../lib/sedeCourtCatalog.js';
@@ -160,6 +161,12 @@ const PARTIDO_SELECT = `
 
 function getCapitanUserId(partido) {
   return partido.capitan_user_id ?? partido.host_user_id ?? null;
+}
+
+export function partidoSuspendidoVisibleParaUsuario(partido, user) {
+  if (partido?.estado !== 'suspendido' || !user?.id) return false;
+  return getCapitanUserId(partido) === user.id
+    || (partido.partidos_abiertos_jugadores ?? []).some((row) => row.user_id === user.id);
 }
 
 function getCapitanEmail(partido) {
@@ -488,7 +495,7 @@ async function cancelPartidoWithReserva(supabaseAdmin, partidoId, reservaId, par
     .eq('id', partidoId);
 }
 
-export const BLOCKING_RESERVA_ESTADOS = ['confirmada', 'pendiente', 'prereserva'];
+export const BLOCKING_RESERVA_ESTADOS = ['confirmada', 'confirmado', 'pendiente', 'pendiente_pago_manual', 'pendiente_pago_efectivo', 'prereserva', 'suspendida'];
 
 export function isBlockingReserva(reserva, nowMs = Date.now()) {
   void nowMs;
@@ -829,8 +836,9 @@ export async function fetchDisponibilidadOccupancy(supabaseAdmin, { sedeId, sede
 
   if (partidosErr) throw partidosErr;
 
+  const released = await verifiedSuspendedBookings(supabaseAdmin, reservas);
   return {
-    reservas: filterBlockingReservas(reservas ?? []),
+    reservas: filterBlockingReservas(reservas ?? []).filter(row => !released.has(String(row.id))),
     partidos: partidos ?? [],
   };
 }
@@ -1021,7 +1029,8 @@ async function isCourtBlocked(
     }
 
     const merged = mergeReservasById(results.flatMap((r) => r.data ?? []));
-    const hit = filterBlockingReservas(merged).some(
+    const released = await verifiedSuspendedBookings(supabaseAdmin, merged);
+    const hit = filterBlockingReservas(merged).filter(row => !released.has(String(row.id))).some(
       (reserva) => Number(resolveReservaCanchaQueryText(reserva.cancha)) === canchaNum
         && reservaSolapaSlot(reserva, horaSlot, duracionMinutos),
     );
@@ -1875,6 +1884,7 @@ export function createPartidosRouter({
       const sedeId = parsePositiveInt(req.query.sede_id);
       const auth = await getAuthenticatedUser(req);
       const user = auth.user ?? null;
+      if (user) res.set('Cache-Control', 'private, no-store');
 
       if (sedeId != null) {
         console.log('[GET /api/partidos/abiertos] query', {
@@ -1919,7 +1929,7 @@ export function createPartidosRouter({
         const { data: completos, error: completosErr } = await supabaseAdmin
           .from('partidos_abiertos')
           .select(PARTIDO_SELECT)
-          .eq('estado', 'completo');
+          .in('estado', ['completo', 'suspendido']);
 
         if (completosErr) throw completosErr;
 
@@ -1928,7 +1938,8 @@ export function createPartidosRouter({
             .map((row) => row.user_id);
           const capitanUserId = getCapitanUserId(partido);
           const isMember = capitanUserId === user.id || participantIds.includes(user.id);
-          return isMember && isMatchPast(partido.fecha, partido.hora);
+          return partidoSuspendidoVisibleParaUsuario(partido, user)
+            || (partido.estado === 'completo' && isMember && isMatchPast(partido.fecha, partido.hora));
         });
 
         const byId = new Map(merged.map((partido) => [partido.id, partido]));
