@@ -66,7 +66,17 @@ try {
  await a.query('commit');const stale=(await oldPending).rows[0].result;
  assert.equal(stale.stale,true);assert.equal(stale.outbox_id,null);
  assert.equal((await setup.query('select funnel_state from crm_conversations where id=$1',[conv2])).rows[0].funnel_state,'new_state');
+ assert.equal((await setup.query("select qualification_data #>> '{whatsapp_message_order_review,reason}' reason from crm_conversations where id=$1",[conv2])).rows[0].reason,'ambiguous_message_order');
  assert.equal((await setup.query('select count(*)::int n from crm_replies where conversation_id=$1',[conv2])).rows[0].n,1);
+ const equalConv='12345678-1234-4234-8234-123456789abc',equal1='12345678-1234-4234-8234-123456789abd',equal2='12345678-1234-4234-8234-123456789abe';
+ await setup.query("insert into crm_conversations(id,source_channel,qualification_data) values($1,'whatsapp','{\"other\":true}'::jsonb)",[equalConv]);
+ await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values($1,$3,$4,'wamid.equal1','15551234567',now()-interval '1 minute'),($2,$3,$4,'wamid.equal2','15551234567',now()-interval '1 minute')",[equal1,equal2,tenant,channel]);
+ await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.equal1','whatsapp:123456789'),($1,'whatsapp','wamid.equal2','whatsapp:123456789')",[equalConv]);
+ await setup.query(sql,[equal1,equalConv,0,JSON.stringify({...state,qualification_data:{other:true}}),'Hello','1'.repeat(64)]);
+ const same=(await setup.query(sql,[equal2,equalConv,1,JSON.stringify(state),'Wrong','2'.repeat(64)])).rows[0].result;
+ assert.equal(same.stale,true);assert.equal(same.outbox_id,null);
+ const eqData=(await setup.query('select qualification_data from crm_conversations where id=$1',[equalConv])).rows[0].qualification_data;
+ assert.equal(eqData.other,true);assert.equal(eqData.whatsapp_message_order_review.required,true);
 
  // Human assignment and audio reject before mutating a conversation or queuing.
  const guardedConv='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',guardedId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -99,7 +109,7 @@ try {
  const rollback=await readFile('sql/candidates/rollback/whatsapp_prod_menu_atomic_candidate.rollback.sql','utf8');
  await assert.rejects(setup.query(rollback), /menu event ledger is not empty/);
  await setup.query('rollback');
- assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n,4);
+ assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n,6);
  // Only synthetic fixture data is deleted here; real ledgers must be preserved.
  await setup.query('truncate crm_whatsapp_menu_reconciliation');
  await setup.query('truncate crm_whatsapp_menu_events');

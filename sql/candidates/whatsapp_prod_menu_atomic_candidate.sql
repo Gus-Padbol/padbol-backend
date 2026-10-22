@@ -47,6 +47,10 @@ begin
       join public.whatsapp_inbound_messages prior on prior.id = e.inbound_message_id
       where e.conversation_id = p_conversation_id
       and prior.received_at >= v_inbound.received_at) then
+    update public.crm_conversations set qualification_data=jsonb_set(
+      coalesce(qualification_data, '{}'::jsonb), '{whatsapp_message_order_review}',
+      '{"required":true,"reason":"ambiguous_message_order"}'::jsonb, true),
+      updated_at=clock_timestamp() where id=p_conversation_id;
     insert into public.crm_whatsapp_menu_events(inbound_message_id, conversation_id)
       values (p_inbound_id, p_conversation_id);
     return jsonb_build_object('created', true, 'stale', true, 'reply_id', null, 'outbox_id', null);
@@ -56,6 +60,7 @@ begin
      or coalesce(v_conversation.derivado, false) or v_conversation.sede_id is not null
      or v_conversation.assigned_by is not null or coalesce(v_conversation.handoff_ready, false)
      or coalesce((v_conversation.qualification_data #>> '{whatsapp_order_review,required}')::boolean, false)
+     or coalesce((v_conversation.qualification_data #>> '{whatsapp_message_order_review,required}')::boolean, false)
      then raise exception 'not eligible'; end if;
   if exists (select 1 from public.crm_whatsapp_menu_events e join public.whatsapp_outbox o on o.id=e.outbox_id
       where e.conversation_id=p_conversation_id and (o.status='sending' or o.last_error='WHATSAPP_SEND_UNCERTAIN_NO_RETRY')) then
