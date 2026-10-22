@@ -19,17 +19,21 @@ grant all on public.crm_whatsapp_menu_events to service_role;
 create function public.crm_guard_whatsapp_open_insert() returns trigger
 language plpgsql security definer set search_path=public,pg_temp as $$
 begin
+  if tg_op='UPDATE' and new.contact_id is not distinct from old.contact_id
+    and new.source_channel is not distinct from old.source_channel
+    and new.origin is not distinct from old.origin
+    and (old.estado<>'cerrado' or new.estado='cerrado') then return new; end if;
   if new.source_channel='whatsapp' and new.estado<>'cerrado' and new.contact_id is not null then
     perform 1 from public.crm_contacts where id=new.contact_id for update;
     if not found then raise exception 'contact not found'; end if;
-    if exists(select 1 from public.crm_conversations where contact_id=new.contact_id and source_channel='whatsapp' and origin=new.origin and estado<>'cerrado') then
+    if exists(select 1 from public.crm_conversations where contact_id=new.contact_id and source_channel='whatsapp' and origin=new.origin and estado<>'cerrado' and id<>new.id) then
       raise exception 'open WhatsApp conversation already exists' using errcode='40001';
     end if;
   end if;
   return new;
 end $$;
 revoke all on function public.crm_guard_whatsapp_open_insert() from public,anon,authenticated;
-create trigger crm_guard_whatsapp_open_insert before insert on public.crm_conversations
+create trigger crm_guard_whatsapp_open_insert before insert or update of contact_id,source_channel,origin,estado on public.crm_conversations
 for each row execute function public.crm_guard_whatsapp_open_insert();
 
 -- Serialize creation for the same existing contact and WhatsApp origin without

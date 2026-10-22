@@ -64,6 +64,20 @@ try {
  // A legacy insert racing after an open thread exists is rejected rather than
  // creating a second thread. The transport must still retry the failed webhook.
  await assert.rejects(client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,inbound_body,qualification_data,received_at,estado) values($1,'whatsapp','legacy-loser','legacy-attempt-loser',$2,$3,'legacy','{}',now(),'nuevo')",[contactId,common.phone,mixedOrigin]),/open WhatsApp conversation already exists/);
+ const closed=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,qualification_data,received_at,estado) values($1,'whatsapp','closed-test','closed-attempt',$2,$3,'{}',now(),'cerrado') returning id",[contactId,common.phone,mixedOrigin])).rows[0].id;
+ await assert.rejects(client.query("update crm_conversations set estado='nuevo' where id=$1",[closed]),/open WhatsApp conversation already exists/);
+ await assert.rejects(client.query('update crm_conversations set origin=$1 where id=$2',[mixedOrigin,other.conversation.id]),/open WhatsApp conversation already exists/);
+ // Actual old service observes no thread, then the new service creates one.
+ // Old insert is rejected by the shared guard and its retry joins that thread.
+ const legacyRepo=createSupabaseCrmRepository(supabase),originalFind=legacyRepo.findOpenConversation.bind(legacyRepo);
+ let observed,releaseFind;const observedRead=new Promise(r=>observed=r),allowLegacy=new Promise(r=>releaseFind=r);let pause=true;
+ legacyRepo.findOpenConversation=async(...args)=>{const row=await originalFind(...args);if(pause){pause=false;observed();await allowLegacy;}return row};
+ const legacyCrm=createCrmService({repository:legacyRepo}),raceOrigin='whatsapp:mixed-new-first';
+ const oldMessage=legacyCrm.ingestInbound({...common,origin:raceOrigin,sourceId:'wamid.old.race'});
+ await observedRead;const newMessage=await crm.ingestInbound({...common,origin:raceOrigin,sourceId:'wamid.new.race'});releaseFind();
+ await assert.rejects(oldMessage);const retried=await legacyCrm.ingestInbound({...common,origin:raceOrigin,sourceId:'wamid.old.race'});
+ assert.equal(retried.conversation.id,newMessage.conversation.id);
+ assert.equal((await client.query("select count(*)::int n from crm_inbound_events where source_ref in ('wamid.old.race','wamid.new.race')")).rows[0].n,2);
  await client.query("insert into crm_channel_attempts(attempt_id,contact_id,channel) values($1,$2,'whatsapp')",[legacyAttempt,contactId]);
  const legacy=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,inbound_body,qualification_data,received_at,estado) values($1,'whatsapp',$2,$3,$4,$5,'original legacy','{}',now(),'nuevo') returning id",[contactId,legacyId,legacyAttempt,common.phone,legacyOrigin])).rows[0].id;
  await client.query('begin');await client.query("update crm_conversations set estado='cerrado' where id=$1",[legacy]);
