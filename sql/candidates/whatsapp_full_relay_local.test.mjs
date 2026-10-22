@@ -95,8 +95,13 @@ try {
  await client.query('begin');await client.query("update crm_conversations set estado='cerrado' where id=$1",[legacy]);
  const legacyArrival=assert.rejects(crm.ingestInbound({...common,origin:legacyOrigin,sourceId:legacyId,body:'replacement'}),/No se pudo asegurar el hilo entrante/);
  await legacyArrival;await client.query('commit');
- await assert.rejects(crm.ingestInbound({...common,origin:legacyOrigin,sourceId:legacyId,body:'replacement'}),/No se pudo asegurar el hilo entrante/);
- assert.equal((await client.query('select count(*)::int n from crm_inbound_events where source_ref=$1',[legacyId])).rows[0].n,0);
+ const recoveredLegacy=await crm.ingestInbound({...common,origin:legacyOrigin,sourceId:legacyId,body:'replacement'});
+ assert.notEqual(recoveredLegacy.conversation.id,legacy);
+ const legacyEvent=(await client.query('select body,conversation_id from crm_inbound_events where source_ref=$1',[legacyId])).rows[0];
+ assert.equal(legacyEvent.body,'original legacy');assert.equal(legacyEvent.conversation_id,recoveredLegacy.conversation.id);
+ assert.equal((await client.query('select estado from crm_conversations where id=$1',[legacy])).rows[0].estado,'cerrado');
+ assert.equal(recoveredLegacy.conversation.qualification_data.legacy_recovery.conversation_id,legacy);
+ assert.equal((await crm.ingestInbound({...common,origin:legacyOrigin,sourceId:legacyId})).conversation.id,recoveredLegacy.conversation.id);
  // An operator closes the active thread while a new inbound is arriving.
  // The inbound must wait and create a new open thread after the close commits.
  await client.query('begin');
@@ -129,7 +134,7 @@ try {
  await client.query("insert into whatsapp_inbound_messages(tenant_id,channel_id,provider_message_id,from_wa_id,message_type,text_body,received_at,created_at) values($1,$2,'wamid.recovery.fresh','15550000002','text','fresh recovery',now()-interval '2 minutes',now()-interval '2 minutes')",[tenant,channel]);
  const realRecovery=createWhatsappProductionRecoveryCandidate({pool,channelId:channel,cutoff:new Date(Date.now()-600000).toISOString(),ingress});
  const firstRecovery=await realRecovery.run();assert.equal(firstRecovery.completed,2);assert.equal(sends,2);
- await realRecovery.run();await realRecovery.run();assert.equal(sends,2);
+ assert.equal((await realRecovery.run()).examined,0);assert.equal((await realRecovery.run()).examined,0);assert.equal(sends,2);
  assert.equal((await client.query("select count(*)::int n from crm_inbound_events where source_ref='wamid.recovery.text'")).rows[0].n,1);
  assert.equal((await client.query("select count(*)::int n from crm_whatsapp_menu_events e join whatsapp_inbound_messages m on m.id=e.inbound_message_id where m.provider_message_id='wamid.recovery.fresh'")).rows[0].n,1);
  console.log('Integrated localhost relay + real Supabase repositories + PostgreSQL + simulated Meta: preserved original and no duplicate after relay timeout.');

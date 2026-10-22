@@ -40,9 +40,10 @@ for each row execute function public.crm_guard_whatsapp_open_insert();
 -- merging historical records or changing the identity of any contact.
 create function public.crm_get_or_create_whatsapp_conversation(p_payload jsonb)
 returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
-declare v_contact uuid; v_origin text; v_conversation public.crm_conversations%rowtype; v_event public.crm_inbound_events%rowtype; v_created boolean := false;
+declare v_contact uuid; v_origin text; v_conversation public.crm_conversations%rowtype; v_event public.crm_inbound_events%rowtype; v_created boolean := false; v_recovery_id uuid; v_attempt text; v_data jsonb;
 begin
   v_contact := (p_payload->>'contact_id')::uuid; v_origin := p_payload->>'origin';
+  v_attempt := p_payload->>'attempt_id'; v_data := coalesce(p_payload->'qualification_data','{}'::jsonb);
   if v_contact is null or p_payload->>'source_channel' <> 'whatsapp' or length(trim(coalesce(v_origin,''))) not between 1 and 120 then raise exception 'invalid conversation identity'; end if;
   perform 1 from public.crm_contacts where id=v_contact for update;
   if not found then raise exception 'contact not found'; end if;
@@ -54,13 +55,19 @@ begin
   end if;
   if p_payload->>'recovery_conversation_id' is not null then
     select * into v_conversation from public.crm_conversations where id=(p_payload->>'recovery_conversation_id')::uuid and contact_id=v_contact and source_channel='whatsapp' and origin=v_origin for update nowait;
-    if not found or v_conversation.estado='cerrado' then raise exception 'legacy recovery needs review'; end if;
+    if not found then raise exception 'legacy recovery identity mismatch'; end if;
+    if v_conversation.estado='cerrado' then
+      v_recovery_id:=v_conversation.id;
+      v_attempt:='recovered:'||v_recovery_id::text;
+      v_data:=jsonb_set(v_data,'{legacy_recovery}',jsonb_build_object('conversation_id',v_recovery_id,'attempt_id',p_payload->>'attempt_id'),true);
+      select * into v_conversation from public.crm_conversations where contact_id=v_contact and source_channel='whatsapp' and origin=v_origin and estado<>'cerrado' order by updated_at desc,id desc limit 1 for update nowait;
+    end if;
   else
     select * into v_conversation from public.crm_conversations where contact_id=v_contact and source_channel='whatsapp' and origin=v_origin and estado <> 'cerrado' order by updated_at desc,id desc limit 1 for update nowait;
   end if;
   if not found then
     insert into public.crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,subject,inbound_body,qualification_data,received_at,estado)
-    values(v_contact,'whatsapp',p_payload->>'source_ref',p_payload->>'attempt_id',p_payload->>'identity_used',v_origin,p_payload->>'subject',p_payload->>'inbound_body',coalesce(p_payload->'qualification_data','{}'::jsonb),(p_payload->>'received_at')::timestamptz,'nuevo') returning * into v_conversation;
+    values(v_contact,'whatsapp',p_payload->>'source_ref',v_attempt,p_payload->>'identity_used',v_origin,p_payload->>'subject',p_payload->>'inbound_body',v_data,(p_payload->>'received_at')::timestamptz,'nuevo') returning * into v_conversation;
     v_created := true;
   end if;
   insert into public.crm_inbound_events(conversation_id,source_channel,source_ref,origin,subject,body,received_at)
