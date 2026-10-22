@@ -1,3 +1,4 @@
+import { validatePartialCorrection } from '../src/scoreboard/scoreboardPartialCorrection.js';
 import { installScoreboardSuspensionRoutesCandidate } from '../src/scoreboard/scoreboardSuspensionRoutesCandidate.js';
 import {assertNationsScoreboardAudience,safeNationsScoreboardProjection} from '../lib/torneos/nationsPublicAccess.js';
 import {
@@ -869,6 +870,37 @@ export function mountScoreboardRoutes(app, {
       console.error('❌ GET /api/scoreboard/partidos/:id:', err.message);
       return sendHttpError(res, err, { fallbackMessage: 'Error al obtener partido' });
     }
+  });
+
+  app.post('/api/scoreboard/partidos/:id/correccion-parcial', async (req, res) => {
+    try {
+      const auth = await getAuthenticatedUser(req);
+      if (!auth.user) return res.status(auth.status || 401).json({ error: 'No autorizado' });
+      const marker = await fetchPartido(supabaseAdmin, req.params.id);
+      assertCanControlScoreboard(await resolveAuthRole(auth.user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), marker.sede_id);
+      await assertScoreboardScoringSupported(supabaseAdmin, marker);
+      const input = validatePartialCorrection(req.body);
+      const { data, error } = await supabaseAdmin.rpc('scoreboard_correct_partial', { p_id: marker.id, p_expected: input.updatedAt, p_actor: auth.user.id, p_reason: input.reason, p_score: input.state });
+      if (error?.code === '55000') return res.status(409).json({error:'El partido no permite corregir el parcial en su estado actual.'});
+      if (error) throw error;
+      if (!data) return res.status(409).json({error:'El marcador cambió. Actualiza y revisa antes de confirmar.'});
+      try { await emitScoreboardUpdate(io, data.id, data, supabaseAdmin); } catch { /* polling can recover */ }
+      let presented = data;
+      try { presented = await enrichPartidoWithVenue(supabaseAdmin, data); } catch { /* the correction has already committed */ }
+      return res.json(presented);
+    } catch (err) { return sendHttpError(res, err, { fallbackMessage: 'No se pudo corregir el parcial.' }); }
+  });
+
+  app.get('/api/scoreboard/partidos/:id/correcciones', async (req, res) => {
+    try {
+      const auth = await getAuthenticatedUser(req);
+      if (!auth.user) return res.status(auth.status || 401).json({error:'No autorizado'});
+      const marker = await fetchPartido(supabaseAdmin, req.params.id);
+      assertCanControlScoreboard(await resolveAuthRole(auth.user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), marker.sede_id);
+      const {data,error}=await supabaseAdmin.from('scoreboard_partial_correction_audit').select('id,scoreboard_id,actor_id,reason,previous_score,corrected_score,created_at').eq('scoreboard_id',marker.id).order('created_at',{ascending:false}).limit(100);
+      if(error) throw error;
+      return res.json({correcciones:data||[]});
+    } catch(err) { return sendHttpError(res,err,{fallbackMessage:'No se pudo consultar el historial.'}); }
   });
 
   app.patch('/api/scoreboard/partidos/:id', async (req, res) => {
