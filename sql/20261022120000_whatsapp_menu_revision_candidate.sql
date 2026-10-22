@@ -104,7 +104,7 @@ begin
       v_followup := v_menu->'followup';
       v_context := jsonb_build_object('stage',v_menu->>'stage','topic',v_menu->>'topic',
         'subtopic',v_menu->>'subtopic','initialMessage',v_menu->>'initialMessage',
-        'detailMessage',v_menu->>'detailMessage','needs_review',true,
+        'detailMessage',v_menu->>'detailMessage','needs_review',true,'order_review',true,
         'followup',case when jsonb_typeof(v_followup)='object' then
           jsonb_build_object('topic',v_followup->>'topic','subtopic',v_followup->>'subtopic','detail',v_followup->>'detail') else null end);
       insert into public.crm_whatsapp_context_outbox(inbound_message_id, conversation_id, revision, payload)

@@ -74,6 +74,7 @@ for (const [itemId, source, delta] of [
   assert.equal(after.next_step,'advisor_handoff');
   const context = (await db.query('select payload from crm_whatsapp_context_outbox where inbound_message_id=$1',[itemId])).rows[0].payload;
   assert.equal(context.context.needs_review,true);
+  assert.equal(context.context.order_review,true);
   assert.equal(context.qualificationStatus,'needs_review');
 }
 // A review marker must not unassign an already active human operator.
