@@ -1178,6 +1178,8 @@ mountScoreboardRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
   io,
+  scoreboardSuspensionCandidateEnabled: process.env.SCOREBOARD_SUSPENSION_ENABLED === 'true' && process.env.SCOREBOARD_SUSPENSION_RECOVERY_ENABLED === 'true',
+  scoreboardSuspensionRecoveryEnabled: process.env.SCOREBOARD_SUSPENSION_RECOVERY_ENABLED === 'true',
 });
 initScoreboardSocket(io);
 mountTorneoInteresRoutes(app, {

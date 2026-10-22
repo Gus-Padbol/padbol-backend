@@ -1,3 +1,4 @@
+import { installScoreboardSuspensionRoutesCandidate } from '../src/scoreboard/scoreboardSuspensionRoutesCandidate.js';
 import {
   registrarPunto,
   deshacerPunto,
@@ -432,7 +433,20 @@ export function mountScoreboardRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails = [],
   io = null,
+  scoreboardSuspensionCandidateEnabled = false,
+  scoreboardSuspensionRecoveryEnabled = false,
 }) {
+  if (scoreboardSuspensionCandidateEnabled || scoreboardSuspensionRecoveryEnabled) {
+    installScoreboardSuspensionRoutesCandidate(app, {
+      getAuthenticatedUser, fetchPartido, db: supabaseAdmin,
+      allowTransitions: scoreboardSuspensionCandidateEnabled === true,
+      allowResume: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true,
+      resolveRole: user => resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }),
+      assertCanControl: assertCanControlScoreboard,
+      publishUpdate: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin),
+      presentPartido: row => enrichPartidoWithVenue(supabaseAdmin, row),
+    });
+  }
   async function saveAndEmit(partido, expectedUpdatedAt, options) {
     const saved = await savePartido(supabaseAdmin, partido, expectedUpdatedAt, options);
     await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
@@ -847,7 +861,7 @@ export function mountScoreboardRoutes(app, {
   app.get('/api/scoreboard/partidos/:id', async (req, res) => {
     try {
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
-      return res.json(await enrichPartidoWithVenue(supabaseAdmin, partido));
+      return res.json({ ...(await enrichPartidoWithVenue(supabaseAdmin, partido)), scoreboard_suspension_candidate_enabled: scoreboardSuspensionCandidateEnabled === true, scoreboard_suspension_resume_enabled: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true });
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/partidos/:id:', err.message);
