@@ -19,13 +19,20 @@ try {
  await setup.query(`create role anon; create role authenticated; create role service_role;
  create table whatsapp_tenant_channels(id uuid primary key,tenant_id uuid,meta_phone_number_id text,active boolean not null default true);
  create table whatsapp_inbound_messages(id uuid primary key,tenant_id uuid,channel_id uuid,provider_message_id text,from_wa_id text,received_at timestamptz,created_at timestamptz default now(),message_type text not null default 'text',meta_media_type text);
- create table crm_conversations(id uuid primary key,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean,estado text default 'nuevo',operador text,derivado boolean default false,sede_id uuid,assigned_by uuid,test_visibility_version bigint not null default 0);
+ create table crm_conversations(id uuid primary key,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean,estado text default 'nuevo',operador text,derivado boolean default false,sede_id uuid,assigned_by uuid,test_visibility_version bigint not null default 0,ticket_number bigint default 100087,
+ check(source_channel in ('whatsapp','email')), check(estado in ('nuevo','en_atencion','derivado','cerrado')),
+ check(length(trim(funnel_state)) between 1 and 120),check(selected_path is null or length(trim(selected_path)) between 1 and 120),
+ check(jsonb_typeof(qualification_data)='object'), check(jsonb_typeof(prompt_options)='array'),
+ check(qualification_question_count between 0 and 3 or (selected_path='national' and qualification_question_count=4)),
+ check(qualification_status in ('pending','in_progress','qualified','disqualified','needs_review')),
+ check(not handoff_ready or qualification_status='qualified'),
+ check(next_prompt is null or length(trim(next_prompt)) between 1 and 2000),check(next_step is null or length(trim(next_step)) between 1 and 2000));
  create function increment_fixture_version() returns trigger language plpgsql as $$begin new.test_visibility_version := old.test_visibility_version+1; return new; end$$;
  create trigger fixture_revision before update on crm_conversations for each row execute function increment_fixture_version();
  create table crm_whatsapp_manual_attempts(conversation_id uuid);
  create table crm_inbound_events(id uuid primary key default gen_random_uuid(),conversation_id uuid,source_channel text,source_ref text,origin text);
- create table crm_replies(id uuid primary key default gen_random_uuid(),conversation_id uuid,body text,operador text,status text);
- create table whatsapp_outbox(id uuid primary key default gen_random_uuid(),tenant_id uuid,channel_id uuid,inbound_message_id uuid,idempotency_key text unique,to_wa_id text,reply_to_provider_message_id text,message_type text,text_body text,status text,customer_service_window_expires_at timestamptz,provider_message_id text,sent_at timestamptz,last_error text,updated_at timestamptz);`);
+ create table crm_replies(id uuid primary key default gen_random_uuid(),conversation_id uuid,body text,operador text,status text,check(length(trim(body)) between 1 and 4096),check(status in ('pending','sent','cancelled')));
+ create table whatsapp_outbox(id uuid primary key default gen_random_uuid(),tenant_id uuid,channel_id uuid,inbound_message_id uuid,idempotency_key text unique,to_wa_id text,reply_to_provider_message_id text,message_type text,text_body text,status text,customer_service_window_expires_at timestamptz,provider_message_id text,sent_at timestamptz,last_error text,updated_at timestamptz,check(status in ('pending','sending','sent','expired','cancelled')),check(message_type='text'),check(length(text_body) between 1 and 4096),check(to_wa_id ~ '^[0-9]{6,20}$'));`);
  await setup.query(await readFile('sql/candidates/whatsapp_prod_menu_atomic_candidate.sql','utf8'));
  const [tenant,channel,inbound,conv,inbound2]=['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444','55555555-5555-4555-8555-555555555555'];
  await setup.query('insert into whatsapp_tenant_channels(id,tenant_id,meta_phone_number_id) values($1,$2,$3)',[channel,tenant,'123456789']);
@@ -106,10 +113,34 @@ try {
  assert.equal((await setup.query('select crm_whatsapp_menu_needs_review($1) v',[guardedConv])).rows[0].v,false);
  assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_reconciliation')).rows[0].n,1);
  await assert.rejects(setup.query('select crm_reconcile_whatsapp_menu($1,$2,$3,$4,$5)',[guardedConv,tenant,'delivered','a'.repeat(64),'wamid.confirmed']),/exactly one/);
+ // Drive the production Spanish menu through every published branch against
+ // actual candidate SQL and production-equivalent CHECK constraints.
+ const {createProductionMenuCandidate}=await import('../../lib/whatsappProductionMenuCandidate.js');
+ const {createHash}=await import('node:crypto');
+ let caseNumber=0;
+ for(const [topic,count] of [[1,4],[2,4],[3,3],[4,3],[5,3],[6,0],[7,0]]) for(let sub=1;sub<=Math.max(count,1);sub++){
+   caseNumber++;
+   const id=(await setup.query("insert into crm_conversations(id,source_channel,estado,qualification_data,qualification_status,funnel_state,prompt_options,qualification_question_count,handoff_ready,updated_at) values(gen_random_uuid(),'whatsapp','nuevo','{}','pending','awaiting_path','[]',0,false,clock_timestamp()) returning id")).rows[0].id;
+   const crmService={async ingestInbound(){return{status:'accepted',conversation:(await setup.query('select * from crm_conversations where id=$1',[id])).rows[0]}}};
+   const store={async findByInbound(i){return (await setup.query('select * from crm_whatsapp_menu_events where inbound_message_id=$1',[i])).rows[0]||null},async commit(x){return (await setup.query(sql,[x.inboundId,x.conversationId,x.expectedVersion,JSON.stringify(x.state),x.response,x.idempotencyKey])).rows[0].result}};
+   const menu=createProductionMenuCandidate({enabled:true,env:{BACKEND_RUNTIME_MODE:'production'},crmService,atomicMenuStore:store});
+   const steps=['Hola',String(topic),...(count?[String(sub)]:[]),'Necesito información en Argentina'];
+   for(let n=0;n<steps.length;n++){
+     const provider=`wamid.branch.${caseNumber}.${n}`;
+     const input=(await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values(gen_random_uuid(),$1,$2,$3,'15551234567',clock_timestamp()) returning id,received_at",[tenant,channel,provider])).rows[0];
+     await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp',$2,'whatsapp:123456789')",[id,provider]);
+     const result=await menu.ingestWhatsapp({providerMessageId:provider,phoneNumberId:'123456789',fromWaId:'15551234567',body:steps[n],receivedAt:input.received_at,menuDelivery:{inboundId:input.id,idempotencyKey:createHash('sha256').update(provider).digest('hex')}});
+     assert.ok(result.outboxId,`missing reply in branch ${topic}/${sub} step ${n}`);
+   }
+   const finished=(await setup.query('select qualification_status,next_step,qualification_data from crm_conversations where id=$1',[id])).rows[0];
+   assert.equal(finished.next_step,'advisor_handoff',`branch ${topic}/${sub} must reach handoff`);
+ }
+ assert.equal(caseNumber,19);
  const rollback=await readFile('sql/candidates/rollback/whatsapp_prod_menu_atomic_candidate.rollback.sql','utf8');
+ const ledgerCount=(await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n;
  await assert.rejects(setup.query(rollback), /menu event ledger is not empty/);
  await setup.query('rollback');
- assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n,6);
+ assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n,ledgerCount);
  // Only synthetic fixture data is deleted here; real ledgers must be preserved.
  await setup.query('truncate crm_whatsapp_menu_reconciliation');
  await setup.query('truncate crm_whatsapp_menu_events');
