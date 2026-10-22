@@ -5,7 +5,7 @@ const db = new PGlite();
 await db.exec(`create role anon; create role authenticated; create role service_role;
 create table whatsapp_tenant_channels(id uuid primary key,tenant_id uuid,meta_phone_number_id text);
 create table whatsapp_inbound_messages(id uuid primary key,tenant_id uuid,channel_id uuid,provider_message_id text,from_wa_id text,received_at timestamptz,created_at timestamptz default now());
-create table crm_conversations(id uuid primary key,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean);
+create table crm_conversations(id uuid primary key,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean, constraint crm_conversations_handoff_ready_check check (not handoff_ready or qualification_status = 'qualified'));
 create table crm_inbound_events(id uuid primary key default gen_random_uuid(),conversation_id uuid,source_channel text,source_ref text,origin text);
 create table crm_replies(id uuid primary key default gen_random_uuid(),conversation_id uuid,body text,operador text,status text);
 create table whatsapp_outbox(id uuid primary key default gen_random_uuid(),tenant_id uuid,channel_id uuid,inbound_message_id uuid,idempotency_key text unique,to_wa_id text,reply_to_provider_message_id text,message_type text,text_body text,status text,customer_service_window_expires_at timestamptz,provider_message_id text,sent_at timestamptz,last_error text,updated_at timestamptz);
@@ -30,6 +30,17 @@ await assert.rejects(db.query(q,[inbound2,conv,revision,JSON.stringify({...state
 assert.equal((await db.query('select funnel_state from crm_conversations where id=$1',[conv])).rows[0].funnel_state,'whatsapp_menu_topic');
 assert.equal((await db.query('select count(*)::int as n from crm_replies')).rows[0].n,1);
 await assert.rejects(db.query(q,[inbound2,conv,'2026-10-21T12:00:00Z',JSON.stringify(state),'Otro','b'.repeat(64)]));
+// The deployed CRM requires a qualified status for handoff_ready. Human
+// requests stay needs_review, routed via next_step, without violating it.
+const handoff = {...state, funnel_state:'whatsapp_menu_selected', qualification_status:'needs_review',
+  next_step:'advisor_handoff', handoff_ready:true};
+await assert.rejects(db.query(q,[inbound2,conv,revision,JSON.stringify(handoff),'Advisor', 'c'.repeat(64)]));
+assert.equal((await db.query('select count(*)::int as n from crm_whatsapp_menu_events')).rows[0].n,1);
+handoff.handoff_ready = false;
+const routed = (await db.query(q,[inbound2,conv,revision,JSON.stringify(handoff),'Advisor', 'c'.repeat(64)])).rows[0].result;
+assert.equal(routed.created,true);
+assert.deepEqual((await db.query('select qualification_status,next_step,handoff_ready from crm_conversations where id=$1',[conv])).rows[0],
+  {qualification_status:'needs_review',next_step:'advisor_handoff',handoff_ready:false});
 await db.query("update whatsapp_outbox set status='sending' where id=$1",[first.outbox_id]);
 await db.query('select crm_confirm_whatsapp_menu_sent($1,$2,$3,now())',[first.outbox_id,tenant,'wamid.sent']);
 assert.equal((await db.query('select status from crm_replies where id=$1',[first.reply_id])).rows[0].status,'sent');
