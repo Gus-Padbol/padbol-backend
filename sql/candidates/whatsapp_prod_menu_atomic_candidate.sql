@@ -53,10 +53,10 @@ begin
     return jsonb_build_object('conversation',to_jsonb(v_conversation),'created',false,'event',to_jsonb(v_event));
   end if;
   if p_payload->>'recovery_conversation_id' is not null then
-    select * into v_conversation from public.crm_conversations where id=(p_payload->>'recovery_conversation_id')::uuid and contact_id=v_contact and source_channel='whatsapp' and origin=v_origin for update;
+    select * into v_conversation from public.crm_conversations where id=(p_payload->>'recovery_conversation_id')::uuid and contact_id=v_contact and source_channel='whatsapp' and origin=v_origin for update nowait;
     if not found or v_conversation.estado='cerrado' then raise exception 'legacy recovery needs review'; end if;
   else
-    select * into v_conversation from public.crm_conversations where contact_id=v_contact and source_channel='whatsapp' and origin=v_origin and estado <> 'cerrado' order by updated_at desc,id desc limit 1 for update;
+    select * into v_conversation from public.crm_conversations where contact_id=v_contact and source_channel='whatsapp' and origin=v_origin and estado <> 'cerrado' order by updated_at desc,id desc limit 1 for update nowait;
   end if;
   if not found then
     insert into public.crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,subject,inbound_body,qualification_data,received_at,estado)

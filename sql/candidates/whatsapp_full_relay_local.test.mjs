@@ -67,6 +67,17 @@ try {
  const closed=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,qualification_data,received_at,estado) values($1,'whatsapp','closed-test','closed-attempt',$2,$3,'{}',now(),'cerrado') returning id",[contactId,common.phone,mixedOrigin])).rows[0].id;
  await assert.rejects(client.query("update crm_conversations set estado='nuevo' where id=$1",[closed]),/open WhatsApp conversation already exists/);
  await assert.rejects(client.query('update crm_conversations set origin=$1 where id=$2',[mixedOrigin,other.conversation.id]),/open WhatsApp conversation already exists/);
+ // The ingestion lock uses NOWAIT to avoid deadlocking an operator's update.
+ const deadlockOrigin='whatsapp:deadlock-test';
+ const deadlockId=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,qualification_data,received_at,estado) values($1,'whatsapp','deadlock-source','deadlock-attempt',$2,$3,'{}',now(),'cerrado') returning id",[contactId,common.phone,deadlockOrigin])).rows[0].id;
+ const second=pg.getPgClient();await second.connect();
+ try {
+   await client.query('begin');await second.query('begin');await client.query('select id from crm_contacts where id=$1 for update',[contactId]);
+   const reopen=second.query("update crm_conversations set estado='nuevo' where id=$1",[deadlockId]);
+   await new Promise(r=>setTimeout(r,150));
+   await assert.rejects(client.query('select id from crm_conversations where id=$1 for update nowait',[deadlockId]),error=>error.code==='55P03');
+   await client.query('rollback');await reopen;
+ } finally {await client.query('rollback');await second.query('rollback');await second.end();}
  // Actual old service observes no thread, then the new service creates one.
  // Old insert is rejected by the shared guard and its retry joins that thread.
  const legacyRepo=createSupabaseCrmRepository(supabase),originalFind=legacyRepo.findOpenConversation.bind(legacyRepo);
@@ -81,19 +92,18 @@ try {
  await client.query("insert into crm_channel_attempts(attempt_id,contact_id,channel) values($1,$2,'whatsapp')",[legacyAttempt,contactId]);
  const legacy=(await client.query("insert into crm_conversations(contact_id,source_channel,source_ref,attempt_id,identity_used,origin,inbound_body,qualification_data,received_at,estado) values($1,'whatsapp',$2,$3,$4,$5,'original legacy','{}',now(),'nuevo') returning id",[contactId,legacyId,legacyAttempt,common.phone,legacyOrigin])).rows[0].id;
  await client.query('begin');await client.query("update crm_conversations set estado='cerrado' where id=$1",[legacy]);
- const legacyArrival=crm.ingestInbound({...common,origin:legacyOrigin,sourceId:legacyId,body:'replacement'});
- await new Promise(r=>setTimeout(r,300));await client.query('commit');
- await assert.rejects(legacyArrival,/No se pudo asegurar el hilo entrante/);
+ const legacyArrival=assert.rejects(crm.ingestInbound({...common,origin:legacyOrigin,sourceId:legacyId,body:'replacement'}),/No se pudo asegurar el hilo entrante/);
+ await legacyArrival;await client.query('commit');
+ await assert.rejects(crm.ingestInbound({...common,origin:legacyOrigin,sourceId:legacyId,body:'replacement'}),/No se pudo asegurar el hilo entrante/);
  assert.equal((await client.query('select count(*)::int n from crm_inbound_events where source_ref=$1',[legacyId])).rows[0].n,0);
  // An operator closes the active thread while a new inbound is arriving.
  // The inbound must wait and create a new open thread after the close commits.
  await client.query('begin');
  await client.query("update crm_conversations set estado='cerrado' where id=$1",[concurrent[0].conversation.id]);
- let arrivalDone=false;
- const arrival=crm.ingestInbound({...common,sourceId:'wamid.after.close'}).then(value=>{arrivalDone=true;return value});
- await new Promise(r=>setTimeout(r,300));assert.equal(arrivalDone,false);
+ const arrival=assert.rejects(crm.ingestInbound({...common,sourceId:'wamid.after.close'}),/No se pudo asegurar el hilo entrante/);
+ await arrival;
  await client.query('commit');
- const afterClose=await arrival;assert.notEqual(afterClose.conversation.id,concurrent[0].conversation.id);
+ const afterClose=await crm.ingestInbound({...common,sourceId:'wamid.after.close'});assert.notEqual(afterClose.conversation.id,concurrent[0].conversation.id);
  assert.equal((await client.query("select c.estado from crm_inbound_events e join crm_conversations c on c.id=e.conversation_id where e.source_ref='wamid.after.close'")).rows[0].estado,'nuevo');
  const menu=createProductionMenuCandidate({enabled:true,env:{BACKEND_RUNTIME_MODE:'production'},crmService:crm,atomicMenuStore:createWhatsappMenuAtomicStore(supabase)});
  pool=new Pool({host:'127.0.0.1',port:pgPort,user:'postgres',password:'fixture-only',database:'postgres',max:8});
