@@ -1,6 +1,7 @@
 import { isWhatsappQaMenuEnabled } from './lib/whatsappQaMenuGate.js';
 import { createWhatsappLanguageMenu } from './lib/whatsappLanguageMenu.js';
 import { createWhatsappMenuAtomicStore } from './lib/whatsappMenuAtomic.js';
+import { createWhatsappContextRelay, createSupabaseContextOutbox } from './lib/whatsappContextRelay.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
 import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.js';
@@ -766,6 +767,9 @@ const crmService = createCrmService({ repository: createSupabaseCrmRepository(su
 const whatsappMenuAtomicStore = process.env.WHATSAPP_MENU_ATOMIC_QA_ENABLED === 'true'
   && process.env.BACKEND_RUNTIME_MODE === 'staging' && SUPABASE_SERVICE_ROLE_KEY
   ? createWhatsappMenuAtomicStore(supabaseAdmin) : null;
+// A dedicated QA-only gate; this does not enable general background sends.
+const whatsappContextRelay = process.env.WHATSAPP_CONTEXT_QA_RELAY_ENABLED === 'true'
+  ? createWhatsappContextRelay({ repository: createSupabaseContextOutbox(supabaseAdmin) }) : null;
 const crmFunnel = createCrmFunnel({
   crmService,
   atomicMenuStore: whatsappMenuAtomicStore,
@@ -2058,7 +2062,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
-  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay, whatsappMenuAtomicStore });
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay, whatsappMenuAtomicStore, whatsappContextRelay });
 
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
