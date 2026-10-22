@@ -32,8 +32,9 @@ try {
  await pg.initialise();await pg.start();dbStarted=true;client=pg.getPgClient();await client.connect();
  await client.query(`create role anon;create role authenticated;create role service_role bypassrls;create table public.organizaciones(id uuid primary key);create table public.sedes(id bigint primary key);`);
  for(const f of ['20260909173000_whatsapp_cloud_core.sql','20260915000000_crm_unified_inbox.sql','20260916000000_crm_inbound_content.sql','20260917000000_crm_operational_history_and_inbound_events.sql','20261021010000_whatsapp_media_reference.sql','migrations/20261022200000_crm_short_ticket_number.sql','20261022170000_crm_test_visibility.sql']) await client.query(await readFile('sql/'+f,'utf8'));
- await client.query(`alter table crm_conversations add column sede_id bigint,add column assigned_by uuid;create table crm_whatsapp_manual_attempts(conversation_id uuid);grant all on crm_whatsapp_manual_attempts to service_role;`);
+ await client.query(`alter table crm_conversations add column sede_id bigint,add column assigned_by uuid;create table crm_whatsapp_manual_attempts(conversation_id uuid,reply_id uuid,created_at timestamptz default now());grant all on crm_whatsapp_manual_attempts to service_role;`);
  await client.query(await readFile('sql/candidates/whatsapp_prod_menu_atomic_candidate.sql','utf8'));
+ await client.query(await readFile('sql/candidates/whatsapp_automation_resume_candidate.sql','utf8'));
  const tenant='11111111-1111-4111-8111-111111111111',channel='22222222-2222-4222-8222-222222222222',org='33333333-3333-4333-8333-333333333333';
  await client.query('insert into organizaciones values($1)',[org]);
  await client.query("insert into whatsapp_tenants(id,organization_id,display_name,status) values($1,$2,'Synthetic','active')",[tenant,org]);
@@ -147,5 +148,16 @@ try {
  assert.equal((await realRecovery.run()).examined,0);assert.equal((await realRecovery.run()).examined,0);assert.equal(sends,3);
  assert.equal((await client.query("select count(*)::int n from crm_inbound_events where source_ref='wamid.recovery.text'")).rows[0].n,1);
  assert.equal((await client.query("select count(*)::int n from crm_whatsapp_menu_events e join whatsapp_inbound_messages m on m.id=e.inbound_message_id where m.provider_message_id='wamid.recovery.fresh'")).rows[0].n,1);
+ const conversationId=(await client.query("select conversation_id from crm_inbound_events where source_ref='wamid.integration'")).rows[0].conversation_id;
+ const actor='44444444-4444-4444-8444-444444444444';
+ const manual=(await client.query("insert into crm_replies(conversation_id,body,status) values($1,'manual fixture','pending') returning id",[conversationId])).rows[0].id;
+ await client.query('insert into crm_whatsapp_manual_attempts(conversation_id,reply_id) values($1,$2)',[conversationId,manual]);
+ await assert.rejects(client.query('select crm_resume_whatsapp_automation($1,$2)',[conversationId,actor]),/unresolved delivery/);
+ await client.query("update crm_replies set status='sent' where id=$1",[manual]);
+ assert.equal((await client.query('select crm_resume_whatsapp_automation($1,$2) result',[conversationId,actor])).rows[0].result.resumed,true);
+ assert.equal((await client.query('select count(*)::int n from crm_whatsapp_automation_release_audit where conversation_id=$1',[conversationId])).rows[0].n,1);
+ const newer=(await client.query("insert into crm_replies(conversation_id,body,status) values($1,'new manual fixture','pending') returning id",[conversationId])).rows[0].id;
+ await client.query('insert into crm_whatsapp_manual_attempts(conversation_id,reply_id) values($1,$2)',[conversationId,newer]);
+ assert.equal((await client.query('select count(*)::int n from crm_whatsapp_automation_releases where conversation_id=$1',[conversationId])).rows[0].n,0);
  console.log('Integrated localhost relay + real Supabase repositories + PostgreSQL + simulated Meta: preserved original and no duplicate after relay timeout.');
 } finally {if(server)await new Promise(r=>server.close(r));if(pool)await pool.end();if(rest){rest.kill();await new Promise(r=>rest.once('exit',r))}if(client)await client.end();if(dbStarted)await pg.stop();await rm(dir,{recursive:true,force:true})}
