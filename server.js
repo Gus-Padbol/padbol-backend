@@ -3685,6 +3685,7 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
           estado: 'pendiente_pago_manual',
           payment_provider: 'manual',
           checkout_type: 'manual',
+          manual_payment: true,
           instrucciones: String(sedePayment.pago_manual_instrucciones || '').trim() || 'El pago se realiza en la sede.',
         });
       } catch (manualErr) {
