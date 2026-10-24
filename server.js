@@ -25,6 +25,9 @@ import { createCrmEmailSender } from './lib/crmEmailSender.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
 import { createCrmWhatsappManualSender } from './lib/crmWhatsappManualSender.js';
+import { initializeCommercialCases } from './lib/crmCommercialCasesBootstrap.js';
+import { initializeCommercialRollout } from './lib/crmCommercialTeamBootstrap.js';
+import { createCommercialSuperadminResolver } from './lib/crmCommercialTeamSuperadmin.js';
 import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.js';
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
@@ -805,6 +808,16 @@ registerCrmAdminRoutes(app, {
   fetchUserRoleRowForAuthUser,
 });
 registerWhatsappMediaAccessRoute(app, { crmAdminService, supabaseAdmin, authUserFromBearer, fetchUserRoleRow, fetchUserRoleRowForAuthUser });
+// The team workspace is inert until all rollout gates and its database migration are verified.
+initializeCommercialRollout({
+  app,
+  db: supabaseAdmin,
+  authUserFromBearer,
+  manualWhatsappSender: crmWhatsappManualSenderFactory?.({ supabaseAdmin }) || null,
+  emailSender: crmEmailSender,
+  resolveTrustedSuperadmin: createCommercialSuperadminResolver(supabaseAdmin),
+  legacyBootstrap: initializeCommercialCases,
+});
 
 const crmFunnel = createCrmFunnel({
   crmService,
