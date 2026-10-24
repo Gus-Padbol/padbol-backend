@@ -25,9 +25,12 @@ import { createCrmEmailSender } from './lib/crmEmailSender.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
 import { createCrmWhatsappManualSender } from './lib/crmWhatsappManualSender.js';
-import { initializeCommercialCases } from './lib/crmCommercialCasesBootstrap.js';
 import { initializeCommercialRollout } from './lib/crmCommercialTeamBootstrap.js';
 import { createCommercialSuperadminResolver } from './lib/crmCommercialTeamSuperadmin.js';
+
+// The previous production baseline had no commercial-cases bootstrap. Keep that
+// baseline inert until every rollout gate for the new team workspace is verified.
+const initializeCommercialCases = () => ({ enabled: false });
 import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.js';
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
