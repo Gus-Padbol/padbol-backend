@@ -3660,6 +3660,40 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
       return res.status(201).json(free);
     }
 
+    // Payment mode is owned by the venue. A manual/on-site venue must never create
+    // a Mercado Pago preference or redirect the player to an external checkout.
+    const { rows: sedePaymentRows } = await pgPool.query(
+      'SELECT metodo_pago, pago_manual_instrucciones FROM sedes WHERE id = $1 LIMIT 1',
+      [resolvedSedeId],
+    );
+    const sedePayment = sedePaymentRows[0] || {};
+    const metodoPago = String(sedePayment.metodo_pago || '').trim().toLowerCase();
+    const isManualPayment = ['manual', 'presencial', 'efectivo', 'pago_en_sede', 'pago en sede'].includes(metodoPago);
+    if (isManualPayment) {
+      try {
+        const pending = await ensureReservaPendienteParaMpPg(pgPool, req.body, {
+          authUser: user,
+          quote,
+          paymentProvider: 'manual',
+          initialEstado: 'pendiente_pago_manual',
+          initialPagoEstado: 'pendiente',
+          requirePaymentSchema: true,
+        });
+        await registerMembresiaUsoIncluidaIfNeeded({ quote, user, reservaId: pending.reserva_id, sedeId: resolvedSedeId });
+        return res.status(201).json({
+          reserva_id: pending.reserva_id,
+          estado: 'pendiente_pago_manual',
+          payment_provider: 'manual',
+          checkout_type: 'manual',
+          manual_payment: true,
+          instrucciones: String(sedePayment.pago_manual_instrucciones || '').trim() || 'El pago se realiza en la sede.',
+        });
+      } catch (manualErr) {
+        logCrearPreferenciaError('reserva_manual', manualErr, ctx);
+        return res.status(manualErr.status || 500).json({ error: manualErr.message || 'No se pudo registrar la reserva para pago en sede' });
+      }
+    }
+
     assertOutboundDeliveryEnabled(runtime);
     if (!RESERVA_RELEASE_TOKEN_SECRET) {
       return res.status(503).json({ error: 'Liberación segura de reservas no configurada' });
