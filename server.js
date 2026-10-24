@@ -6,6 +6,7 @@ import { projectVerifiedTournamentRankingTeams } from './lib/verifiedTournamentR
 import { mountTournamentParticipantsRoutes } from './routes/tournamentParticipants.js';
 import {mountTournamentPlanningRoutes, startPlannedTournament} from './routes/tournamentPlanning.js';
 import { canReadQaCatalogRow, pickPlayerSedeSummary } from './lib/qaCatalogVisibility.js';
+import { canReadPublicTournamentCatalogRow } from './lib/torneos/tournamentCatalogVisibility.js';
 import {createTournamentReadVisibility} from './lib/torneos/tournamentReadVisibility.js';
 import { mountQaManualTeamsRoutes } from './routes/qaManualTeams.js';
 import { rankingTournamentEligible } from './lib/torneos/rankingTournamentEligibility.js';
@@ -2193,7 +2194,10 @@ app.get('/api/torneos', async (req, res) => {
 
     if (error) throw error;
     const audience = await qaCatalogAudience(req);
-    res.json((data || []).filter(row => canReadQaCatalogRow(row, audience)).map(mapTorneoPublicRow));
+    res.json((data || [])
+      .filter(row => canReadQaCatalogRow(row, audience))
+      .filter(row => canReadPublicTournamentCatalogRow(row, audience))
+      .map(mapTorneoPublicRow));
   } catch (err) {
     sendHttpError(res, err);
   }
