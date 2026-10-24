@@ -44,7 +44,9 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin,ensureS
   const scoreboardId=active[0]?.id??null;
   const matchTeams=equipos.filter(e=>[Number(partido.equipo_a_id),Number(partido.equipo_b_id)].includes(Number(e.id)));
   let ready=matchTeams.length===2,requirements=[];try{await assertTournamentTeamsSportReady(db,{torneo,equipos:matchTeams});if(ready && torneo.modalidad_plantel==='selecciones')await assertNationalLineupsReady(db,partido);}catch(e){ready=false;requirements=[e.message];}
-  res.json({ok:true,partido,timezone:sede.timezone||'America/Argentina/Buenos_Aires',canchas:canchas.filter(c=>c.estado!=='inactiva'&&(c.deporte||'padbol')===(torneo.deporte||'padbol')),schedule,scoreboard_id:scoreboardId,equipos:matchTeams.map(e=>({id:e.id,nombre:e.nombre,jugadores:(e.jugadores||[]).map(p=>({nombre:p.nombre,apellido:p.apellido,participante_id:p.participante_id}))})),can_open:['en_curso','activo'].includes(torneo.estado)&&ready,requirements:ready?[]:requirements});
+  const tournamentStarted=['en_curso','activo'].includes(torneo.estado);
+  if(!tournamentStarted)requirements.unshift('El torneo debe estar iniciado antes de abrir un marcador.');
+  res.json({ok:true,partido,timezone:sede.timezone||'America/Argentina/Buenos_Aires',canchas:canchas.filter(c=>c.estado!=='inactiva'&&(c.deporte||'padbol')===(torneo.deporte||'padbol')),schedule,scoreboard_id:scoreboardId,equipos:matchTeams.map(e=>({id:e.id,nombre:e.nombre,jugadores:(e.jugadores||[]).map(p=>({nombre:p.nombre,apellido:p.apellido,participante_id:p.participante_id}))})),can_open:tournamentStarted&&ready,requirements});
  });
  route('put','/api/torneos/:id/partidos/:partidoId/programacion',async(req,res,{auth,torneo})=>{
   const b=req.body??{};if(!Number.isSafeInteger(Number(b.court_id))||Number(b.court_id)<=0||!Number.isSafeInteger(Number(b.duration_minutes))||Number(b.duration_minutes)<1||Number(b.duration_minutes)>720||typeof b.fecha_hora!=='string'||!/(Z|[+-]\d\d:\d\d)$/.test(b.fecha_hora)||!Number.isFinite(Date.parse(b.fecha_hora)))throw invalid('Completa fecha con zona horaria, cancha y duración válida.',400);

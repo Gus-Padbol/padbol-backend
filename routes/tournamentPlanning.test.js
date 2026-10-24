@@ -16,6 +16,7 @@ test('legacy group generator passes through; Nations never gets normal fixture w
  const nations=setup({event:{...torneo,plan_nations:{enabled:true}}});const res=response();await nations.routes['POST /api/torneos/:id/planificar-fixture']({params:{id:901},body:{}},res);assert.equal(res.statusCode,409);assert.equal(nations.calls.length,0);
 });
 test('marker is blocked until explicit start and teams are resolved',async()=>{const s=setup();const res=response();await s.routes['POST /api/torneos/:id/partidos/:partidoId/marcador']({params:{id:901,partidoId:5}},res);assert.equal(res.statusCode,409);assert.equal(s.calls.length,0);});
+test('operation reports the concrete reason when the tournament has not started',async()=>{const s=setup();const res=response();await s.routes['GET /api/torneos/:id/partidos/:partidoId/operacion']({params:{id:901,partidoId:5}},res);assert.equal(res.statusCode,200);assert.equal(res.body.can_open,false);assert.match(res.body.requirements.join(' '),/debe estar iniciado/i);});
 test('invalid schedule never reaches SQL and cannot claim saved state',async()=>{const s=setup();const res=response();await s.routes['PUT /api/torneos/:id/partidos/:partidoId/programacion']({params:{id:901,partidoId:5},body:{court_id:1,fecha_hora:'2026-11-20T11:00',duration_minutes:60}},res);assert.equal(res.statusCode,400);assert.equal(s.calls.length,0);});
 
 test('selection marker freezes only four declared players per side from an eight-player roster',async()=>{
