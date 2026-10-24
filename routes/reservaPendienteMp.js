@@ -233,6 +233,9 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
   const authUser = options.authUser ?? null;
   const quote = options.quote ?? null;
   const paymentProvider = options.paymentProvider ?? null;
+  const initialEstado = options.initialEstado ?? 'pendiente';
+  const initialPagoEstado = options.initialPagoEstado ?? 'pendiente';
+  const requirePaymentSchema = options.requirePaymentSchema === true;
   const authUserId = authUser?.id ? String(authUser.id) : null;
   const authEmail = authUser?.email ? String(authUser.email).trim().toLowerCase() : null;
 
@@ -343,7 +346,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
            $1, $2, $3, $4, $5, $6, $7, $8,
            $9, $10, $11, $12,
            $13, $14, $15, $16, $17::jsonb, $18,
-           'pendiente', 'pendiente', $19, $20, $21
+           $19, $20, $21, $22, $23
          )
          RETURNING id`
       : `INSERT INTO reservas (
@@ -355,7 +358,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
            $1, $2, $3, $4, $5, $6, $7, $8,
            $9, $10, $11, $12,
            $13, $14, $15, $16, $17::jsonb,
-           'pendiente', 'pendiente', $18, $19, $20
+           $18, $19, $20, $21, $22
          )
          RETURNING id`;
 
@@ -379,6 +382,8 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
         serverMoneda,
         quote?.pricing_snapshot ? JSON.stringify(quote.pricing_snapshot) : null,
         paymentProvider,
+        initialEstado,
+        initialPagoEstado,
         duracionMinutos,
         authUserId || input.user_id || null,
         creationOrigin,
@@ -401,6 +406,8 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
         serverPrecio ?? precio,
         serverMoneda,
         quote?.pricing_snapshot ? JSON.stringify(quote.pricing_snapshot) : null,
+        initialEstado,
+        initialPagoEstado,
         duracionMinutos,
         authUserId || input.user_id || null,
         creationOrigin,
@@ -412,7 +419,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
     if (isReservaSlotUniqueViolation(insertErr)) {
       throwReservaSlotConflictError();
     }
-    if (!/precio_esperado|pricing_snapshot|colum|column/i.test(String(insertErr.message || ''))) {
+    if (requirePaymentSchema || !/precio_esperado|pricing_snapshot|colum|column/i.test(String(insertErr.message || ''))) {
       throw insertErr;
     }
     try {
