@@ -2296,10 +2296,14 @@ app.put('/api/torneos/:id', async (req, res) => {
     const auth = await requireTorneoAdminByTorneoId(req, res, id);
     if (!auth) return;
 
-    const { nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin } = req.body;
+    const { nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin, cupos_maximos } = req.body;
+    const capacity = cupos_maximos === '' || cupos_maximos == null ? null : Number(cupos_maximos);
+    if (capacity != null && (!Number.isSafeInteger(capacity) || capacity < 2)) {
+      return res.status(400).json({ error: 'La capacidad debe ser un número entero de al menos dos parejas.' });
+    }
 
     const { patch, torneo: current } = await prepareTournamentUpdate(supabaseAdmin, id, {
-      nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin,
+      nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin, cupos_maximos: capacity,
     });
     const currentAccess=resolveTorneoAdminAccess(auth,current.sede_id);
     if(!currentAccess.allowed){sendTorneoAdminForbidden(res,auth,currentAccess.reason);return;}
