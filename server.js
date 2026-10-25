@@ -2315,7 +2315,7 @@ app.put('/api/torneos/:id', async (req, res) => {
     if (!auth) return;
 
     const { nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin, cupos_maximos } = req.body;
-    const capacity = cupos_maximos === '' || cupos_maximos == null ? null : Number(cupos_maximos);
+    const capacity = cupos_maximos === undefined ? undefined : cupos_maximos === '' || cupos_maximos == null ? null : Number(cupos_maximos);
     if (capacity != null && (!Number.isSafeInteger(capacity) || capacity < 2)) {
       return res.status(400).json({ error: 'La capacidad debe ser un número entero de al menos dos parejas.' });
     }
@@ -2339,6 +2339,7 @@ app.put('/api/torneos/:id', async (req, res) => {
     const { data, error } = await mutation.select();
     if (!error && !data?.length) return res.status(409).json({ code: 'TORNEO_CHANGED_RETRY', error: 'El torneo cambió. Actualiza antes de volver a guardar.' });
 
+    if (error?.message?.includes('TORNEO_STRUCTURE_FROZEN')) return res.status(409).json({error:'El formato y la capacidad no se pueden cambiar porque el torneo ya tiene fixture o resultados.'});
     if (error) throw error;
     res.json(data);
   } catch (err) {
