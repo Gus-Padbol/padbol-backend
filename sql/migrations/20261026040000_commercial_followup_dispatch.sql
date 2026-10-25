@@ -24,12 +24,13 @@ revoke all on public.crm_commercial_followup_dispatches,public.crm_commercial_fo
 grant select,insert,update on public.crm_commercial_followup_dispatches to service_role;
 grant select,insert on public.crm_commercial_followup_optouts to service_role;
 create function public.crm_commercial_followup_info(p_actor uuid,p_superadmin boolean,p_type text,p_case uuid) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
-declare cv uuid;recipient text;channel text;orig text;state text;review boolean;assigned uuid;super_now boolean;
+declare cv uuid;recipient text;channel text;orig text;state text;review boolean;assigned uuid;super_now boolean;legacy_state text;
 begin
  super_now:=p_superadmin and exists(select 1 from public.user_roles r join auth.users u on u.id=r.user_id and lower(u.email)=lower(r.email) where r.user_id=p_actor and r.role='super_admin' and u.email_confirmed_at is not null);
  begin cv:=public.crm_commercial_followup_case_member(p_actor,super_now,p_type,p_case);exception when others then return jsonb_build_object('eligible',false,'reason','case_unavailable');end;
- select c.source_channel,c.origin,case when c.source_channel='whatsapp' then c.identity_used else co.phone_normalized end,co.review_needed into channel,orig,recipient,review from public.crm_conversations c join public.crm_contacts co on co.id=c.contact_id where c.id=cv;
+ select c.source_channel,c.origin,case when c.source_channel='whatsapp' then c.identity_used else co.phone_normalized end,co.review_needed,c.estado into channel,orig,recipient,review,legacy_state from public.crm_conversations c join public.crm_contacts co on co.id=c.contact_id where c.id=cv;
  if p_type='whatsapp' then select progress_state,assigned_user_id into state,assigned from public.crm_commercial_cases where id=p_case and status='open';else select progress_state,assigned_user_id into state,assigned from public.crm_commercial_form_cases where conversation_id=p_case;end if;
+ if lower(coalesce(legacy_state,''))='cerrado' then return jsonb_build_object('eligible',false,'reason','conversation_closed');end if;
  if state is distinct from 'en_espera' then return jsonb_build_object('eligible',false,'reason','waiting_state_required');end if;
  if review is distinct from false or recipient is null or recipient!~'^[0-9]{8,15}$' or (p_type='whatsapp' and (channel<>'whatsapp' or orig<>'whatsapp:1376102838911694')) then return jsonb_build_object('eligible',false,'reason','recipient_not_verified');end if;
  if exists(select 1 from public.crm_commercial_followups where dispatch_enabled and status='active' and recipient_wa_id=recipient and (case_type<>p_type or case_id<>p_case)) then return jsonb_build_object('eligible',false,'reason','another_followup_active');end if;
@@ -69,7 +70,7 @@ begin
  -- Context checker intentionally sees unresolved attempts. Temporarily use a specialized direct guard here.
  begin cv:=public.crm_commercial_followup_case_member(f.started_by,f.started_superadmin and exists(select 1 from public.user_roles r join auth.users u on u.id=r.user_id and lower(r.email)=lower(u.email) where r.user_id=f.started_by and r.role='super_admin' and u.email_confirmed_at is not null),f.case_type,f.case_id);exception when others then cv:=null;end;
  if f.case_type='whatsapp' then select progress_state into state from public.crm_commercial_cases where id=f.case_id and status='open';else select progress_state into state from public.crm_commercial_form_cases where conversation_id=f.case_id;end if;
- select case when c.source_channel='whatsapp' then c.identity_used else co.phone_normalized end into recipient from public.crm_conversations c join public.crm_contacts co on co.id=c.contact_id where c.id=f.conversation_id and co.review_needed=false and (f.case_type='form' or (c.source_channel='whatsapp' and c.origin='whatsapp:1376102838911694'));
+ select case when c.source_channel='whatsapp' then c.identity_used else co.phone_normalized end into recipient from public.crm_conversations c join public.crm_contacts co on co.id=c.contact_id where c.id=f.conversation_id and co.review_needed=false and c.estado<>'cerrado' and (f.case_type='form' or (c.source_channel='whatsapp' and c.origin='whatsapp:1376102838911694'));
  if cv is null or state is distinct from 'en_espera' or recipient is distinct from f.recipient_wa_id or recipient is null or recipient!~'^[0-9]{8,15}$' or exists(select 1 from public.crm_commercial_followup_optouts where recipient_wa_id=recipient) or exists(select 1 from public.crm_commercial_team_calls where conversation_id=f.conversation_id and status='pending') or not exists(select 1 from public.crm_commercial_team_calls where conversation_id=f.conversation_id and status='completed') or exists(select 1 from public.crm_replies where conversation_id=f.conversation_id and status='pending') then
   update public.crm_commercial_followups set status='paused',dispatch_enabled=false,paused_at=p_now,paused_reason='context_changed' where id=f.id;return null;
  end if;
@@ -120,14 +121,25 @@ create function public.crm_commercial_followup_pause_state() returns trigger lan
 declare v_case uuid;v_type text;phone text;
 begin
  if tg_table_name='crm_commercial_cases' then v_case:=new.id;v_type:='whatsapp';else v_case:=new.conversation_id;v_type:='form';end if;
- if new.progress_state is distinct from old.progress_state then
+ if new.progress_state is distinct from old.progress_state or new.assigned_user_id is distinct from old.assigned_user_id then
   perform 1 from public.crm_conversations where id=new.conversation_id for update;
   select case when c.source_channel='whatsapp' then c.identity_used else co.phone_normalized end into phone from public.crm_conversations c join public.crm_contacts co on co.id=c.contact_id where c.id=new.conversation_id;
   if phone is not null then perform pg_advisory_xact_lock(hashtextextended('commercial_followup:'||phone,0));end if;
-  update public.crm_commercial_followups set status='paused',dispatch_enabled=false,paused_at=now(),paused_reason='state_changed' where ((case_type=v_type and case_id=v_case) or recipient_wa_id=phone) and status='active';end if;return new;
+  update public.crm_commercial_followups set status='paused',dispatch_enabled=false,paused_at=now(),paused_reason=case when new.assigned_user_id is distinct from old.assigned_user_id then 'advisor_changed' else 'state_changed' end where ((case_type=v_type and case_id=v_case) or recipient_wa_id=phone) and status='active';end if;return new;
 end$$;
-create trigger crm_commercial_followup_dispatch_pause_state after update of progress_state on public.crm_commercial_cases for each row execute function public.crm_commercial_followup_pause_state();
-create trigger crm_commercial_followup_dispatch_pause_form_state after update of progress_state on public.crm_commercial_form_cases for each row execute function public.crm_commercial_followup_pause_state();
+create trigger crm_commercial_followup_dispatch_pause_state after update of progress_state,assigned_user_id on public.crm_commercial_cases for each row execute function public.crm_commercial_followup_pause_state();
+create trigger crm_commercial_followup_dispatch_pause_form_state after update of progress_state,assigned_user_id on public.crm_commercial_form_cases for each row execute function public.crm_commercial_followup_pause_state();
+create function public.crm_commercial_followup_pause_conversation_state() returns trigger language plpgsql security definer set search_path=pg_catalog,public as $$
+declare phone text;
+begin
+ if new.estado is distinct from old.estado then
+  select case when new.source_channel='whatsapp' then new.identity_used else co.phone_normalized end into phone from public.crm_contacts co where co.id=new.contact_id;
+  if phone is not null then perform pg_advisory_xact_lock(hashtextextended('commercial_followup:'||phone,0));end if;
+  update public.crm_commercial_followups set status='paused',dispatch_enabled=false,paused_at=now(),paused_reason='conversation_state_changed' where (conversation_id=new.id or recipient_wa_id=phone)and status='active';
+ end if;return new;
+end$$;
+create trigger crm_commercial_followup_dispatch_pause_conversation_state after update of estado on public.crm_conversations for each row execute function public.crm_commercial_followup_pause_conversation_state();
+revoke all on function public.crm_commercial_followup_pause_conversation_state() from public,anon,authenticated;
 revoke all on function public.crm_commercial_followup_info(uuid,boolean,text,uuid),public.crm_commercial_followup_enable(uuid,boolean,text,uuid,text,text,text),public.crm_commercial_followup_check(uuid,integer,timestamptz,uuid),public.crm_commercial_followup_claim(uuid,integer,timestamptz,text,text,text,uuid),public.crm_commercial_followup_pause_event(),public.crm_commercial_followup_pause_state() from public,anon,authenticated;
 grant execute on function public.crm_commercial_followup_info(uuid,boolean,text,uuid),public.crm_commercial_followup_enable(uuid,boolean,text,uuid,text,text,text),public.crm_commercial_followup_check(uuid,integer,timestamptz,uuid),public.crm_commercial_followup_claim(uuid,integer,timestamptz,text,text,text,uuid) to service_role;
 notify pgrst,'reload schema';

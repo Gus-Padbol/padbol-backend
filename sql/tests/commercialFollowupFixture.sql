@@ -2,7 +2,7 @@ create role anon;create role authenticated;create role service_role;
 create schema auth;create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz);
 create table public.user_roles(user_id uuid,email text,role text);
 create table public.crm_contacts(id uuid primary key,phone_normalized text,review_needed boolean default false);
-create table public.crm_conversations(id uuid primary key,contact_id uuid,source_channel text,origin text,identity_used text);
+create table public.crm_conversations(id uuid primary key,contact_id uuid,source_channel text,origin text,identity_used text,estado text default 'nuevo');
 create table public.crm_commercial_cases(id uuid primary key,conversation_id uuid,assigned_user_id uuid,status text default 'open',progress_state text default 'en_espera');
 create table public.crm_commercial_form_cases(conversation_id uuid primary key,assigned_user_id uuid,progress_state text default 'en_espera');
 create table public.crm_commercial_team_calls(id uuid primary key default gen_random_uuid(),conversation_id uuid,status text);
@@ -14,6 +14,6 @@ create function public.crm_commercial_form_is_allowed(uuid)returns boolean langu
 insert into auth.users values('7225442b-defd-42c1-a5a2-b9c1c339fa69','sm@padbol.com',now());
 insert into user_roles values('7225442b-defd-42c1-a5a2-b9c1c339fa69','sm@padbol.com','admin_nacional');
 insert into crm_contacts values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','15550000001',false);
-insert into crm_conversations values('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','whatsapp','whatsapp:1376102838911694','15550000001');
+insert into crm_conversations values('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','whatsapp','whatsapp:1376102838911694','15550000001','nuevo');
 insert into crm_commercial_cases(id,conversation_id,assigned_user_id)values('cccccccc-cccc-4ccc-8ccc-cccccccccccc','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','7225442b-defd-42c1-a5a2-b9c1c339fa69');
 insert into crm_commercial_team_calls(conversation_id,status)values('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','completed');
