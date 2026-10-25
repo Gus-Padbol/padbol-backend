@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import 'dotenv/config';
+import WebSocket from 'ws';
 import { createClient } from '@supabase/supabase-js';
 import { createCrmService, createSupabaseCrmRepository } from '../lib/crmService.js';
 import { createCrmLeadAutoAnalyzer } from '../lib/crmLeadAutoAnalysis.js';
@@ -10,7 +11,7 @@ const allowedIds = args.filter(arg => arg.startsWith('--id=')).map(arg => arg.sl
 if (!allowedIds.length || allowedIds.length > 20 || allowedIds.some(id => !/^[0-9a-f-]{36}$/i.test(id))) {
   throw new Error('Provide 1–20 explicit conversation UUIDs as --id=UUID. Default is dry run; use --apply to recover.');
 }
-const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY, { auth: { persistSession: false } });
+const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY, { auth: { persistSession: false }, realtime: { transport: WebSocket } });
 const repository = createSupabaseCrmRepository(db);
 const analyzer = createCrmLeadAutoAnalyzer({ crmService: createCrmService({ repository }) });
 const { data, error } = await db.from('crm_conversations').select('*, contact:crm_contacts(nombre,email_normalized,phone_normalized)').in('id', allowedIds);
