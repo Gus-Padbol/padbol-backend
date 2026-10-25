@@ -23,6 +23,14 @@ export function validateWorkspaceInput(body,{create=false}={}){
  if(out.publishedAt&&(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(out.publishedAt)||new Date(out.publishedAt.slice(0,10)+'T00:00:00Z').toISOString().slice(0,10)!==out.publishedAt.slice(0,10)||!Number.isFinite(Date.parse(out.publishedAt))||!/(Z|[+-]\d{2}:\d{2})$/.test(out.publishedAt)))throw Error('INVALID');
  return out;
 }
+export async function enrichWorkspaceHistory(data,db){
+ const history=Array.isArray(data?.history)?data.history:[];
+ const ids=[...new Set(history.map(h=>h.actorId).filter(id=>/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id||'')))];
+ let roles=[];
+ if(ids.length)try{const r=await db.from('user_roles').select('user_id,nombre,role').in('user_id',ids);if(!r.error)roles=r.data||[];}catch{}
+ const byId=new Map(roles.map(r=>[r.user_id,r]));
+ return {...data,history:history.map(h=>{const r=byId.get(h.actorId),name=String(r?.nombre||'').trim();const safeName=name&&!name.includes('@')&&!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(name)?name.slice(0,120):null;return {...h,actorName:safeName||(r?.role==='super_admin'?'Dirección':r?.role==='editor_contenido'?'Editor de contenido':'Usuario registrado')};})};
+}
 export function createContentWorkspaceRouter(deps){
  const router=express.Router();
  router.use(async(req,res,next)=>{try{const auth=await requireContentEditorUser(req,res,deps);if(!auth)return;req.workspaceAuth=auth;next();}catch{res.status(503).json({error:'No se pudo comprobar el acceso'});}});
@@ -34,7 +42,8 @@ export function createContentWorkspaceRouter(deps){
    if(req.params.id&&!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(req.params.id))throw Error('INVALID');
    const {data,error}=await deps.supabaseAdmin.rpc('content_workspace_command',{p_actor:a.user.id,p_can_approve:a.role.rol==='super_admin',p_operation:op,p_id:req.params.id||null,p_version:req.body?.expectedVersion||null,p_patch:patch});
    if(error){const msg=String(error.message||'');if(msg.includes('VERSION_CONFLICT'))return res.status(409).json({error:'Otra persona actualizó esta pieza. Recarga antes de guardar.'});if(msg.includes('FORBIDDEN'))return res.status(403).json({error:'La aprobación corresponde a dirección.'});if(msg.includes('NOT_FOUND'))return res.status(404).json({error:'Pieza inexistente'});if(msg.includes('INVALID'))return res.status(400).json({error:'Completa los datos requeridos para este estado.'});throw error;}
-   res.status(create?201:200).json({...data,...(op==='read'?{publications:data.item?.publications||[]} : {}),...(op==='list'?{can_approve:a.role.rol==='super_admin'}:{})});
+   const result=op==='read'?await enrichWorkspaceHistory(data,deps.supabaseAdmin):data;
+   res.status(create?201:200).json({...result,...(op==='read'?{publications:data.item?.publications||[]} : {}),...(op==='list'?{can_approve:a.role.rol==='super_admin'}:{})});
   }catch(e){res.status(e.message==='INVALID'?400:503).json({error:e.message==='INVALID'?'Revisa los datos de la pieza.':'No se pudo guardar o cargar el contenido.'});}
  }
  router.get('/editors',async(req,res)=>{if(req.workspaceAuth.role.rol!=='super_admin')return res.status(403).json({error:'Sin permiso'});try{const {data,error}=await deps.supabaseAdmin.from('user_roles').select('user_id,email,nombre').eq('role','editor_contenido');if(error)throw error;res.json({editors:(data||[]).filter(x=>x.user_id).map(x=>({id:x.user_id,email:x.email,name:x.nombre||x.email}))});}catch{res.status(503).json({error:'No se pudieron cargar los editores'});}});

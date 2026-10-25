@@ -8,3 +8,15 @@ test('no delete route and explicit expected version',async()=>withApi('super_adm
 test('file signatures reject HTML masquerading as media and accept PDF',async()=>{const {validFileSignature}=await import('./contentWorkspace.js');assert.equal(validFileSignature({mimetype:'image/png',buffer:Buffer.from('<html>')}),false);assert.equal(validFileSignature({mimetype:'application/pdf',buffer:Buffer.from('%PDF-1.7 test')}),true);assert.equal(validFileSignature({mimetype:'image/svg+xml',buffer:Buffer.from('<svg/>')}),false);});
 
 test('audience persists bounded descriptive targeting without granting ad permissions',()=>{assert.deepEqual(validateWorkspaceInput({audience:' Clubes y familias ' }),{audience:'Clubes y familias'});assert.throws(()=>validateWorkspaceInput({audience:'x'.repeat(181)}));});
+
+test('history uses scoped names, role fallback, never email as display name',async()=>{
+ const {enrichWorkspaceHistory}=await import('./contentWorkspace.js');
+ const a='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',b='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',c='cccccccc-cccc-4ccc-8ccc-cccccccccccc';let selected,ids;
+ const db={from(table){assert.equal(table,'user_roles');return {select(fields){selected=fields;return {async in(key,values){assert.equal(key,'user_id');ids=values;return {data:[{user_id:a,nombre:'Gustavo',role:'super_admin'},{user_id:b,nombre:'mail@example.com',role:'editor_contenido'},{user_id:c,role:'super_admin'}]};}}}}}};
+ const result=await enrichWorkspaceHistory({history:[{actorId:a},{actorId:b},{actorId:c}]},db);assert.equal(selected,'user_id,nombre,role');assert.deepEqual(ids,[a,b,c]);assert.deepEqual(result.history.map(x=>x.actorName),['Gustavo','Editor de contenido','Dirección']);assert.equal(result.history[0].actorId,a);
+ const fallback=await enrichWorkspaceHistory({history:[{actorId:a}]},{from(){throw Error('unavailable');}});assert.equal(fallback.history[0].actorName,'Usuario registrado');
+});
+test('history role lookup runs only after successful authorized read',async()=>{
+ let lookups=0;const id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+ const app=express();app.use('/workspace',createContentWorkspaceRouter({getAuthenticatedUser:async()=>({user:{id}}),fetchUserRoleRowForAuthUser:async()=>({role:'editor_contenido'}),supabaseAdmin:{rpc:async()=>({error:{message:'NOT_FOUND'}}),from(){lookups++;throw Error('must not lookup');}}}));const server=app.listen(0);try{assert.equal((await fetch(`http://127.0.0.1:${server.address().port}/workspace/${id}`)).status,404);assert.equal(lookups,0);}finally{server.close();}
+});
