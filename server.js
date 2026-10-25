@@ -66,6 +66,7 @@ import cronLibrary from 'node-cron';
 import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
 import { createContentAdminRouter } from './routes/contentAdmin.js';
+import { createContentWorkspaceRouter } from './routes/contentWorkspace.js';
 import { createContentPublicRouter } from './routes/contentPublic.js';
 import { createMembresiasRouter, mountMembresiasSedeRoutes } from './routes/membresias.js';
 import {
@@ -3152,6 +3153,7 @@ mountJugadorInvitacionesEquipoRoute(app, { supabaseAdmin, getAuthenticatedUser }
 // ===== HUB (action card images — public GET /api/hub/imagenes) =====
 app.use('/api/hub', createHubRouter({ supabaseAdmin }));
 console.log('Hub router registered at /api/hub (GET /api/hub/imagenes)');
+app.use('/api/admin/content/workspace', createContentWorkspaceRouter({supabaseAdmin,getAuthenticatedUser,fetchUserRoleRowForAuthUser}));
 app.use('/api/admin/content', createContentAdminRouter({
   supabaseAdmin,
   getAuthenticatedUser,
