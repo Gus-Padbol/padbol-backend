@@ -56,3 +56,5 @@ test('operation refuses ambiguous or mismatched active markers',async()=>{
 test('operation fails closed when the marker list is truncated',async()=>{
  const s=setup({markers:[],markerCount:1});const res=response();await s.routes['GET /api/torneos/:id/partidos/:partidoId/operacion']({params:{id:901,partidoId:5}},res);assert.equal(res.statusCode,503);assert.deepEqual(s.calls,[]);
 });
+
+test('unresolved fixture teams explain blocked marker without allocating any court',async()=>{const s=setup({event:{...torneo,estado:'en_curso'},match:{id:5,torneo_id:901,equipo_a_id:null,equipo_b_id:null,estado:'pendiente'}});const res=response();await s.routes['GET /api/torneos/:id/partidos/:partidoId/operacion']({params:{id:901,partidoId:5}},res);assert.equal(res.statusCode,200);assert.equal(res.body.can_open,false);assert.ok(res.body.requirements.some(t=>/equipos|cruces anteriores/.test(t)));assert.equal(s.calls.length,0);});
