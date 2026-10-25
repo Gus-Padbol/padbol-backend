@@ -6,7 +6,7 @@ const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:50*1024*102
 import {requireContentEditorUser} from '../lib/authAccess.js';
 const states=new Set(['propuesto','preparando','revision','cambios','aprobado','publicado']);
 const kinds=new Set(['original','editable','textless','final']);
-const fields={title:180,brief:10000,campaign:120,topic:180,language:40,format:60,assetKind:20,assetUrl:2000,deliveryDate:10,publishedAt:40,channel:80,profile:180,publicationUrl:2000,status:20,reviewNote:3000,assignedUserId:36};
+const fields={title:180,brief:10000,campaign:120,topic:180,audience:180,language:40,format:60,assetKind:20,assetUrl:2000,deliveryDate:10,publishedAt:40,channel:80,profile:180,publicationUrl:2000,status:20,reviewNote:3000,assignedUserId:36};
 export function validFileSignature(file){const b=file?.buffer;if(!b||b.length<4)return false;const m=file.mimetype;if(m==='application/pdf')return b.subarray(0,5).toString()==='%PDF-';if(m==='image/jpeg')return b[0]===255&&b[1]===216&&b[2]===255;if(m==='image/png')return b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));if(m==='image/gif')return /^GIF8[79]a/.test(b.subarray(0,6).toString());if(m==='image/webp')return b.subarray(0,4).toString()==='RIFF'&&b.subarray(8,12).toString()==='WEBP';if(m==='video/webm')return b.subarray(0,4).equals(Buffer.from([26,69,223,163]));return ['video/mp4','video/quicktime'].includes(m)&&b.subarray(4,8).toString()==='ftyp';}
 export function validateWorkspaceInput(body,{create=false}={}){
  const out={};
