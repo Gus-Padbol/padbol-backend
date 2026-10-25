@@ -41,6 +41,7 @@ begin
  if length(v_email) not between 3 and 254 or v_email !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' or length(coalesce(p_name,''))>120 or length(coalesce(p_territory,''))>240 or length(coalesce(p_agreed_conditions,''))>2000 then raise exception 'advisor unavailable'; end if;
  perform pg_advisory_xact_lock(hashtextextended('commercial-advisor:'||v_email,0));
  select * into v_row from public.crm_commercial_advisor_requests where email=v_email and status in ('pending','pending_verification') for update;
+ if found and (v_row.name<>btrim(coalesce(p_name,'')) or v_row.territory<>btrim(coalesce(p_territory,'')) or v_row.agreed_conditions<>btrim(coalesce(p_agreed_conditions,''))) then raise exception 'request details conflict'; end if;
  if not found then
   insert into public.crm_commercial_advisor_requests(email,name,territory,agreed_conditions,requested_by) values(v_email,btrim(coalesce(p_name,'')),btrim(coalesce(p_territory,'')),btrim(coalesce(p_agreed_conditions,'')),p_actor) returning * into v_row;
   insert into public.crm_commercial_team_audit(actor_id,action,subject_id,details) values(p_actor,case when v_owner then 'advisor_owner_enrollment' else 'advisor_requested' end,v_row.id,jsonb_build_object('email',v_email,'name',v_row.name,'territory',v_row.territory,'agreedConditions',v_row.agreed_conditions));
