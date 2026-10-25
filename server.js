@@ -1237,6 +1237,7 @@ mountLicenseRequestRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
   crmService,
+  leadAnalyzer: crmLeadAnalyzer,
 });
 mountScoreboardRoutes(app, {
   supabaseAdmin,
