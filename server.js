@@ -3156,7 +3156,7 @@ mountJugadorInvitacionesEquipoRoute(app, { supabaseAdmin, getAuthenticatedUser }
 // ===== HUB (action card images — public GET /api/hub/imagenes) =====
 app.use('/api/hub', createHubRouter({ supabaseAdmin }));
 console.log('Hub router registered at /api/hub (GET /api/hub/imagenes)');
-app.use('/api/admin/content/workspace', createContentWorkspaceRouter({supabaseAdmin,getAuthenticatedUser,fetchUserRoleRowForAuthUser}));
+app.use('/api/admin/content/workspace', createContentWorkspaceRouter({supabaseAdmin,pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser}));
 app.use('/api/admin/content', createContentAdminRouter({
   supabaseAdmin,
   getAuthenticatedUser,
