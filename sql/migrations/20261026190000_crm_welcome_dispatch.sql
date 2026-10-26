@@ -19,7 +19,7 @@ returns jsonb language plpgsql security definer set search_path=public,pg_temp a
 declare c public.crm_conversations%rowtype; v jsonb; added uuid;
 begin
   select * into c from public.crm_conversations where id=p_conversation for update;
-  if not found or c.source_channel <> 'email' or c.test_hidden_at is not null or c.origin not like 'web_form:%' or coalesce(c.qualification_data->'routing'->>'workflow','commercial_lead') <> 'commercial_lead' then return jsonb_build_object('status','ineligible'); end if;
+  if not found or c.source_channel <> 'email' or c.test_hidden_at is not null or not public.crm_commercial_form_is_allowed(c.id) or coalesce(c.qualification_data->'routing'->>'workflow','commercial_lead') <> 'commercial_lead' then return jsonb_build_object('status','ineligible'); end if;
   v:=c.qualification_data->'whatsapp_contact_consent';
   if v->>'accepted' is distinct from 'true' or v->>'version' is distinct from 'contacto-whatsapp-consulta-v1'
      or v->>'purpose' is distinct from 'consultation_followup' or v->>'phone' is distinct from p_phone or v->>'version' is distinct from p_consent_version or coalesce(v->>'language','') not in ('es','en')
@@ -56,7 +56,7 @@ returns table(conversation_id uuid) language sql security definer set search_pat
  select c.id from public.crm_conversations c
  where p_since is not null and c.created_at >= p_since and c.test_hidden_at is null
  and c.source_channel='email'
- and c.origin like 'web_form:%'
+ and public.crm_commercial_form_is_allowed(c.id)
  and coalesce(c.qualification_data->'routing'->>'workflow','commercial_lead')='commercial_lead'
  and c.qualification_data->'whatsapp_contact_consent'->>'revokedAt' is null
  and c.qualification_data->'whatsapp_contact_consent'->>'accepted'='true'
@@ -91,7 +91,7 @@ begin
  select count(*),min(c.id::text)::uuid into match_count,lead_id
  from public.crm_conversations c join public.crm_welcome_dispatch_candidate d on d.conversation_id=c.id
  where d.consent_phone=p_phone and d.status='accepted' and d.revocation_requested_at is null
- and c.source_channel='email' and c.test_hidden_at is null and incoming.test_hidden_at is null and coalesce(c.estado,'')<>'cerrado'
+ and public.crm_commercial_form_is_allowed(c.id) and c.source_channel='email' and c.test_hidden_at is null and incoming.test_hidden_at is null and coalesce(c.estado,'')<>'cerrado'
  and c.qualification_data->'whatsapp_contact_consent'->>'accepted'='true'
  and c.qualification_data->'whatsapp_contact_consent'->>'phone'=p_phone;
  if match_count=0 then return jsonb_build_object('status','no_match');end if;
