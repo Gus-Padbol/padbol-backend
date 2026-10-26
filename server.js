@@ -1,3 +1,4 @@
+import { initializeCrmWelcome } from './lib/crmWelcomeRuntime.js';
 import { createWhatsappContextRepository, registerWhatsappContextRoute } from './lib/whatsappContextBinding.js';
 import { resolveWhatsappProductionMenuFlags } from './lib/whatsappProductionMenuFlagsCandidate.js';
 import { mountBookingCapabilities } from './routes/bookingCapabilities.js';
@@ -838,6 +839,8 @@ registerCrmInboundRoutes(app, {
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
   formInboundSecret: process.env.CRM_INBOUND_FORM_SECRET || '',
 });
+// Optional pro-active welcome: failure cannot interrupt CRM ingress.
+initializeCrmWelcome({db:supabaseAdmin,pool:pgPool,runtime}).catch(() => console.warn('[crm-welcome] startup unavailable'));
 const crmImapInboxSync = createCrmImapInboxSync({
   crmService,
   config: readCrmImapConfig(process.env),
