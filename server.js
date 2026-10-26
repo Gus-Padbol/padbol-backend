@@ -37,6 +37,7 @@ import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, asser
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
 import { createQaRelay, RELAY_PATH } from './lib/whatsappQaRelay.js';
 import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, registerWhatsappAdminRoutes } from './lib/whatsappAdmin.js';
+import {readCrmDeskOperators} from './lib/crmDeskScope.js';
 import { CRM_COMMERCIAL_OPERATORS, commercialSafeWhatsappPermissions } from './lib/crmCommercialScope.js';
 import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
 import { registerWhatsappMediaAccessRoute } from './lib/whatsappMediaAccess.js';
@@ -803,6 +804,7 @@ const crmAdminService = createCrmAdminService({
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
   commercialOperators: CRM_COMMERCIAL_OPERATORS,
   supportOperators: CRM_SUPPORT_OPERATORS,
+  deskOperators: readCrmDeskOperators(process.env),
   whatsappMenuReviewEnabled: resolveWhatsappProductionMenuFlags(process.env).reviewEnabled,
 });
 registerCrmAdminRoutes(app, {
