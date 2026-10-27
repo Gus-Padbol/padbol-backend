@@ -1,0 +1,11 @@
+# Chivi Cup: planificación y marcador
+
+El planificador normal admite los formatos ya existentes knockout4/8/16 sin libres y round_robin. No habilita por accidente nuevos tamaños ni inventa ganadores para libres. Los formatos legacy de grupos conservan su manejador y Nations conserva su circuito dedicado. La carga externa se ofrece para knockout: equipos confirmados, todos incluidos exactamente una vez, revisión y confirmación antes de guardar. Origen y actor quedan auditados. No se reemplazan fixtures existentes, aunque estén pendientes.
+
+`POST /api/torneos/:id/planificar-fixture` y alias legacy `/generar-partidos` conservan el estado abierto para los formatos normales compatibles. `POST /iniciar` es separado y verifica planteles deportivos, fixture pendiente y snapshot exacto de equipos bajo lock. El PUT legacy de estado también pasa por esa validación; las identidades invitadas con nombre/participante_id no necesitan cuenta para jugar. Depende del helper participants de la misma entrega.
+
+GET `/partidos/:partidoId/operacion` sólo administrativo devuelve requisitos, integrantes sin contactos, canchas de la sede y zona horaria. PUT `/programacion` valida duración/instante con offset, rango de fechas, cancha/deporte/estado, solapamientos de canchas/equipos, orden de rondas, reservas y clases existentes. Guarda UTC en partidos y conserva el número de cancha que usa el marcador. Las nuevas reservas y programación Nations tienen protección recíproca frente al horario normal. El marcador sigue el vínculo partido_torneo_id y usa las funciones existentes de resultado y progresión; no se crea un marcador independiente.
+
+El informe original y las cuatro páginas se leyeron completos. Torneo41 y39 no se alteraron ni reiniciaron. Todas las pruebas SQL de esta implementación se ejecutaron en PostgreSQL16 LOCAL, DB planning_qa16, con rollback/datos sintéticos. No se aplicó migración ni desplegó. Requiere revisión independiente y ensayo HTTP publicado en un torneo QA temporal antes de entregar.
+
+Pruebas dirigidas:10BE,15FE(incluye10regresionesresultado/selecciones), SQLfuncional real y dos carreras: plan/plan rechaza segundo sin duplicados; roster/start rechaza snapshot obsoleto después de esperar el lock. El coordinador ejecutará suite/build/preflight integrados cuando el módulo de participantes esté congelado.

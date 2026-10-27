@@ -30,4 +30,3 @@ test('normalizes continents and creates continental positions', () => {
   assert.equal(america[0].posicion_mundial, 2);
   assert.equal(filterOfficialFipaRanking(players, 'unknown'), null);
 });
-

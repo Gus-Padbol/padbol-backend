@@ -1,4 +1,5 @@
-import { requireSuperAdminUser } from '../lib/authAccess.js';
+import { buildCrmEmailCapability } from '../lib/crmEmailSender.js';
+import { requireAdminUser, requireSuperAdminUser } from '../lib/authAccess.js';
 
 const truthy = (value) => String(value || '').trim().toLowerCase() === 'true';
 const present = (value) => String(value || '').trim().length > 0;
@@ -13,19 +14,9 @@ export function buildCrmChannelStatus(env = {}) {
     || present(env.WHATSAPP_META_TOKEN_TEST);
   if (!whatsappTokenReady) whatsappMissing.push('WHATSAPP_META_ACCESS_TOKEN');
 
-  const emailProvider = present(env.CRM_OUTBOUND_EMAIL_PROVIDER)
-    ? String(env.CRM_OUTBOUND_EMAIL_PROVIDER).trim().toLowerCase()
-    : null;
-  const emailMissing = [];
-  if (!emailProvider) emailMissing.push('CRM_OUTBOUND_EMAIL_PROVIDER');
-  if (!present(env.CRM_OUTBOUND_EMAIL_FROM)) emailMissing.push('CRM_OUTBOUND_EMAIL_FROM');
-  if (!present(env.CRM_OUTBOUND_EMAIL_API_KEY) && !present(env.SMTP_URL)) {
-    emailMissing.push('CRM_OUTBOUND_EMAIL_API_KEY_OR_SMTP_URL');
-  }
-
+  const emailCapability = buildCrmEmailCapability(env);
   const deliveryEnabled = truthy(env.OUTBOUND_DELIVERY_ENABLED);
   const whatsappConfigured = whatsappMissing.length === 0;
-  const emailConfigured = emailMissing.length === 0;
   return {
     outbound_delivery_enabled: deliveryEnabled,
     whatsapp: {
@@ -34,12 +25,9 @@ export function buildCrmChannelStatus(env = {}) {
       missing: whatsappMissing,
     },
     email: {
-      configured: emailConfigured,
-      enabled: deliveryEnabled && truthy(env.CRM_OUTBOUND_EMAIL_ENABLED) && emailConfigured,
-      provider: emailProvider,
-      missing: emailMissing,
+      ...emailCapability,
     },
-    human_action_required: !deliveryEnabled || !whatsappConfigured || !emailConfigured,
+    human_action_required: !deliveryEnabled || !whatsappConfigured || !emailCapability.configured,
   };
 }
 
@@ -57,6 +45,64 @@ export function mountAdminValidationAndChannelsRoutes(app, {
   env = process.env,
 }) {
   const authDeps = { getAuthenticatedUser, fetchUserRoleRowForAuthUser, legacySuperAdminEmails };
+
+  app.get('/api/admin/validaciones', async (req, res) => {
+    try {
+      const auth = await requireAdminUser(req, res, authDeps);
+      if (!auth) return;
+      const rows = [];
+      let lastId = null;
+      while (true) {
+        let query = supabaseAdmin.from('jugadores_perfil')
+          .select('id, email, nombre, apellido, alias, user_id, pais, nivel, genero, categoria_validada')
+          .eq('pendiente_validacion', true);
+        if (auth.role.rol === 'admin_club') query = query.eq('sede_id', auth.role.sede_id);
+        if (lastId !== null) query = query.gt('id', lastId);
+        const { data, error } = await query.order('id', { ascending: true }).limit(100);
+        if (error) throw error;
+        if (!Array.isArray(data)) throw new Error('Respuesta inválida de validaciones');
+        if (!data.length) break;
+        if (rows.length + data.length > 10000) return res.status(503).json({ error: 'Demasiadas validaciones; requiere paginación' });
+        for (const row of data) {
+          const raw = row.id;
+          if ((typeof raw === 'number' && !Number.isSafeInteger(raw)) || !/^-?\d+$/.test(String(raw))) throw new Error('Identidad de perfil imprecisa');
+          const id = BigInt(raw);
+          if (lastId !== null && id <= BigInt(lastId)) throw new Error('Orden inválido de validaciones');
+          lastId = id.toString();
+        }
+        rows.push(...data);
+      }
+      return res.json({ validaciones: rows });
+    } catch (error) {
+      console.error('❌ GET /api/admin/validaciones:', error.message);
+      return res.status(500).json({ error: 'No se pudieron cargar las validaciones' });
+    }
+  });
+
+  app.patch('/api/admin/validaciones/perfil/:id', async (req, res) => {
+    try {
+      const auth = await requireAdminUser(req, res, authDeps);
+      if (!auth) return;
+      const id = String(req.params.id || '');
+      if (!/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n) return res.status(400).json({ error: 'Perfil inválido' });
+      const { accion, nivel, motivo } = req.body || {};
+      if (!['aprobar', 'rechazar', 'categoria'].includes(accion)) return res.status(400).json({ error: 'Acción inválida' });
+      if (accion === 'rechazar' && auth.role.rol !== 'super_admin') return res.status(403).json({ error: 'Solo un superadministrador puede rechazar validaciones' });
+      if (accion === 'rechazar' && !cleanReason(motivo)) return res.status(400).json({ error: 'Motivo inválido' });
+      if (accion === 'categoria' && !['Principiante','6ta','5ta','4ta','3ra','2da','1ra','Elite'].includes(nivel)) return res.status(400).json({ error: 'Categoría inválida' });
+      const changes = { pendiente_validacion: false, ...(accion === 'categoria' ? { nivel } : {}) };
+      let query = supabaseAdmin.from('jugadores_perfil').update(changes)
+        .eq('id', id).eq('pendiente_validacion', true);
+      if (auth.role.rol === 'admin_club') query = query.eq('sede_id', auth.role.sede_id);
+      const { data, error } = await query.select('id').maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(409).json({ error: 'La solicitud ya cambió o no existe. Actualizá la lista.' });
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error('❌ PATCH /api/admin/validaciones/perfil:', error.message);
+      return res.status(500).json({ error: 'No se pudo confirmar el cambio de validación' });
+    }
+  });
 
   app.patch('/api/admin/validaciones/:userId/rechazar', async (req, res) => {
     try {

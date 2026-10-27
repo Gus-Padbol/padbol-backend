@@ -22,6 +22,7 @@ export const SCOREBOARD_TORNEO_SYNC_SELECT = [
   'estado',
   'sets_a',
   'sets_b',
+  'historial_sets',
   'sync_torneo_status',
   'synced_to_torneo_at',
 ].join(', ');
@@ -40,10 +41,16 @@ export function isScoreboardTerminatedForSync(estado) {
 }
 
 export function buildPartidoTorneoResultadoFromScoreboard(scoreboard) {
-  return {
+  const resultado = {
     goles_a: Number(scoreboard?.sets_a) || 0,
     goles_b: Number(scoreboard?.sets_b) || 0,
   };
+  // Preserve actual games: Nations validates these before recording the result.
+  // Legacy scoreboards without history keep their previous set-only payload.
+  if (scoreboard?.historial_sets != null) {
+    resultado.historial_sets = scoreboard.historial_sets;
+  }
+  return resultado;
 }
 
 export function isAlreadySyncedMatch(scoreboard, partido, resultadoNuevo, ganadorEquipoId) {

@@ -1,0 +1,152 @@
+// Real PostgreSQL, independent sessions and entirely synthetic isolated data.
+import { pathToFileURL } from 'node:url';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:net';
+import assert from 'node:assert/strict';
+if (!process.env.PADBOL_EMBEDDED_POSTGRES_MODULE) throw Error('Set PADBOL_EMBEDDED_POSTGRES_MODULE.');
+const { default: EmbeddedPostgres } = await import(pathToFileURL(process.env.PADBOL_EMBEDDED_POSTGRES_MODULE));
+const socket=createServer();await new Promise((resolve,reject)=>socket.once('error',reject).listen(0,'127.0.0.1',resolve));
+const port=socket.address().port;await new Promise(resolve=>socket.close(resolve));
+const dir=await mkdtemp(join(tmpdir(),'padbol-menu-pg-'));
+const server=new EmbeddedPostgres({databaseDir:join(dir,'data'),user:'postgres',password:'fixture-only',port,persistent:true,postgresFlags:['-h','127.0.0.1'],onLog:()=>{},onError:()=>{}});
+let started=false;const clients=[];
+try {
+ await server.initialise();await server.start();started=true;
+ for(let i=0;i<3;i++){const c=server.getPgClient();await c.connect();clients.push(c);}
+ const [setup,a,b]=clients;
+ await setup.query(`create role anon; create role authenticated; create role service_role;
+ create table whatsapp_tenant_channels(id uuid primary key,tenant_id uuid,meta_phone_number_id text,meta_waba_id text,active boolean not null default true);
+ create table whatsapp_inbound_messages(id uuid primary key,tenant_id uuid,channel_id uuid,provider_message_id text,from_wa_id text,received_at timestamptz,created_at timestamptz default now(),message_type text not null default 'text',text_body text default 'test',meta_media_type text);
+ create table crm_contacts(id uuid primary key);
+ create table crm_conversations(id uuid primary key,contact_id uuid,origin text,source_channel text,updated_at timestamptz,funnel_state text,selected_path text,qualification_data jsonb,qualification_question_count int,qualification_status text,next_prompt text,prompt_options jsonb,next_step text,handoff_ready boolean,estado text default 'nuevo',operador text,derivado boolean default false,sede_id uuid,assigned_by uuid,test_visibility_version bigint not null default 0,ticket_number bigint default 100087,
+ check(source_channel in ('whatsapp','email')), check(estado in ('nuevo','en_atencion','derivado','cerrado')),
+ check(length(trim(funnel_state)) between 1 and 120),check(selected_path is null or length(trim(selected_path)) between 1 and 120),
+ check(jsonb_typeof(qualification_data)='object'), check(jsonb_typeof(prompt_options)='array'),
+ check(qualification_question_count between 0 and 3 or (selected_path='national' and qualification_question_count=4)),
+ check(qualification_status in ('pending','in_progress','qualified','disqualified','needs_review')),
+ check(not handoff_ready or qualification_status='qualified'),
+ check(next_prompt is null or length(trim(next_prompt)) between 1 and 2000),check(next_step is null or length(trim(next_step)) between 1 and 2000));
+ create function increment_fixture_version() returns trigger language plpgsql as $$begin new.test_visibility_version := old.test_visibility_version+1; return new; end$$;
+ create trigger fixture_revision before update on crm_conversations for each row execute function increment_fixture_version();
+ create table crm_whatsapp_manual_attempts(conversation_id uuid);
+ create table crm_inbound_events(id uuid primary key default gen_random_uuid(),conversation_id uuid,source_channel text,source_ref text,origin text);
+ create table crm_replies(id uuid primary key default gen_random_uuid(),conversation_id uuid,body text,operador text,status text,check(length(trim(body)) between 1 and 4096),check(status in ('pending','sent','cancelled')));
+ create table whatsapp_outbox(id uuid primary key default gen_random_uuid(),tenant_id uuid,channel_id uuid,inbound_message_id uuid,idempotency_key text unique,to_wa_id text,reply_to_provider_message_id text,message_type text,text_body text,status text,customer_service_window_expires_at timestamptz,provider_message_id text,sent_at timestamptz,last_error text,updated_at timestamptz,check(status in ('pending','sending','sent','expired','cancelled')),check(message_type='text'),check(length(text_body) between 1 and 4096),check(to_wa_id ~ '^[0-9]{6,20}$'));`);
+ await setup.query(await readFile('sql/candidates/whatsapp_prod_menu_atomic_candidate.sql','utf8'));
+ const [tenant,channel,inbound,conv,inbound2]=['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444','55555555-5555-4555-8555-555555555555'];
+ await setup.query('insert into whatsapp_tenant_channels(id,tenant_id,meta_phone_number_id) values($1,$2,$3)',[channel,tenant,'123456789']);
+ await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values($1,$2,$3,$4,$5,now()-interval '5 seconds'),($6,$2,$3,$7,$5,now()-interval '4 seconds')",[inbound,tenant,channel,'wamid.first','15551234567',inbound2,'wamid.second']);
+ await setup.query("insert into crm_conversations(id,source_channel,updated_at) values($1,'whatsapp','2026-10-21T12:00:00Z')",[conv]);
+ await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.first','whatsapp:123456789'),($1,'whatsapp','wamid.second','whatsapp:123456789')",[conv]);
+ const state={funnel_state:'whatsapp_menu_topic',qualification_data:{whatsapp_menu:{stage:'topic'}},qualification_status:'pending',prompt_options:[],next_prompt:'Elige'};
+ const sql='select crm_commit_whatsapp_menu_transition($1,$2,$3,$4,$5,$6) as result';
+ const args=[inbound,conv,0,JSON.stringify(state),'Bienvenido','a'.repeat(64)];
+ await a.query('begin');const first=(await a.query(sql,args)).rows[0].result;assert.equal(first.created,true);
+ let settled=false;const pending=b.query(sql,args).then(r=>{settled=true;return r});
+ await new Promise(resolve=>setTimeout(resolve,150));assert.equal(settled,false,'replay must wait for row lock');
+ await a.query('commit');const replay=(await pending).rows[0].result;assert.equal(replay.created,false);assert.equal(replay.outbox_id,first.outbox_id);
+ for(const table of ['crm_replies','whatsapp_outbox','crm_whatsapp_menu_events'])assert.equal((await setup.query(`select count(*)::int n from ${table}`)).rows[0].n,1);
+ await assert.rejects(b.query(sql,[inbound2,conv,0,JSON.stringify(state),'Otro','b'.repeat(64)]),e=>e.code==='40001');
+ const revision=(await setup.query('select test_visibility_version from crm_conversations where id=$1',[conv])).rows[0].test_visibility_version;
+ await assert.rejects(b.query(sql,[inbound2,conv,revision,JSON.stringify({...state,funnel_state:'modified'}),'Otro','a'.repeat(64)]));
+ assert.equal((await setup.query('select funnel_state from crm_conversations where id=$1',[conv])).rows[0].funnel_state,'whatsapp_menu_topic');
+ assert.equal((await setup.query('select count(*)::int n from crm_replies')).rows[0].n,1);
+ await setup.query("update whatsapp_outbox set status='sending' where id=$1",[first.outbox_id]);
+ assert.equal((await setup.query('select crm_whatsapp_menu_needs_review($1) v',[conv])).rows[0].v,true);
+ assert.equal((await setup.query('select * from crm_whatsapp_menu_review_batch($1::uuid[])',[[conv]])).rows[0].conversation_id,conv);
+ await assert.rejects(setup.query('insert into crm_whatsapp_manual_attempts(conversation_id) values($1)',[conv]),/unresolved menu delivery/);
+ await assert.rejects(setup.query(sql,[inbound2,conv,revision,JSON.stringify(state),'Otro','e'.repeat(64)]),/unresolved menu delivery/);
+ await setup.query('select crm_confirm_whatsapp_menu_sent($1,$2,$3,now())',[first.outbox_id,tenant,'wamid.sent']);
+ assert.equal((await setup.query('select status from crm_replies where id=$1',[first.reply_id])).rows[0].status,'sent');
+ assert.equal((await setup.query('select crm_whatsapp_menu_needs_review($1) v',[conv])).rows[0].v,false);
+ await setup.query('insert into crm_whatsapp_manual_attempts(conversation_id) values($1)',[conv]);
+ const conv2='66666666-6666-4666-8666-666666666666', older='77777777-7777-4777-8777-777777777777', newer='88888888-8888-4888-8888-888888888888';
+ await setup.query("insert into crm_conversations(id,source_channel,updated_at) values($1,'whatsapp','2026-10-21T12:00:00Z')",[conv2]);
+ await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values($1,$3,$4,'wamid.older','15551234567',now()-interval '2 minutes'),($2,$3,$4,'wamid.newer','15551234567',now()-interval '1 minute')",[older,newer,tenant,channel]);
+ await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.older','whatsapp:123456789'),($1,'whatsapp','wamid.newer','whatsapp:123456789')",[conv2]);
+ const olderArgs=[older,conv2,0,JSON.stringify({...state,funnel_state:'wrong_old'}),'Old','c'.repeat(64)];
+ const newerArgs=[newer,conv2,0,JSON.stringify({...state,funnel_state:'new_state'}),'New','d'.repeat(64)];
+ await a.query('begin');await a.query(sql,newerArgs);
+ let oldSettled=false;const oldPending=b.query(sql,olderArgs).then(r=>{oldSettled=true;return r});
+ await new Promise(resolve=>setTimeout(resolve,150));assert.equal(oldSettled,false,'older event waits on row lock');
+ await a.query('commit');const stale=(await oldPending).rows[0].result;
+ assert.equal(stale.stale,true);assert.equal(stale.outbox_id,null);
+ assert.equal((await setup.query('select funnel_state from crm_conversations where id=$1',[conv2])).rows[0].funnel_state,'new_state');
+ assert.equal((await setup.query("select qualification_data #>> '{whatsapp_message_order_review,reason}' reason from crm_conversations where id=$1",[conv2])).rows[0].reason,'ambiguous_message_order');
+ assert.equal((await setup.query('select count(*)::int n from crm_replies where conversation_id=$1',[conv2])).rows[0].n,1);
+ const equalConv='12345678-1234-4234-8234-123456789abc',equal1='12345678-1234-4234-8234-123456789abd',equal2='12345678-1234-4234-8234-123456789abe';
+ await setup.query("insert into crm_conversations(id,source_channel,qualification_data) values($1,'whatsapp','{\"other\":true}'::jsonb)",[equalConv]);
+ await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values($1,$3,$4,'wamid.equal1','15551234567',now()-interval '1 minute'),($2,$3,$4,'wamid.equal2','15551234567',now()-interval '1 minute')",[equal1,equal2,tenant,channel]);
+ await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.equal1','whatsapp:123456789'),($1,'whatsapp','wamid.equal2','whatsapp:123456789')",[equalConv]);
+ await setup.query(sql,[equal1,equalConv,0,JSON.stringify({...state,qualification_data:{other:true}}),'Hello','1'.repeat(64)]);
+ const same=(await setup.query(sql,[equal2,equalConv,1,JSON.stringify(state),'Wrong','2'.repeat(64)])).rows[0].result;
+ assert.equal(same.stale,true);assert.equal(same.outbox_id,null);
+ const eqData=(await setup.query('select qualification_data from crm_conversations where id=$1',[equalConv])).rows[0].qualification_data;
+ assert.equal(eqData.other,true);assert.equal(eqData.whatsapp_message_order_review.required,true);
+
+ // Human assignment and audio reject before mutating a conversation or queuing.
+ const guardedConv='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',guardedId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+ await setup.query("insert into crm_conversations(id,source_channel,updated_at,operador) values($1,'whatsapp','2026-10-21T12:00:00Z','human@example.test')",[guardedConv]);
+ await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values($1,$2,$3,'wamid.guarded','15551234567',now())",[guardedId,tenant,channel]);
+ await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp','wamid.guarded','whatsapp:123456789')",[guardedConv]);
+ const guardedArgs=[guardedId,guardedConv,0,JSON.stringify(state),'Hola','f'.repeat(64)];
+ await assert.rejects(setup.query(sql,guardedArgs),/not eligible/);
+ await setup.query("update crm_conversations set operador=null where id=$1",[guardedConv]);
+ await setup.query("update whatsapp_inbound_messages set meta_media_type='audio' where id=$1",[guardedId]);
+ await assert.rejects(setup.query(sql,guardedArgs),/not eligible/);
+ await setup.query("update whatsapp_inbound_messages set meta_media_type='image' where id=$1",[guardedId]);
+ await assert.rejects(setup.query(sql,guardedArgs),/not eligible/);
+ await setup.query("update whatsapp_inbound_messages set meta_media_type=null where id=$1",[guardedId]);
+ await setup.query("update whatsapp_tenant_channels set active=false where id=$1",[channel]);
+ await assert.rejects(setup.query(sql,guardedArgs),/not eligible/);
+ await setup.query("update whatsapp_tenant_channels set active=true where id=$1",[channel]);
+ assert.equal((await setup.query('select count(*)::int n from crm_replies where conversation_id=$1',[guardedConv])).rows[0].n,0);
+ // An explicitly audited review of an uncertain send never re-sends it.
+ const ver=(await setup.query('select test_visibility_version from crm_conversations where id=$1',[guardedConv])).rows[0].test_visibility_version;
+ const reviewEvent=(await setup.query(sql,[guardedId,guardedConv,ver,JSON.stringify(state),'Review case','f'.repeat(64)])).rows[0].result;
+ await setup.query("update whatsapp_outbox set status='sending' where id=$1",[reviewEvent.outbox_id]);
+ await assert.rejects(setup.query('select crm_reconcile_whatsapp_menu($1,$2,$3,$4,$5)',[guardedConv,tenant,'delivered','bad',null]),/invalid review/);
+ assert.equal((await setup.query('select crm_whatsapp_menu_needs_review($1) v',[guardedConv])).rows[0].v,true);
+ await setup.query('select crm_reconcile_whatsapp_menu($1,$2,$3,$4,$5)',[guardedConv,tenant,'delivered','a'.repeat(64),'wamid.confirmed']);
+ assert.equal((await setup.query('select status from crm_replies where id=$1',[reviewEvent.reply_id])).rows[0].status,'sent');
+ assert.equal((await setup.query('select crm_whatsapp_menu_needs_review($1) v',[guardedConv])).rows[0].v,false);
+ assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_reconciliation')).rows[0].n,1);
+ await assert.rejects(setup.query('select crm_reconcile_whatsapp_menu($1,$2,$3,$4,$5)',[guardedConv,tenant,'delivered','a'.repeat(64),'wamid.confirmed']),/exactly one/);
+ // Drive the production Spanish menu through every published branch against
+ // actual candidate SQL and production-equivalent CHECK constraints.
+ const {createProductionMenuCandidate}=await import('../../lib/whatsappProductionMenuCandidate.js');
+ const {createHash}=await import('node:crypto');
+ let caseNumber=0;
+ for(const [topic,count] of [[1,4],[2,4],[3,3],[4,3],[5,3],[6,0],[7,0]]) for(let sub=1;sub<=Math.max(count,1);sub++){
+   caseNumber++;
+   const id=(await setup.query("insert into crm_conversations(id,source_channel,estado,qualification_data,qualification_status,funnel_state,prompt_options,qualification_question_count,handoff_ready,updated_at) values(gen_random_uuid(),'whatsapp','nuevo','{}','pending','awaiting_path','[]',0,false,clock_timestamp()) returning id")).rows[0].id;
+   const crmService={async ingestInbound(){return{status:'accepted',conversation:(await setup.query('select * from crm_conversations where id=$1',[id])).rows[0]}}};
+   const store={async findByInbound(i){return (await setup.query('select * from crm_whatsapp_menu_events where inbound_message_id=$1',[i])).rows[0]||null},async commit(x){return (await setup.query(sql,[x.inboundId,x.conversationId,x.expectedVersion,JSON.stringify(x.state),x.response,x.idempotencyKey])).rows[0].result}};
+   const menu=createProductionMenuCandidate({enabled:true,env:{BACKEND_RUNTIME_MODE:'production'},crmService,atomicMenuStore:store});
+   const steps=['Hola',String(topic),...(count?[String(sub)]:[]),'Necesito información en Argentina'];
+   for(let n=0;n<steps.length;n++){
+     const provider=`wamid.branch.${caseNumber}.${n}`;
+     const input=(await setup.query("insert into whatsapp_inbound_messages(id,tenant_id,channel_id,provider_message_id,from_wa_id,received_at) values(gen_random_uuid(),$1,$2,$3,'15551234567',clock_timestamp()) returning id,received_at",[tenant,channel,provider])).rows[0];
+     await setup.query("insert into crm_inbound_events(conversation_id,source_channel,source_ref,origin) values($1,'whatsapp',$2,'whatsapp:123456789')",[id,provider]);
+     const result=await menu.ingestWhatsapp({providerMessageId:provider,phoneNumberId:'123456789',fromWaId:'15551234567',body:steps[n],receivedAt:input.received_at,menuDelivery:{inboundId:input.id,idempotencyKey:createHash('sha256').update(provider).digest('hex')}});
+     assert.ok(result.outboxId,`missing reply in branch ${topic}/${sub} step ${n}`);
+   }
+   const finished=(await setup.query('select qualification_status,next_step,qualification_data from crm_conversations where id=$1',[id])).rows[0];
+   assert.equal(finished.next_step,'advisor_handoff',`branch ${topic}/${sub} must reach handoff`);
+ }
+ assert.equal(caseNumber,19);
+ const rollback=await readFile('sql/candidates/rollback/whatsapp_prod_menu_atomic_candidate.rollback.sql','utf8');
+ const ledgerCount=(await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n;
+ await assert.rejects(setup.query(rollback), /menu event ledger is not empty/);
+ await setup.query('rollback');
+ assert.equal((await setup.query('select count(*)::int n from crm_whatsapp_menu_events')).rows[0].n,ledgerCount);
+ // Only synthetic fixture data is deleted here; real ledgers must be preserved.
+ await setup.query('truncate crm_whatsapp_menu_reconciliation');
+ await setup.query('truncate crm_whatsapp_menu_events');
+ await setup.query(rollback);
+ assert.equal((await setup.query("select to_regclass('public.crm_whatsapp_menu_events') as relation")).rows[0].relation,null);
+ assert.equal((await setup.query("select to_regprocedure('public.crm_confirm_whatsapp_menu_sent(uuid,uuid,text,timestamptz)') as fn")).rows[0].fn,null);
+ console.log('PostgreSQL real local: concurrency, ordering, atomicity, CRM confirmation and guarded migration rollback passed.');
+} finally {for(const c of clients)await c.end().catch(()=>{});if(started)await server.stop().catch(()=>{});await rm(dir,{recursive:true,force:true});}

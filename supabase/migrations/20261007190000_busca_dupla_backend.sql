@@ -36,3 +36,8 @@ alter table public.busca_dupla_torneo enable row level security;
 alter table public.busca_dupla_invitacion enable row level security;
 revoke all on table public.busca_dupla_torneo from anon, authenticated;
 revoke all on table public.busca_dupla_invitacion from anon, authenticated;
+
+-- Supabase no longer grants Data API access automatically for new tables.
+-- These tables remain private to the backend service role.
+grant select, insert, update, delete on table public.busca_dupla_torneo to service_role;
+grant select, insert, update, delete on table public.busca_dupla_invitacion to service_role;

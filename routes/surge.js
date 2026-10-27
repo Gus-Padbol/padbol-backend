@@ -1,3 +1,4 @@
+import { calculateSurgePrice as calculateSurgePriceV2 } from '../src/surgeV2.js';
 import { calculateSurgePrice, normalizeSurgeDeporte } from '../src/surge.js';
 import { requireAdminUser } from '../lib/authAccess.js';
 
@@ -31,6 +32,23 @@ export function mountSurgeRoutes(app, {
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/surge/:sedeId/:deporte/:duracion:', err.message);
+      return res.status(st).json({ error: err.message || 'Error al calcular Surge' });
+    }
+  });
+
+  app.get('/api/v2/surge/:sedeId/:deporte/:duracion', async (req, res) => {
+    try {
+      const result = await calculateSurgePriceV2(
+        supabaseAdmin,
+        req.params.sedeId,
+        req.params.deporte,
+        req.params.duracion,
+        { slot_inicio: req.query.slot_inicio ?? null },
+      );
+      return res.json(result);
+    } catch (err) {
+      const st = err.status || 500;
+      console.error('❌ GET /api/v2/surge/:sedeId/:deporte/:duracion:', err.message);
       return res.status(st).json({ error: err.message || 'Error al calcular Surge' });
     }
   });

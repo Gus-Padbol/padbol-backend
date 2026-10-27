@@ -154,7 +154,7 @@ async function resolveFranjaPrecio(supabaseAdmin, {
   if (!col) return null;
 
   const precioFranja = parsePrecioInt(franja[col]);
-  if (precioFranja == null || precioFranja <= 0) return null;
+  if (precioFranja == null) return null;
 
   return {
     precio: precioFranja,
@@ -268,7 +268,7 @@ export async function resolveReservaBasePrice(supabaseAdmin, {
   const picked = pickSedesDuracionRow(duracionRows, dep);
   if (picked) {
     const precio = parsePrecioInt(picked.row.precio);
-    if (precio != null && precio > 0) {
+    if (precio != null) {
       return buildBaseResult({
         precio,
         source: picked.source,
@@ -281,7 +281,7 @@ export async function resolveReservaBasePrice(supabaseAdmin, {
   }
 
   const legacy = resolveLegacySedePrice(sedeRow, duracion);
-  if (legacy.precio > 0) {
+  if (legacy.legacyField != null) {
     return buildBaseResult({
       precio: legacy.precio,
       source: PRICE_SOURCES.LEGACY_SEDE,

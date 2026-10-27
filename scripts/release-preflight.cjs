@@ -107,7 +107,15 @@ function checkReleaseCandidate({ canonicalRoot, candidateRoot, branch, expectedC
   return { ok: true, root: candidate, canonicalRoot: canonical, branch, head, remoteBranch, remoteHead: live, qaDeployedCommit: target === 'qa' ? qaDeployedCommit : null, target };
 }
 
+function checkNodeRuntime(version = process.versions.node) {
+  assert.match(version, /^22\.\d+\.\d+$/, 'Deploy bloqueado: requiere Node 22 LTS sin versiones preliminares');
+  const [, minor, patch] = version.split('.').map(Number);
+  assert.ok(minor > 23 || (minor === 23 && patch >= 4), 'Deploy bloqueado: requiere Node >=22.23.4 para el aviso de seguridad eMudhra');
+  return { node: version, minimum: '22.23.4' };
+}
+
 function preflight() {
+  checkNodeRuntime();
   const cwd = fs.realpathSync(process.cwd());
   const canonical = fs.realpathSync(EXPECTED_ROOT);
   // Ensure the reviewed script is the one from the checkout being validated.
@@ -128,4 +136,4 @@ function preflight() {
 }
 
 if (require.main === module) preflight();
-module.exports = { checkCleanWorktree, checkReleaseCandidate };
+module.exports = { checkCleanWorktree, checkReleaseCandidate, checkNodeRuntime };

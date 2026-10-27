@@ -1,0 +1,18 @@
+CREATE SCHEMA auth;
+CREATE TABLE auth.users(id uuid PRIMARY KEY);
+CREATE TABLE sedes(id bigint PRIMARY KEY,nombre text,timezone text);
+CREATE TABLE torneos(id bigint PRIMARY KEY,sede_id bigint,estado text,tipo_torneo text,plan_nations jsonb,fecha_inicio date,fecha_fin date,updated_at timestamptz,deporte text);
+CREATE TABLE user_roles(user_id uuid PRIMARY KEY,role text,sede_id bigint);
+CREATE TABLE equipos(id bigint PRIMARY KEY,torneo_id bigint,jugadores jsonb,inscripcion_estado text);
+CREATE TABLE partidos(id bigserial PRIMARY KEY,torneo_id bigint,sede_id bigint,equipo_a_id bigint,equipo_b_id bigint,estado text,grupo text,ronda integer,bracket_round integer,bracket_position integer,partido_siguiente_id bigint,partido_siguiente_slot text,fecha_hora timestamp,cancha_id bigint,cancha text);
+CREATE TABLE canchas(id bigint PRIMARY KEY,sede_id bigint,nombre text,deporte text,estado text,orden integer);
+CREATE TABLE scoreboard_partidos(id uuid PRIMARY KEY,torneo_id bigint,partido_torneo_id bigint,estado text,cancha text);
+CREATE TABLE torneo_nations_programacion(partido_id bigint,torneo_id bigint,court_id bigint,inicio timestamptz,duration_minutes integer);
+CREATE TABLE reservas(id bigint PRIMARY KEY,sede_id bigint,sede text,cancha integer,estado text,fecha text,hora text,duracion_minutos integer);
+CREATE TABLE clases(id bigint PRIMARY KEY,cancha_id bigint,activo boolean);
+CREATE TABLE clases_horarios(clase_id bigint,dia_semana integer,hora_inicio time,hora_fin time);
+INSERT INTO sedes VALUES(8,'QA','Europe/Rome');
+INSERT INTO torneos VALUES(901,8,'abierto','knockout',NULL,'2026-11-20','2026-11-22',now(),'padbol'),(902,8,'abierto','knockout',NULL,'2026-11-20','2026-11-22',now(),'padbol');
+INSERT INTO user_roles VALUES('11111111-1111-4111-8111-111111111111','admin_club',8),('99999999-9999-4999-8999-999999999999','admin_club',9);
+INSERT INTO equipos SELECT i,901,'[{"nombre":"Invitado Uno","participante_id":"p1"},{"nombre":"Invitado Dos","participante_id":"p2"}]',CASE WHEN i%2=0 THEN 'confirmado' ELSE 'confirmada' END FROM generate_series(1,4)i;
+INSERT INTO canchas VALUES(13,8,'Cancha1','padbol','activa',1),(14,8,'Cancha2','padbol','activa',2);
