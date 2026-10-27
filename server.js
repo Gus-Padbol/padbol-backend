@@ -1,3 +1,4 @@
+import { createSupportWhatsappQaCanaryAccessFactory } from './lib/supportWhatsappQaCanaryAccessCandidate.js';
 import { mountSupportExecutorCandidate } from './lib/supportExecutorCandidate.js';
 import { isWhatsappQaMenuEnabled } from './lib/whatsappQaMenuGate.js';
 import { createWhatsappLanguageMenu } from './lib/whatsappLanguageMenu.js';
@@ -285,6 +286,7 @@ const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
 const whatsappQaCrmManualSenderFactory = createWhatsappQaCrmManualSender();
 const crmWhatsappManualSenderFactory = createCrmWhatsappManualSender();
 const qaRelay = createQaRelay();
+const supportQaCanaryAccessFactory=createSupportWhatsappQaCanaryAccessFactory();
 installStagingFetchGuard();
 const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
 
@@ -435,6 +437,7 @@ const pgPool = DATABASE_URL
 
 // Internal preparation-only Mini worker; deployment opt-in required.
 mountSupportExecutorCandidate(app, { pool: pgPool });
+supportQaCanaryAccessFactory?.(app,{pool:pgPool});
 
 async function verifyPgPoolConnection() {
   if (!pgPool) {
