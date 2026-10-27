@@ -70,10 +70,13 @@ export function buildLicenseRequestPayload(body = {}) {
 }
 
 function isMissingTable(error) {
-  return error?.code === '42P01' || /solicitudes_licencia/i.test(String(error?.message || ''));
+  return ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(error?.code);
 }
 
 function sendStorageError(res, error, fallback) {
+  // Log only the diagnostic code: request bodies, email and provider details
+  // never belong in a public error response or in routine server logs.
+  console.error('[license-request] storage failure', { code: error?.code || 'UNKNOWN' });
   if (isMissingTable(error)) {
     return res.status(503).json({
       error: 'El formulario todavía no está habilitado en el servidor',
