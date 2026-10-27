@@ -294,7 +294,7 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
     timezone: tz,
   });
 
-  if (!baseResolved.precio || baseResolved.precio <= 0) {
+  if (baseResolved.source === PRICE_SOURCES.NONE || !Number.isFinite(baseResolved.precio) || baseResolved.precio < 0) {
     throw Object.assign(
       new Error(`No hay precio configurado para ${duracion} min (${dep}) en la sede ${sid}`),
       { status: 400, code: 'PRECIO_NO_CONFIGURADO', baseResolved },
@@ -302,6 +302,7 @@ export async function calculateSurgePrice(supabaseAdmin, sedeId, deporte, duraci
   }
 
   const precioBase = baseResolved.precio;
+  if (precioBase === 0) return { precio: 0, precio_base: 0, surge_activo: false, precio_metadata: baseResolved };
 
   if (baseResolved.source === PRICE_SOURCES.FRANJA_PRECIO) {
     return {

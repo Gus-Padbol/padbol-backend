@@ -1,0 +1,36 @@
+import { PGlite } from '@electric-sql/pglite';
+import { readFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const db = new PGlite();
+await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
+CREATE TABLE public.scoreboard_partidos(id uuid primary key, estado text, saque_actual text, score_a integer, score_b integer, games_a integer, games_b integer, sets_a integer, sets_b integer, historial_sets jsonb, es_tiebreak boolean, ultimo_punto text, historial_puntos jsonb, updated_at timestamptz, cronometro_inicio timestamptz, cronometro_pausado boolean, cronometro_segundos integer, control_token_hash text,torneo_id bigint,partido_torneo_id bigint);
+CREATE TABLE public.scoreboard_historial_puntos(id uuid default gen_random_uuid() primary key, partido_id uuid, equipo text, score_a_antes text,score_b_antes text,set_numero integer,games_a_antes integer,games_b_antes integer,sets_a_antes jsonb,sets_b_antes jsonb,es_tiebreak_antes boolean,estado_antes text,historial_sets_antes jsonb,saque_actual_antes text);
+INSERT INTO public.scoreboard_partidos VALUES ('00000000-0000-0000-0000-000000000001','en_curso','A',0,0,0,0,0,0,'[]',false,null,'[]','2026-01-01','2026-01-01',false,0,'secret',NULL,NULL);`);
+await db.exec(await readFile('sql/20261021120000_scoreboard_atomic_mutation.sql','utf8'));
+if (process.env.SCOREBOARD_ORDER_CANDIDATE === '1') {
+  await db.exec(await readFile('sql/20261021172000_scoreboard_mutation_order_candidate.sql','utf8'));
+  assert.equal((await db.query("select has_function_privilege('service_role','public.scoreboard_commit_mutation_before_occupancy_candidate(uuid,timestamptz,jsonb,text,jsonb,uuid)','execute') as ok")).rows[0].ok,false);
+}
+
+const id='00000000-0000-0000-0000-000000000001';
+const call=(time,next,kind,history=null,historyId=null)=>db.query('select public.scoreboard_commit_mutation($1,$2,$3,$4,$5,$6) as result',[id,time,JSON.stringify(next),kind,history===null?null:JSON.stringify(history),historyId]);
+const original='2026-01-01';
+let result=(await call(original,{score_a:15},'point',{equipo:'A'})).rows[0].result;
+assert.equal(result.score_a,15); assert.equal('control_token_hash' in result,false);
+assert.equal((await call(original,{score_b:15},'point',{equipo:'B'})).rows[0].result,null);
+let history=(await db.query('select id from public.scoreboard_historial_puntos')).rows;
+assert.equal(history.length,1);
+let version=(await db.query('select updated_at from public.scoreboard_partidos where id=$1',[id])).rows[0].updated_at;
+await assert.rejects(call(version,{score_a:30},'point',null));
+assert.equal((await db.query('select score_a from public.scoreboard_partidos where id=$1',[id])).rows[0].score_a,15);
+await db.exec(`CREATE FUNCTION public.reject_test_score() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.score_a=99 THEN RAISE EXCEPTION 'synthetic rejection'; END IF; RETURN NEW; END $$; CREATE TRIGGER synthetic_rejection BEFORE UPDATE ON public.scoreboard_partidos FOR EACH ROW EXECUTE FUNCTION public.reject_test_score();`);
+await assert.rejects(call(version,{score_a:99},'undo',null,history[0].id));
+assert.equal((await db.query('select count(*)::int as n from public.scoreboard_historial_puntos')).rows[0].n,1);
+result=(await call(version,{score_a:0},'undo',null,history[0].id)).rows[0].result;
+assert.equal(result.score_a,0); assert.equal((await db.query('select count(*)::int as n from public.scoreboard_historial_puntos')).rows[0].n,0);
+version=(await db.query('select updated_at from public.scoreboard_partidos where id=$1',[id])).rows[0].updated_at;
+result=(await call(version,{cronometro_pausado:true,cronometro_inicio:null},'update')).rows[0].result;
+version=(await db.query('select updated_at from public.scoreboard_partidos where id=$1',[id])).rows[0].updated_at;
+assert.equal((await call(version,{score_a:15},'point',{equipo:'A'})).rows[0].result,null);
+assert.equal((await db.query("select has_function_privilege('authenticated','public.scoreboard_commit_mutation(uuid,timestamptz,jsonb,text,jsonb,uuid)','execute') as ok")).rows[0].ok,false);
+await db.close(); console.log('Atomic mutation: point, conflict, rollback, undo, pause, permissions passed');

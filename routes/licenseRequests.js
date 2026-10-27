@@ -70,10 +70,13 @@ export function buildLicenseRequestPayload(body = {}) {
 }
 
 function isMissingTable(error) {
-  return error?.code === '42P01' || /solicitudes_licencia/i.test(String(error?.message || ''));
+  return ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(error?.code);
 }
 
 function sendStorageError(res, error, fallback) {
+  // Log only the diagnostic code: request bodies, email and provider details
+  // never belong in a public error response or in routine server logs.
+  console.error('[license-request] storage failure', { code: error?.code || 'UNKNOWN' });
   if (isMissingTable(error)) {
     return res.status(503).json({
       error: 'El formulario todavía no está habilitado en el servidor',
@@ -103,15 +106,29 @@ export function licenseRequestToCrmIngest(id, data = {}) {
     name: data.responsable_nombre,
     subject: `Solicitud comercial desde dev.padbol.com — ${text(data.club_nombre, 160)}`,
     message: details,
+    country: data.pais,
+    clubName: data.club_nombre,
+    fields: {
+      Empresa: data.club_nombre, País: data.pais, Ciudad: data.ciudad,
+      Región: data.provincia_estado, Dirección: data.club_direccion,
+      Cargo: data.responsable_cargo, Web: data.club_web,
+      Deportes: JSON.stringify(data.deportes_canchas || {}),
+    },
   });
 }
 
-async function ingestLicenseRequestInCrm(crmService, id, data) {
+export async function ingestLicenseRequestInCrm(crmService, id, data, leadAnalyzer = null) {
   if (!crmService?.ingestInbound) return;
   const ingest = licenseRequestToCrmIngest(id, data);
   if (!ingest) return;
   try {
-    await crmService.ingestInbound(ingest);
+    ingest.qualificationData.lead_analysis_request.status = typeof leadAnalyzer === 'function' ? 'pending' : 'disabled';
+    const result = await crmService.ingestInbound(ingest);
+    if (result?.status === 'accepted' && typeof leadAnalyzer === 'function') {
+      queueMicrotask(() => leadAnalyzer({ ingest, conversation: result.conversation }).catch((error) => {
+        console.error('[crm-lead-analysis] failed', { code: error?.message || 'CRM_LEAD_ANALYSIS_FAILED' });
+      }));
+    }
   } catch (error) {
     // La solicitud comercial ya quedó guardada. Una falla del CRM no debe
     // hacer que el visitante repita el formulario ni crear duplicados.
@@ -125,6 +142,7 @@ export function mountLicenseRequestRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails = [],
   crmService = null,
+  leadAnalyzer = null,
 }) {
   const adminDeps = {
     getAuthenticatedUser,
@@ -159,13 +177,13 @@ export function mountLicenseRequestRoutes(app, {
           if (existing.data.idempotency_payload_hash !== parsed.data.idempotency_payload_hash) {
             return res.status(409).json({ error: 'Idempotency-Key ya utilizado con otra solicitud', code: 'IDEMPOTENCY_KEY_REUSED' });
           }
-          await ingestLicenseRequestInCrm(crmService, existing.data.id, parsed.data);
+          await ingestLicenseRequestInCrm(crmService, existing.data.id, parsed.data, leadAnalyzer);
           const { idempotency_payload_hash: _privateHash, ...response } = existing.data;
           return res.status(200).json({ ...response, idempotent: true });
         }
       }
       if (error) return sendStorageError(res, error, 'No se pudo enviar la solicitud');
-      await ingestLicenseRequestInCrm(crmService, data.id, parsed.data);
+      await ingestLicenseRequestInCrm(crmService, data.id, parsed.data, leadAnalyzer);
       return res.status(201).json(data);
     } catch (error) {
       console.error('❌ POST /api/solicitudes-licencia:', error.message);

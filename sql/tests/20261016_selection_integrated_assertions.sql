@@ -1,0 +1,44 @@
+BEGIN;
+DO $qa$
+DECLARE actor uuid:='11111111-1111-4111-8111-111111111111';payload jsonb;receipt jsonb;ea bigint;eb bigint;mid bigint;sid bigint;idsa uuid[];idsb uuid[];snapshot jsonb;plan jsonb;auth_before integer;account_pid uuid;
+BEGIN
+ SELECT count(*) INTO auth_before FROM auth.users;
+ UPDATE torneos SET modalidad_plantel='selecciones',tipo_torneo='round_robin' WHERE id=555;
+ SELECT jsonb_build_object('nombre','QA invitados A','incluir_capitan',false,'request_id',gen_random_uuid(),'participantes',jsonb_agg(jsonb_build_object('tipo_identidad','generico','nombre','QA A '||i))) INTO payload FROM generate_series(1,8)i;
+ receipt:=gestionar_participantes_torneo(555,actor,'inscribir',payload);ea:=(receipt->'equipo'->>'id')::bigint;
+ SELECT jsonb_build_object('nombre','QA invitados B','incluir_capitan',false,'request_id',gen_random_uuid(),'participantes',jsonb_agg(jsonb_build_object('tipo_identidad','generico','nombre','QA B '||i))) INTO payload FROM generate_series(1,8)i;
+ receipt:=gestionar_participantes_torneo(555,actor,'inscribir',payload);eb:=(receipt->'equipo'->>'id')::bigint;
+ SELECT jugadores INTO snapshot FROM equipos WHERE id=ea;
+ BEGIN PERFORM referencias_plantel_general(555,jsonb_set(snapshot,'{0,user_id}',to_jsonb(actor::text)));RAISE EXCEPTION 'Discrepant roster account field accepted';EXCEPTION WHEN invalid_parameter_value THEN NULL;END;
+ INSERT INTO torneo_participantes(torneo_id,sede_id,nombre,tipo_identidad,origen,creado_por,linked_user_id,estado_vinculacion) VALUES(555,8,'QA cuenta propia','cuenta','cuenta',actor,actor,'vinculado') RETURNING id INTO account_pid;
+ snapshot:=jsonb_build_array(jsonb_build_object('participante_id',account_pid,'nombre','QA cuenta propia','tipo_identidad','cuenta','user_id',actor));
+ IF referencias_plantel_general(555,snapshot) IS DISTINCT FROM ARRAY[actor] THEN RAISE EXCEPTION 'Authoritative account reference not preserved';END IF;
+ BEGIN PERFORM referencias_plantel_general(555,jsonb_set(snapshot,'{0,id}',to_jsonb('99999999-9999-4999-8999-999999999999'::text)));RAISE EXCEPTION 'Discrepant secondary account ID accepted';EXCEPTION WHEN invalid_parameter_value THEN NULL;END;
+ IF current_setting('padbol.test_partial_roster',true)='1' THEN
+  UPDATE torneo_participantes p SET nombre='',tipo_identidad='plaza_pendiente' WHERE p.id IN(SELECT (j->>'participante_id')::uuid FROM equipos e CROSS JOIN LATERAL jsonb_array_elements(e.jugadores)WITH ORDINALITY x(j,ord) WHERE e.torneo_id=555 AND ord>4);
+  UPDATE equipos e SET jugadores=(SELECT jsonb_agg(CASE WHEN ord>4 THEN j||jsonb_build_object('nombre','','tipo_identidad','plaza_pendiente','estado','pendiente') ELSE j END ORDER BY ord) FROM jsonb_array_elements(e.jugadores)WITH ORDINALITY x(j,ord)) WHERE e.torneo_id=555;
+ END IF;
+ IF (SELECT count(*) FROM equipos WHERE torneo_id=555 AND jsonb_array_length(jugadores)=8 AND inscripcion_estado='confirmado')<>2 THEN RAISE EXCEPTION 'Both generic eight-player rosters must register';END IF;
+ IF EXISTS(SELECT 1 FROM equipos e CROSS JOIN LATERAL jsonb_array_elements(e.jugadores)j WHERE e.torneo_id=555 AND j->>'user_id' IS NOT NULL) OR (SELECT count(*) FROM auth.users)<>auth_before THEN RAISE EXCEPTION 'Guest roster invented an auth identity';END IF;
+ plan:=jsonb_build_array(jsonb_build_object('torneo_id',555,'sede_id',8,'equipo_a_id',ea,'equipo_b_id',eb,'estado','pendiente','ronda',1));
+ PERFORM planificar_fixture_torneo(555,actor,ARRAY[ea,eb],'automatico',plan);
+ SELECT id INTO mid FROM partidos WHERE torneo_id=555;
+ SELECT jsonb_agg(jsonb_build_object('id',id,'jugadores',jugadores,'inscripcion_estado',inscripcion_estado) ORDER BY id) INTO snapshot FROM equipos WHERE torneo_id=555;
+ PERFORM iniciar_torneo_planificado(555,actor,snapshot);
+ SELECT array_agg((j->>'participante_id')::uuid ORDER BY ord) INTO idsa FROM equipos e CROSS JOIN LATERAL jsonb_array_elements(e.jugadores)WITH ORDINALITY x(j,ord) WHERE e.id=ea;
+ SELECT array_agg((j->>'participante_id')::uuid ORDER BY ord) INTO idsb FROM equipos e CROSS JOIN LATERAL jsonb_array_elements(e.jugadores)WITH ORDINALITY x(j,ord) WHERE e.id=eb;
+ PERFORM guardar_alineacion_participantes(555,mid,ea,actor,true,idsa[1:2],idsa[3:4],0);
+ PERFORM guardar_alineacion_participantes(555,mid,eb,actor,true,idsb[1:2],idsb[3:4],0);
+ PERFORM programar_partido_torneo(555,mid,actor,13,'2026-11-20T10:00:00Z',60);
+ INSERT INTO scoreboard_partidos(torneo_id,partido_torneo_id,estado,equipo_a_jugadores,equipo_b_jugadores) VALUES(555,mid,'pendiente','[]','[]') RETURNING id INTO sid;
+ IF (SELECT jsonb_array_length(equipo_a_jugadores) FROM scoreboard_partidos WHERE id=sid)<>4 OR (SELECT jsonb_array_length(equipo_b_jugadores) FROM scoreboard_partidos WHERE id=sid)<>4 THEN RAISE EXCEPTION 'Scoreboard must freeze exactly the declared four';END IF;
+ receipt:=finalizar_partido_seleccion(mid,'{"goles_a":2,"goles_b":0}',actor,'scoreboard');
+ IF receipt->>'status'<>'finalized' OR (SELECT cardinality(convocados_a) FROM torneo_partido_participacion WHERE partido_id=mid)<>4 THEN RAISE EXCEPTION 'Result must retain sporting evidence';END IF;
+ receipt:=finalizar_torneo_seleccion(555,actor,jsonb_build_array(jsonb_build_object('torneo_id',555,'equipo_id',ea,'posicion',1,'puntos',100),jsonb_build_object('torneo_id',555,'equipo_id',eb,'posicion',2,'puntos',60)));
+ IF receipt->>'status'<>'finalized' OR (SELECT estado FROM torneos WHERE id=555)<>'finalizado' THEN RAISE EXCEPTION 'Generic selection closure failed';END IF;
+ IF EXISTS(SELECT 1 FROM equipos WHERE torneo_id=555 AND cardinality(participantes_ranking)<>0) OR EXISTS(SELECT 1 FROM torneo_participantes WHERE torneo_id=555 AND ranking_oficial_elegible) OR (SELECT count(*) FROM auth.users)<>auth_before THEN RAISE EXCEPTION 'Sporting guests became official/account ranking identities';END IF;
+ UPDATE torneos SET modalidad_plantel='selecciones',plan_nations='{"enabled":true}' WHERE id=556;
+ BEGIN INSERT INTO equipos(torneo_id,sede_id,nombre,creador_id,jugadores,cupo_maximo,inscripcion_estado,modalidad_plantel) SELECT 556,9,'Forbidden Nations guest',actor,jugadores,8,'confirmado','selecciones' FROM equipos WHERE id=ea;RAISE EXCEPTION 'Nations legacy registered-player guard bypassed';EXCEPTION WHEN invalid_parameter_value THEN NULL;END;
+ RAISE NOTICE 'PASS integrated: old national DDL/triggers + generic registration8 + fixture/open + explicit start + declared4 + scheduled linked scoreboard4 + result evidence + closure + no auth/official points + Nations guard intact';
+END $qa$;
+ROLLBACK;

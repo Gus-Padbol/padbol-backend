@@ -1,3 +1,4 @@
+import { rankingTournamentEligible } from '../lib/torneos/rankingTournamentEligibility.js';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_COMPACT_REGEX = /^[0-9a-f]{32}$/i;
 
@@ -219,7 +220,7 @@ async function fetchEquiposDelJugadorPg(pgPool, perfil) {
   return rows;
 }
 
-async function fetchTorneosStatsPg(pgPool, equipoIds) {
+export async function fetchTorneosStatsPg(pgPool, equipoIds) {
   if (!equipoIds.length) {
     return {
       torneos_jugados: 0,
@@ -230,12 +231,13 @@ async function fetchTorneosStatsPg(pgPool, equipoIds) {
     };
   }
 
-  const { rows: torneoRows } = await pgPool.query(
+  const { rows: rawTorneoRows } = await pgPool.query(
     `SELECT DISTINCT ON (t.id)
             t.id AS torneo_id,
             t.nombre,
             t.deporte,
             t.estado,
+            t.es_prueba,
             COALESCE(t.fecha_fin, t.fecha_inicio) AS fecha,
             s.nombre AS sede,
             e.id AS equipo_id,
@@ -245,10 +247,12 @@ async function fetchTorneosStatsPg(pgPool, equipoIds) {
      LEFT JOIN sedes s ON s.id = t.sede_id
      LEFT JOIN tabla_puntos tp ON tp.torneo_id = t.id AND tp.equipo_id = e.id
      WHERE e.id = ANY($1::bigint[])
+       AND COALESCE(t.es_prueba, false) = false
      ORDER BY t.id, COALESCE(t.fecha_fin, t.fecha_inicio) DESC NULLS LAST`,
     [equipoIds],
   );
 
+  const torneoRows = rawTorneoRows.filter(rankingTournamentEligible);
   const finalized = torneoRows.filter((t) => String(t.estado || '').toLowerCase() === 'finalizado');
   const torneos_jugados = finalized.length;
   const torneos_ganados = finalized.filter((t) => Number(t.posicion) === 1).length;

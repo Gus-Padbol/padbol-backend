@@ -1,21 +1,57 @@
+import { mountSupportExecutorCandidate } from './lib/supportExecutorCandidate.js';
 import { isWhatsappQaMenuEnabled } from './lib/whatsappQaMenuGate.js';
 import { createWhatsappLanguageMenu } from './lib/whatsappLanguageMenu.js';
 import { createWhatsappMenuAtomicStore } from './lib/whatsappMenuAtomic.js';
 import { createWhatsappContextRelay, createSupabaseContextOutbox } from './lib/whatsappContextRelay.js';
+import { createWhatsappContextRepository, registerWhatsappContextRoute } from './lib/whatsappContextBinding.js';
+import { resolveWhatsappProductionMenuFlags } from './lib/whatsappProductionMenuFlagsCandidate.js';
+import { mountBookingCapabilities } from './routes/bookingCapabilities.js';
+import {mayReadTournamentEnrollment,mapTournamentTeamReadRow} from './lib/dto/tournamentScopedTeams.js';
+import { projectVerifiedTournamentRankingTeams } from './lib/verifiedTournamentRanking.js';
+import { mountTournamentParticipantsRoutes } from './routes/tournamentParticipants.js';
+import {mountTournamentPlanningRoutes, startPlannedTournament} from './routes/tournamentPlanning.js';
+import { canReadQaCatalogRow, pickPlayerSedeSummary } from './lib/qaCatalogVisibility.js';
+import { canReadPublicTournamentCatalogRow } from './lib/torneos/tournamentCatalogVisibility.js';
+import {createTournamentReadVisibility} from './lib/torneos/tournamentReadVisibility.js';
+import { mountQaManualTeamsRoutes } from './routes/qaManualTeams.js';
+import { rankingTournamentEligible } from './lib/torneos/rankingTournamentEligibility.js';
+import { readPublicReservationOccupancy } from './lib/reservasDisponibilidadPublica.js';
+import { verifiedSuspendedBookings } from './lib/verifiedSuspendedBookings.js';
+import { horasAnticipacionReserva } from './lib/reservaCancelacionTiming.js';
+import { confirmReservaGratuita } from './lib/reservaGratuita.js';
+import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
+import { isNationsPublicRevealed, resolveNationsReadAudience, projectNationsMatch, rejectLegacyNationsStandings, rejectConfiguredNationsDeletion } from './lib/torneos/nationsPublicAccess.js';
+import { mountPointsConfigRoutes } from './routes/pointsConfig.js';
+import { loadPointsPolicy, buildPointsRows } from './lib/torneos/pointsPolicyService.js';
+import { mountNationsCupRoutes } from './routes/nationsCup.js';
+import { isNationalRoster, rankingPlayersForTeam, rankingPlayerKey, closeNationalTournament } from './lib/nationalTeamLineup.js';
+import { mountNationalTeamRoutes } from './routes/nationalTeams.js';
+import { createCrmEmailSender } from './lib/crmEmailSender.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
+import { createCrmWhatsappManualSender } from './lib/crmWhatsappManualSender.js';
+import { initializeCommercialRollout } from './lib/crmCommercialTeamBootstrap.js';
+import { createCommercialSuperadminResolver } from './lib/crmCommercialTeamSuperadmin.js';
+
+// The previous production baseline had no commercial-cases bootstrap. Keep that
+// baseline inert until every rollout gate for the new team workspace is verified.
+const initializeCommercialCases = () => ({ enabled: false });
 import { createWhatsappQaCrmManualSender } from './lib/whatsappQaCrmManualSend.js';
 import { resolveStoredRoleForVerifiedUser } from './lib/roleIdentity.js';
 import { backendRuntime, assertStagingIsolation, installStagingFetchGuard, assertOutboundDeliveryEnabled, externalOperationsGate } from './lib/backendRuntime.js';
 import { WHATSAPP_CLOUD_WEBHOOK_PATH } from './lib/whatsappCloud.js';
-import { createQaRelay } from './lib/whatsappQaRelay.js';
+import { createQaRelay, RELAY_PATH } from './lib/whatsappQaRelay.js';
 import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, registerWhatsappAdminRoutes } from './lib/whatsappAdmin.js';
+import {readCrmDeskOperators} from './lib/crmDeskScope.js';
+import { CRM_COMMERCIAL_OPERATORS, commercialSafeWhatsappPermissions } from './lib/crmCommercialScope.js';
 import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
+import { registerWhatsappMediaAccessRoute } from './lib/whatsappMediaAccess.js';
 import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
 import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
 import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
 import { createCrmLeadAutoAnalyzer } from './lib/crmLeadAutoAnalysis.js';
 import { createCrmImapInboxSync, readCrmImapConfig } from './lib/crmImapInbound.js';
+import {readCrmSupportImapConfig, createCrmSupportSender, routeCrmEmailSender, CRM_SUPPORT_OPERATORS} from './lib/crmSupportMailbox.js';
 import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
 import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
@@ -36,6 +72,7 @@ import cronLibrary from 'node-cron';
 import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
 import { createHubRouter } from './routes/hub.js';
 import { createContentAdminRouter } from './routes/contentAdmin.js';
+import { createContentWorkspaceRouter } from './routes/contentWorkspace.js';
 import { createContentPublicRouter } from './routes/contentPublic.js';
 import { createMembresiasRouter, mountMembresiasSedeRoutes } from './routes/membresias.js';
 import {
@@ -246,6 +283,7 @@ const runtime = backendRuntime();
 const runWhatsappMetaQaStartupCheck = createWhatsappMetaQaStartupCheck();
 const whatsappQaSandboxServiceFactory = createWhatsappQaSandboxServiceFactory();
 const whatsappQaCrmManualSenderFactory = createWhatsappQaCrmManualSender();
+const crmWhatsappManualSenderFactory = createCrmWhatsappManualSender();
 const qaRelay = createQaRelay();
 installStagingFetchGuard();
 const cron = { schedule: (...args) => runtime.backgroundJobsEnabled ? cronLibrary.schedule(...args) : null };
@@ -302,6 +340,11 @@ app.use(WHATSAPP_CLOUD_WEBHOOK_PATH, express.raw({ type: 'application/json', lim
   if (Buffer.isBuffer(req.body)) req.rawBody = req.body;
   next();
 });
+app.use(RELAY_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (req, _res, next) => {
+  req.rawBody = req.body;
+  next();
+});
+app.use('/api/internal/whatsapp-context', express.raw({ type: 'application/json', limit: '16kb' }));
 app.use(express.json({
   verify: (req, _res, buf) => {
     if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe') {
@@ -315,7 +358,7 @@ app.use(publicReadRateLimitIfMatch);
 // `/api/torneos/:id` route, otherwise Express treats `resumen-stats` as an id.
 mountAdminLegacyAliases(app);
 // Gate SDKs with their own HTTP transports before any payment persistence.
-app.use(['/api/crear-preferencia', '/api/crear-pago-stripe', '/api/pago-exitoso',
+app.use(['/api/crear-pago-stripe', '/api/pago-exitoso',
   '/api/pago-exitoso-stripe', '/api/webhooks/mercadopago', '/api/webhooks/stripe'],
   externalOperationsGate(runtime));
 
@@ -389,6 +432,9 @@ const pgPool = DATABASE_URL
       ssl: DATABASE_URL.includes('sslmode=disable') ? false : { rejectUnauthorized: false },
     })
   : null;
+
+// Internal preparation-only Mini worker; deployment opt-in required.
+mountSupportExecutorCandidate(app, { pool: pgPool });
 
 async function verifyPgPoolConnection() {
   if (!pgPool) {
@@ -738,23 +784,36 @@ const whatsappOperators = new Set(
   String(process.env.WHATSAPP_ASSISTANT_OPERATORS ?? '')
     .split(',')
     .map((s) => s.trim().toLowerCase())
-    .filter(Boolean),
+    .filter(Boolean)
+    .filter(email => !CRM_COMMERCIAL_OPERATORS.some(operator => operator.email === email)),
 );
 const whatsappSuperAdminEmails = new Set(LEGACY_SUPER_ADMIN_EMAILS_API);
 
 const whatsappAdminService = createWhatsappAdminService({
+  resolvePermissions: commercialSafeWhatsappPermissions,
   repository: createSupabaseWhatsappAdminRepository(supabaseAdmin),
   operators: whatsappOperators,
   superAdminEmails: whatsappSuperAdminEmails,
 });
 registerWhatsappAdminRoutes(app, { whatsappAdminService, authUserFromBearer, fetchUserRoleRow });
 
+registerWhatsappContextRoute(app, { repository: createWhatsappContextRepository(supabaseAdmin), secret: process.env.WHATSAPP_CONTEXT_BINDING_SECRET, allowedSender: process.env.WHATSAPP_CONTEXT_ALLOWED_SENDER, rawParser: (_req, _res, next) => next() });
+const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin),
+  whatsappAtomicConversationEnabled: resolveWhatsappProductionMenuFlags(process.env).reviewEnabled });
+const crmLeadAnalyzer = createCrmLeadAutoAnalyzer({ crmService });
+const crmEmailSender = routeCrmEmailSender({commercialSender:createCrmEmailSender({ runtime }),supportSender:createCrmSupportSender({ runtime })});
 const crmAdminService = createCrmAdminService({
   repository: createSupabaseCrmRepository(supabaseAdmin),
   operators: whatsappOperators,
   superAdminEmails: whatsappSuperAdminEmails,
-  sendWhatsappReply: whatsappQaCrmManualSenderFactory?.({ supabaseAdmin }) || null,
+  sendWhatsappReply: whatsappQaCrmManualSenderFactory?.({ supabaseAdmin }) || crmWhatsappManualSenderFactory?.({ supabaseAdmin }) || null,
+  sendEmailReply: crmEmailSender,
+  leadAnalyzer: crmLeadAnalyzer,
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
+  commercialOperators: CRM_COMMERCIAL_OPERATORS,
+  supportOperators: CRM_SUPPORT_OPERATORS,
+  deskOperators: readCrmDeskOperators(process.env),
+  whatsappMenuReviewEnabled: resolveWhatsappProductionMenuFlags(process.env).reviewEnabled,
 });
 registerCrmAdminRoutes(app, {
   crmAdminService,
@@ -762,8 +821,18 @@ registerCrmAdminRoutes(app, {
   fetchUserRoleRow,
   fetchUserRoleRowForAuthUser,
 });
+registerWhatsappMediaAccessRoute(app, { crmAdminService, supabaseAdmin, authUserFromBearer, fetchUserRoleRow, fetchUserRoleRowForAuthUser });
+// The team workspace is inert until all rollout gates and its database migration are verified.
+initializeCommercialRollout({
+  app,
+  db: supabaseAdmin,
+  authUserFromBearer,
+  manualWhatsappSender: crmWhatsappManualSenderFactory?.({ supabaseAdmin }) || null,
+  emailSender: crmEmailSender,
+  resolveTrustedSuperadmin: createCommercialSuperadminResolver(supabaseAdmin),
+  legacyBootstrap: initializeCommercialCases,
+});
 
-const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin) });
 const whatsappMenuAtomicStore = process.env.WHATSAPP_MENU_ATOMIC_QA_ENABLED === 'true'
   && process.env.BACKEND_RUNTIME_MODE === 'staging' && SUPABASE_SERVICE_ROLE_KEY
   ? createWhatsappMenuAtomicStore(supabaseAdmin) : null;
@@ -777,17 +846,23 @@ const crmFunnel = createCrmFunnel({
     qaRelay, sandboxFactory: whatsappQaSandboxServiceFactory, outboundEnabled: runtime.outboundDeliveryEnabled })
     ? createWhatsappLanguageMenu() : null,
   paths: parseCrmFunnelPaths(process.env.CRM_WHATSAPP_FUNNEL_PATHS_JSON),
+  contextBridgeSender: (process.env.WHATSAPP_CONTEXT_BINDING_SECRET?.length >= 32
+    && /^[1-9][0-9]{7,14}$/.test(process.env.WHATSAPP_CONTEXT_ALLOWED_SENDER || ''))
+    ? process.env.WHATSAPP_CONTEXT_ALLOWED_SENDER : null,
 });
 registerCrmInboundRoutes(app, {
   crmService,
-  leadAnalyzer: createCrmLeadAutoAnalyzer({ crmService }),
+  leadAnalyzer: crmLeadAnalyzer,
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
+  formInboundSecret: process.env.CRM_INBOUND_FORM_SECRET || '',
 });
 const crmImapInboxSync = createCrmImapInboxSync({
   crmService,
   config: readCrmImapConfig(process.env),
 });
 crmImapInboxSync.start();
+const crmSupportInboxSync = createCrmImapInboxSync({crmService,config:readCrmSupportImapConfig(process.env)});
+crmSupportInboxSync.start();
 
 /** Rol autenticado: `user_id` (JWT) primero, luego email. Service role bypass RLS. */
 async function fetchUserRoleRowForAuthUser(user) {
@@ -1029,6 +1104,14 @@ function reservaBelongsToUser(reserva, user, qrUserId) {
   return false;
 }
 
+async function qaCatalogAudience(req) {
+  if (!req.headers?.authorization) return null;
+  const { user } = await getAuthenticatedUser(req);
+  return user ? {user, role: await resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS)} : null;
+}
+
+app.use('/api/torneos/:torneoId', createTournamentReadVisibility({db:supabaseAdmin,getAudience:qaCatalogAudience,onError:sendHttpError}));
+
 // GET sedes
 app.get('/api/sedes', async (req, res) => {
   try {
@@ -1036,7 +1119,7 @@ app.get('/api/sedes', async (req, res) => {
     console.log('📡 GET /api/sedes - Conectando a Supabase...');
     const { data, error } = await supabaseAdmin
       .from('sedes')
-      .select(SEDE_PAYMENT_STATUS_SELECT);
+      .select(`${SEDE_PAYMENT_STATUS_SELECT},es_prueba`);
 
     if (error) {
       console.error('❌ Error Supabase GET /api/sedes:', summarizeError(error));
@@ -1044,7 +1127,9 @@ app.get('/api/sedes', async (req, res) => {
     }
 
     console.log(`✓ GET /api/sedes — ${(data || []).length} sede(s)`);
-    const sedes = await enrichSedesWithCourtCatalog(supabaseAdmin, (data || []).map(pickPublicSedeWithPaymentStatus));
+    const audience = await qaCatalogAudience(req);
+    const visible = (data || []).filter(row => canReadQaCatalogRow(row, audience));
+    const sedes = await enrichSedesWithCourtCatalog(supabaseAdmin, visible.map(row => pickPlayerSedeSummary(pickPublicSedeWithPaymentStatus(row))));
     res.json(sport ? sedes.filter(sede => sede.deportes_disponibles.includes(sport)) : sedes);
   } catch (err) {
     console.error('❌ Error GET /api/sedes:', err.message);
@@ -1053,6 +1138,7 @@ app.get('/api/sedes', async (req, res) => {
 });
 
 mountSedesProfileRoutes(app, {
+  qaCatalogAudience,
   supabase,
   supabaseAdmin,
   getAuthenticatedUser,
@@ -1118,6 +1204,7 @@ mountStorePublicRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
 });
+mountBookingCapabilities(app);
 mountSedesDuracionesRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
@@ -1171,6 +1258,7 @@ mountLicenseRequestRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
   crmService,
+  leadAnalyzer: crmLeadAnalyzer,
 });
 mountScoreboardRoutes(app, {
   supabaseAdmin,
@@ -1178,10 +1266,11 @@ mountScoreboardRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
   io,
+  // Recovery must stay enabled if transitions are turned off after activation.
   scoreboardSuspensionCandidateEnabled: process.env.SCOREBOARD_SUSPENSION_ENABLED === 'true' && process.env.SCOREBOARD_SUSPENSION_RECOVERY_ENABLED === 'true',
   scoreboardSuspensionRecoveryEnabled: process.env.SCOREBOARD_SUSPENSION_RECOVERY_ENABLED === 'true',
 });
-initScoreboardSocket(io);
+initScoreboardSocket(io,{supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)});
 mountTorneoInteresRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
@@ -1250,17 +1339,19 @@ app.get('/api/sedes/:id', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('sedes')
-      .select(SEDE_PAYMENT_STATUS_SELECT)
+      .select(`${SEDE_PAYMENT_STATUS_SELECT},es_prueba`)
       .eq('id', sedeId)
       .maybeSingle();
 
     if (error) throw error;
-    if (!data) {
+    const audience = await qaCatalogAudience(req);
+    if (!data || !canReadQaCatalogRow(data, audience)) {
       return res.status(404).json({ error: 'Sede no encontrada' });
     }
 
     const [withCatalog] = await enrichSedesWithCourtCatalog(supabaseAdmin, [pickPublicSedeWithPaymentStatus(data)]);
-    res.json(enrichSedeWithHeroPhoto(withCatalog));
+    const dto = enrichSedeWithHeroPhoto(withCatalog);
+    res.json(canReadQaCatalogRow({...data, es_prueba:true}, audience) ? dto : pickPlayerSedeSummary(dto));
   } catch (err) {
     console.error('❌ Error GET /api/sedes/:id:', err.message);
     sendHttpError(res, err);
@@ -1377,34 +1468,11 @@ app.get('/api/disponibilidad/bloqueos', async (req, res) => {
 app.get('/api/disponibilidad/:sede/:fecha', async (req, res) => {
   try {
     const { sede, fecha } = req.params;
-    const selectCols = 'id, hora, hora_inicio, hora_fin, cancha, cancha_id, estado, created_at, sede, sede_id, duracion_minutos';
-
-    const { data: sedeRow } = await supabaseAdmin
-      .from('sedes')
-      .select('id')
-      .eq('nombre', sede)
-      .maybeSingle();
-
-    const queries = [
-      supabase.from('reservas').select(selectCols).eq('sede', sede).eq('fecha', fecha),
-    ];
-    if (sedeRow?.id != null) {
-      queries.push(
-        supabase.from('reservas').select(selectCols).eq('sede_id', sedeRow.id).eq('fecha', fecha),
-      );
-    }
-
-    const results = await Promise.all(queries);
-    for (const r of results) {
-      if (r.error) throw r.error;
-    }
-
-    const merged = new Map();
-    for (const row of results.flatMap((r) => r.data ?? [])) {
-      if (row?.id != null) merged.set(String(row.id), row);
-    }
-
-    res.json(filterBlockingReservas([...merged.values()]));
+    const sedeId = req.query.sede_id == null ? null : parsePositiveInt(req.query.sede_id);
+    if (req.query.sede_id != null && !sedeId) return res.status(400).json({ error: 'sede_id inválido' });
+    const occupancy = await readPublicReservationOccupancy(supabaseAdmin, { sede, sedeId, fecha });
+    res.set('Cache-Control', 'no-store');
+    res.json(occupancy);
   } catch (err) {
     sendHttpError(res, err);
   }
@@ -2062,9 +2130,14 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
   return null;
 }
 
+mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
+mountQaManualTeamsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
+mountTournamentParticipantsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
+mountTournamentPlanningRoutes(app, {db:supabaseAdmin, requireTorneoAdmin:requireTorneoAdminByTorneoId});
+mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
-  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay, whatsappMenuAtomicStore, whatsappContextRelay });
+  serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay, crmService, whatsappMenuAtomicStore, whatsappContextRelay });
 
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
@@ -2106,8 +2179,9 @@ async function clasesAssertReservaSinSolape({ sede, fecha, hora, cancha, duracio
   const { data, error } = await query;
   if (error) throw error;
   const duracion = Number(duracionMin) > 0 ? Number(duracionMin) : 90;
+  const released = await verifiedSuspendedBookings(supabaseAdmin, data);
   const conflict = (data || []).some((row) => {
-    if (String(row.estado || '').toLowerCase() === 'cancelada') return false;
+    if (String(row.estado || '').toLowerCase() === 'cancelada' || released.has(String(row.id))) return false;
     const otroInicio = clasesMinutosDesdeHora(row.hora);
     if (otroInicio == null) return false;
     const otraDuracion = Number(row.duracion_minutos || row.duracion) > 0
@@ -2151,13 +2225,17 @@ app.post('/api/torneos', async (req, res) => {
 
 app.get('/api/torneos', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('torneos')
-      .select(TORNEO_PUBLIC_SELECT)
+      .select(`${TORNEO_PUBLIC_SELECT},es_prueba`)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json((data || []).map(mapTorneoPublicRow));
+    const audience = await qaCatalogAudience(req);
+    res.json((data || [])
+      .filter(row => canReadQaCatalogRow(row, audience))
+      .filter(row => canReadPublicTournamentCatalogRow(row, audience))
+      .map(mapTorneoPublicRow));
   } catch (err) {
     sendHttpError(res, err);
   }
@@ -2209,13 +2287,14 @@ app.get('/api/torneos/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('torneos')
-      .select(TORNEO_PUBLIC_SELECT)
+      .select(`${TORNEO_PUBLIC_SELECT},es_prueba`)
       .eq('id', id)
       .single();
 
     if (error) throw error;
+    if (!canReadQaCatalogRow(data, await qaCatalogAudience(req))) return res.status(404).json({error:'Torneo no encontrado'});
     res.json(mapTorneoPublicRow(data));
   } catch (err) {
     sendHttpError(res, err);
@@ -2255,17 +2334,32 @@ app.put('/api/torneos/:id', async (req, res) => {
     const auth = await requireTorneoAdminByTorneoId(req, res, id);
     if (!auth) return;
 
-    const { nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin } = req.body;
+    const { nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin, cupos_maximos } = req.body;
+    const capacity = cupos_maximos === undefined ? undefined : cupos_maximos === '' || cupos_maximos == null ? null : Number(cupos_maximos);
+    if (capacity != null && (!Number.isSafeInteger(capacity) || capacity < 2)) {
+      return res.status(400).json({ error: 'La capacidad debe ser un número entero de al menos dos parejas.' });
+    }
 
     const { patch, torneo: current } = await prepareTournamentUpdate(supabaseAdmin, id, {
-      nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin,
+      nombre, nivel_torneo, tipo_torneo, estado, fecha_inicio, fecha_fin, cupos_maximos: capacity,
     });
-    let mutation = supabase.from('torneos').update({ ...patch, updated_at: new Date().toISOString() })
+    const currentAccess=resolveTorneoAdminAccess(auth,current.sede_id);
+    if(!currentAccess.allowed){sendTorneoAdminForbidden(res,auth,currentAccess.reason);return;}
+    if (patch.estado === 'en_curso' && !current.plan_nations && !['en_curso','activo'].includes(current.estado)) {
+      const {data:equipos,error:teamError}=await supabaseAdmin.from('equipos').select('*').eq('torneo_id',Number(id)).order('id');
+      if(teamError)throw teamError;
+      const started=await startPlannedTournament(supabaseAdmin,{torneo:current,equipos,actorId:auth.user.id});
+      return res.json([{...current,estado:started.estado}]);
+    }
+    // JWT, stored role and current persisted venue scope are verified for every format.
+    let mutation = supabaseAdmin.from('torneos').update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', id).eq('estado', current.estado);
+    mutation=current.sede_id==null?mutation.is('sede_id',null):mutation.eq('sede_id',current.sede_id);
     mutation = current.updated_at == null ? mutation.is('updated_at', null) : mutation.eq('updated_at', current.updated_at);
     const { data, error } = await mutation.select();
     if (!error && !data?.length) return res.status(409).json({ code: 'TORNEO_CHANGED_RETRY', error: 'El torneo cambió. Actualiza antes de volver a guardar.' });
 
+    if (error?.message?.includes('TORNEO_STRUCTURE_FROZEN')) return res.status(409).json({error:'El formato y la capacidad no se pueden cambiar porque el torneo ya tiene fixture o resultados.'});
     if (error) throw error;
     res.json(data);
   } catch (err) {
@@ -2279,18 +2373,25 @@ app.delete('/api/torneos/:id', async (req, res) => {
     const auth = await requireTorneoAdminByTorneoId(req, res, id);
     if (!auth) return;
 
-    const { error } = await supabase
-      .from('torneos')
-      .delete()
-      .eq('id', id);
-
-    if (error) throw error;
-    res.json({ mensaje: 'Torneo eliminado' });
+    const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,updated_at').eq('id',id).maybeSingle();if(event.error)throw event.error;
+    if(!event.data)return res.status(404).json({error:'Torneo no encontrado'});
+    const currentAccess=resolveTorneoAdminAccess(auth,event.data.sede_id);
+    if(!currentAccess.allowed){sendTorneoAdminForbidden(res,auth,currentAccess.reason);return;}
+    if(rejectConfiguredNationsDeletion(res,event.data))return;
+    let deletion=supabaseAdmin.from('torneos').delete().eq('id',id).is('plan_nations',null);
+    deletion=event.data.updated_at==null?deletion.is('updated_at',null):deletion.eq('updated_at',event.data.updated_at);
+    deletion=event.data.sede_id==null?deletion.is('sede_id',null):deletion.eq('sede_id',event.data.sede_id);
+    const {data,error}=await deletion.select('id');
+    if(error)throw error;
+    if(!data?.length)return res.status(409).json({code:'TORNEO_CHANGED_RETRY',error:'El torneo cambió o ya no está disponible. Actualiza antes de volver a eliminar.'});
+    if(data.length!==1||Number(data[0].id)!==Number(id))throw Object.assign(new Error('No se pudo confirmar la eliminación del torneo.'),{status:503});
+    res.json({mensaje:'Torneo eliminado',id:Number(data[0].id)});
   } catch (err) {
     sendHttpError(res, err);
   }
 });
 
+// Compatibility handler for legacy group formats; normal knockout/round-robin are intercepted by the planner.
 // POST /api/torneos/:id/generar-partidos
 // Reads all equipos for the torneo, generates matches based on tipo_torneo,
 // saves them to partidos, and sets the torneo estado to 'en_curso'.
@@ -2301,14 +2402,14 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
     const auth = await requireTorneoAdminByTorneoId(req, res, id);
     if (!auth) return;
 
-    const { data: torneo, error: errTorneo } = await supabase
+    const { data: torneo, error: errTorneo } = await supabaseAdmin
       .from('torneos')
       .select('*')
       .eq('id', id)
       .single();
     if (errTorneo) throw errTorneo;
 
-    const { data: equipos, error: errEquipos } = await supabase
+    const { data: equipos, error: errEquipos } = await supabaseAdmin
       .from('equipos')
       .select('*')
       .eq('torneo_id', parseInt(id))
@@ -2319,7 +2420,7 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
       return res.status(400).json({ error: 'Se necesitan al menos 2 equipos para generar partidos' });
     }
 
-    const { count: existingPartidosCount, error: errExistingPartidos } = await supabase
+    const { count: existingPartidosCount, error: errExistingPartidos } = await supabaseAdmin
       .from('partidos')
       .select('id', { count: 'exact', head: true })
       .eq('torneo_id', parseInt(id, 10));
@@ -2328,6 +2429,7 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
       return res.status(400).json({ error: 'El torneo ya tiene partidos generados' });
     }
 
+    if (torneo.plan_nations) return res.status(409).json({code:'NATIONS_ATOMIC_DRAW_REQUIRED',error:'Usa el sorteo de Nations Cup para conservar las tres zonas y sus reglas.'});
     let partidosData;
     switch (torneo.tipo_torneo) {
       case 'round_robin':
@@ -2353,6 +2455,16 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
         break;
       default:
         partidosData = generarRoundRobin(equipos, id, torneo.sede_id);
+    }
+
+    if (torneo.es_prueba === true) {
+      const { data, error } = await supabaseAdmin.rpc('guardar_fixture_qa', {
+        p_torneo_id: Number(id), p_actor_id: auth.user.id,
+        p_equipo_ids: equipos.map(equipo => Number(equipo.id)), p_partidos: partidosData,
+      });
+      if (error) return res.status(['40001','23505','55000'].includes(error.code) ? 409 : error.code==='42501' ? 403 : 503).json({error:'El listado de equipos o el estado cambió. Recarga antes de generar el fixture.',code:'QA_FIXTURE_UNCONFIRMED'});
+      if (data?.ok !== true || Number(data.torneo_id)!==Number(id) || !Array.isArray(data.partidos) || data.total!==partidosData.length) return res.status(503).json({error:'No se confirmó el fixture QA.'});
+      return res.json({partidos:data.partidos,total:data.total,formato:data.formato});
     }
 
     const { data: partidosInsertados, error: errPartidos } = await supabase
@@ -2450,6 +2562,15 @@ function mapLegacyRankingPublicRow(entry) {
   };
 }
 
+app.get('/api/jugadores/:userId/torneos-puntos',async(req,res)=>{try{const items=await loadPublishedNationalPoints(supabaseAdmin,{userId:req.params.userId,isRevealed:isNationsPublicRevealed});res.json({ok:true,jugador_id:req.params.userId,items});}catch(error){sendHttpError(res,error);}});
+
+async function assertNationsLegacyEventRead(req,torneoId,{roster=false}={}) {
+ const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneoId)).maybeSingle();if(event.error)throw event.error;if(!event.data?.plan_nations)return;
+ const audience=await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},event.data);
+ if(audience.admin||!roster&&audience.revealed)return {event:event.data,audience};
+ throw Object.assign(new Error(roster?'Consulta los planteles mediante su acceso autorizado.':'El sorteo todavía no está publicado.'),{status:403,code:'NATIONS_PRIVATE_DATA'});
+}
+
 // GET /api/rankings?scope=local|nacional|internacional&sede_id=X&categoria=Y
 app.get('/api/rankings', async (req, res) => {
   const { scope = 'internacional', sede_id, categoria } = req.query;
@@ -2463,9 +2584,9 @@ app.get('/api/rankings', async (req, res) => {
     };
     const nivelesPermitidos = SCOPE_NIVELES[scope] || SCOPE_NIVELES.internacional;
 
-    let torneosQuery = supabase
+    let torneosQuery = supabaseAdmin
       .from('torneos')
-      .select('id, sede_id, nivel_torneo, nombre')
+      .select('id,sede_id,nivel_torneo,nombre,plan_nations,fecha_inicio,horas_revelar_equipos,es_prueba')
       .eq('estado', 'finalizado')
       .in('nivel_torneo', nivelesPermitidos);
 
@@ -2477,10 +2598,11 @@ app.get('/api/rankings', async (req, res) => {
     if (errT) throw errT;
     if (!torneos?.length) return res.json([]);
 
-    const torneoIds = torneos.map(t => t.id);
+    const torneoIds = torneos.filter(t=>rankingTournamentEligible(t)&&isNationsPublicRevealed(t)).map(t => t.id);
+    if(!torneoIds.length)return res.json([]);
 
     // 2. Load tabla_puntos for those torneos
-    const { data: puntos, error: errP } = await supabase
+    const { data: puntos, error: errP } = await supabaseAdmin
       .from('tabla_puntos')
       .select('torneo_id, equipo_id, posicion, puntos')
       .in('torneo_id', torneoIds);
@@ -2489,14 +2611,14 @@ app.get('/api/rankings', async (req, res) => {
 
     // 3. Load equipos
     const equipoIds = [...new Set(puntos.map(p => p.equipo_id))];
-    const { data: equipos, error: errE } = await supabase
+    const { data: equipos, error: errE } = await supabaseAdmin
       .from('equipos')
-      .select('id, nombre, jugadores')
+      .select('id, torneo_id, nombre, jugadores,modalidad_plantel,participantes_ranking')
       .in('id', equipoIds);
     if (errE) throw errE;
 
     const equipoMap = {};
-    (equipos || []).forEach(e => { equipoMap[e.id] = e; });
+    (await projectVerifiedTournamentRankingTeams(supabaseAdmin, equipos || [])).forEach(e => { equipoMap[e.id] = e; });
 
     // 4. Aggregate per player (keyed by email when available, else by name)
     const playerMap = {};
@@ -2504,9 +2626,9 @@ app.get('/api/rankings', async (req, res) => {
     puntos.forEach(p => {
       const equipo = equipoMap[p.equipo_id];
       if (!equipo) return;
-      const jugadores = Array.isArray(equipo.jugadores) ? equipo.jugadores : [];
+      const jugadores = rankingPlayersForTeam(equipo);
 
-      if (jugadores.length === 0) {
+      if (jugadores.length === 0 && !isNationalRoster(equipo) && !equipo.registry_ranking_verified) {
         // Fallback: team-level entry when no individual player data
         const key = `equipo:${equipo.id}`;
         if (!playerMap[key]) {
@@ -2516,10 +2638,10 @@ app.get('/api/rankings', async (req, res) => {
         playerMap[key].torneos_count += 1;
       } else {
         jugadores.forEach(j => {
-          const key = j.email || j.nombre;
+          const key = rankingPlayerKey(equipo,j);
           if (!key) return;
           if (!playerMap[key]) {
-            playerMap[key] = { nombre: j.nombre || key, email: j.email || null, pais: null, foto_url: null, nivel: null, sede_id: null, equipo_nombre: equipo.nombre, puntos_total: 0, torneos_count: 0 };
+            playerMap[key] = { nombre: j.nombre || key, email: isNationalRoster(equipo)?null:(j.email || null), pais: j.pais??null, foto_url: null, nivel: null, sede_id: null, equipo_nombre: equipo.nombre, puntos_total: 0, torneos_count: 0 };
           }
           playerMap[key].puntos_total += p.puntos;
           playerMap[key].torneos_count += 1;
@@ -2530,13 +2652,13 @@ app.get('/api/rankings', async (req, res) => {
     // 5. Enrich with jugadores_perfil where emails are known
     const emails = Object.values(playerMap).map(p => p.email).filter(Boolean);
     if (emails.length > 0) {
-      const { data: perfiles } = await supabase
+      const { data: perfiles } = await supabaseAdmin
         .from('jugadores_perfil')
         .select('email, nombre, apellido, pais, foto_url, sede_id, nivel')
         .in('email', emails);
 
       (perfiles || []).forEach(perfil => {
-        const entry = playerMap[perfil.email];
+        const entry = playerMap[perfil.email] ?? Object.values(playerMap).find(p=>p.email===perfil.email);
         if (!entry) return;
         entry.foto_url = perfil.foto_url || null;
         entry.pais     = perfil.pais     || null;
@@ -2605,6 +2727,7 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       .from('torneos').select('*').eq('id', id).single();
     if (errTorneo) throw errTorneo;
 
+    if(torneo.plan_nations) return res.status(409).json({code:'NATIONS_ATOMIC_CLOSURE_REQUIRED',error:'Finaliza desde Nations Cup para conservar la siembra y las posiciones aprobadas.'});
     // Load equipos & partidos
     const [{ data: equipos, error: errEq }, { data: partidos, error: errPart }] = await Promise.all([
       supabase.from('equipos').select('*').eq('torneo_id', parseInt(id)),
@@ -2640,12 +2763,21 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       });
     }
 
-    const base = BASE_PUNTOS[torneo.nivel_torneo] ?? 10;
-    const puntosData = buildTablaPuntosFromRankingRows(rankingRows, {
-      torneoId: parseInt(id, 10),
-      basePoints: base,
-      posicionMult: POSICION_MULT,
-    });
+    // Already closed ledgers are immutable: a later global policy edit is not retroactive.
+    if(torneo.estado==='finalizado') {
+      const {data:saved,error:savedError}=await supabaseAdmin.from('tabla_puntos').select('torneo_id,equipo_id,posicion,puntos').eq('torneo_id',Number(id));
+      if(savedError)throw savedError;
+      if(!Array.isArray(saved)||saved.length!==equipos.length||new Set(saved.map(p=>Number(p.equipo_id))).size!==equipos.length||saved.some(p=>!equipos.some(e=>Number(e.id)===Number(p.equipo_id))))return res.status(409).json({code:'TORNEO_HISTORICAL_LEDGER_INCOMPLETE',error:'El cierre histórico no tiene una tabla completa confirmada. No se recalcularán sus puntos.'});
+      return res.json({torneo,clasificacion:saved,status:'idempotent',source:'historical_ledger'});
+    }
+    const pointsPolicy=await loadPointsPolicy(supabaseAdmin);
+    const puntosData = buildPointsRows(pointsPolicy,{torneoId:Number(id),nivel:torneo.nivel_torneo,rankingRows:rankingRows.map((row,index)=>({...row,posicion:index+1}))});
+
+    if (isNationalRoster(torneo)) {
+      const closed=await closeNationalTournament(supabaseAdmin,{torneo,equipos,puntosData,actorId:auth.user.id});
+      await Promise.all(collectUserIdsFromEquipos(closed.equipos).map(userId=>actualizarRango(supabaseAdmin,userId).catch(()=>{})));
+      return res.json({torneo:closed.torneo,clasificacion:puntosData,status:closed.status,participacion:'alineacion_convocada'});
+    }
 
     // Delete previous entries for this torneo (idempotent), then insert
     await supabase.from('tabla_puntos').delete().eq('torneo_id', parseInt(id));
@@ -2693,6 +2825,8 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
 
 app.get('/api/torneos/:id/tabla', async (req, res) => {
   try {
+    const eventContext=await assertNationsLegacyEventRead(req,req.params.id,{roster:false});
+    if(rejectLegacyNationsStandings(res,eventContext))return;
     const torneoId = parseInt(req.params.id, 10);
     if (!Number.isFinite(torneoId)) {
       return res.status(400).json({ ok: false, error: 'ID de torneo inválido' });
@@ -2756,6 +2890,7 @@ app.get('/api/torneos/:id/tabla', async (req, res) => {
 
 app.get('/api/torneos/:id/tabla-puntos', async (req, res) => {
   try {
+    await assertNationsLegacyEventRead(req,req.params.id,{roster:false});
     const torneoId = Number(req.params.id);
 
     if (!Number.isFinite(torneoId)) {
@@ -2878,6 +3013,7 @@ app.post('/api/torneos/:torneo_id/jugadores', async (req, res) => {
 
 app.get('/api/torneos/:torneo_id/jugadores', async (req, res) => {
   try {
+    await assertNationsLegacyEventRead(req,req.params.torneo_id,{roster:true});
     const { torneo_id } = req.params;
 
     const { data, error } = await supabaseAdmin
@@ -2901,6 +3037,11 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
     const tid = parseInt(torneo_id, 10);
+    const eventRead = await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',tid).maybeSingle();
+    if(eventRead.error)throw eventRead.error;
+    const audience=eventRead.data?.plan_nations?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
+    const enrollmentAdmin=audience?audience.admin:mayReadTournamentEnrollment(await qaCatalogAudience(req),eventRead.data);
+    if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
 
     const [
       { data: equipos, error: errE },
@@ -2940,9 +3081,9 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     });
 
     const result = (equipos || []).map((eq) =>
-      mapEquipoTorneoPublicRow(eq, grupoMap[eq.id] || null, posicionMap[eq.id] ?? null),
+      mapTournamentTeamReadRow(eq,{grupo:grupoMap[eq.id]||null,posicion:posicionMap[eq.id]??null,admin:enrollmentAdmin}),
     );
-    res.json(result);
+    res.json(audience&&!audience.admin?result.map(eq=>audience.captainIds.includes(Number(eq.id))?eq:{id:eq.id,nombre:eq.nombre,grupo:eq.grupo,posicion:eq.posicion}).filter(eq=>audience.revealed||audience.captainIds.includes(Number(eq.id))):result);
   } catch (err) {
     sendHttpError(res, err);
   }
@@ -3033,6 +3174,7 @@ mountJugadorInvitacionesEquipoRoute(app, { supabaseAdmin, getAuthenticatedUser }
 // ===== HUB (action card images — public GET /api/hub/imagenes) =====
 app.use('/api/hub', createHubRouter({ supabaseAdmin }));
 console.log('Hub router registered at /api/hub (GET /api/hub/imagenes)');
+app.use('/api/admin/content/workspace', createContentWorkspaceRouter({supabaseAdmin,pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser}));
 app.use('/api/admin/content', createContentAdminRouter({
   supabaseAdmin,
   getAuthenticatedUser,
@@ -3078,7 +3220,10 @@ app.post('/api/notificaciones/zona-interes', async (req, res) => {
 app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
-
+    const eventRead=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneo_id)).maybeSingle();
+    if(eventRead.error)throw eventRead.error;
+    const audience=eventRead.data?.plan_nations?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
+    if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.memberIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
     const { data, error } = await supabaseAdmin
       .from('partidos')
       .select(PARTIDO_TORNEO_PUBLIC_SELECT)
@@ -3087,7 +3232,8 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
 
     if (error) throw error;
 
-    const partidos = data || [];
+    const partidos = (data || []).filter(m=>!audience||audience.admin||audience.revealed||[...audience.captainIds,...audience.memberIds].some(id=>[Number(m.equipo_a_id),Number(m.equipo_b_id)].includes(id)));
+    if(audience&&!audience.admin)return res.json(partidos.map(projectNationsMatch));
     const scoreboardMap = await resolveScoreboardsMapForTorneoPartidos(
       supabaseAdmin,
       partidos.map((partido) => partido.id),
@@ -3155,6 +3301,7 @@ app.get('/api/partidos/:partido_id/games', async (req, res) => {
   try {
     const { partido_id } = req.params;
 
+    const parent=await supabaseAdmin.from('partidos').select('torneo_id').eq('id',Number(partido_id)).maybeSingle();if(parent.error)throw parent.error;if(parent.data?.torneo_id)await assertNationsLegacyEventRead(req,parent.data.torneo_id);
     const { data, error } = await supabase
       .from('games')
       .select('*')
@@ -3182,56 +3329,7 @@ app.put('/api/games/:id', (req, res) => legacyWriteDisabled(res, 'PUT /api/games
 //   ('niveles', '{"club_no_oficial":10,"club_oficial":30,"nacional":100,"internacional":300,"mundial":1000}'),
 //   ('posiciones', '{"1":100,"2":60,"3":40,"4":25,"5":15,"6":10,"7":5,"8":5,"9":5,"10":5}');
 
-const CONFIG_DEFAULTS = {
-  niveles:      { club_no_oficial: 10, club_oficial: 30, nacional: 100, internacional: 300, mundial: 1000 },
-  posiciones:   { 1: 100, 2: 60, 3: 40, 4: 25, 5: 15, 6: 10, 7: 5, 8: 5, 9: 5, 10: 5 },
-  tipos_custom: [],
-};
-
-app.get('/api/config/puntos', async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('config_puntos').select('clave, valor');
-    if (error) throw error;
-    if (!data?.length) return res.json(CONFIG_DEFAULTS);
-    const result = { ...CONFIG_DEFAULTS };
-    data.forEach(row => { result[row.clave] = row.valor; });
-    res.json(result);
-  } catch (err) {
-    console.error('❌ Error GET /api/config/puntos:', err.message);
-    res.json(CONFIG_DEFAULTS); // always return usable defaults
-  }
-});
-
-app.put('/api/config/puntos', async (req, res) => {
-  try {
-    const auth = await requireAdminUser(req, res, {
-      getAuthenticatedUser,
-      fetchUserRoleRowForAuthUser,
-      legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
-    });
-    if (!auth) return;
-
-    if (auth.role.rol !== 'super_admin') {
-      return res.status(403).json({ error: 'No tenés permiso para modificar la configuración de puntos' });
-    }
-
-    const { niveles, posiciones, tipos_custom } = req.body;
-    const rows = [];
-    if (niveles)                    rows.push({ clave: 'niveles',      valor: niveles,      updated_at: new Date() });
-    if (posiciones)                 rows.push({ clave: 'posiciones',   valor: posiciones,   updated_at: new Date() });
-    if (tipos_custom !== undefined) rows.push({ clave: 'tipos_custom', valor: tipos_custom, updated_at: new Date() });
-    if (!rows.length) return res.status(400).json({ error: 'No data provided' });
-
-    const { error } = await supabase
-      .from('config_puntos')
-      .upsert(rows, { onConflict: 'clave' });
-    if (error) throw error;
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('❌ Error PUT /api/config/puntos:', err.message);
-    sendHttpError(res, err);
-  }
-});
+mountPointsConfigRoutes(app,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)});
 
 // POST /api/cancelar-reserva — Cancellation with optional credit (JWT + dueño o admin)
 app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {
@@ -3264,11 +3362,13 @@ app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {
 
     if (reserva.estado === 'cancelada') return res.status(409).json({ error: 'La reserva ya está cancelada' });
 
-    // Check if reservation is more than 24h away (Argentina UTC-3)
+    const sedeTimingQuery = supabaseAdmin.from('sedes').select('timezone');
+    const { data: sedeTiming, error: sedeTimingError } = reserva.sede_id != null
+      ? await sedeTimingQuery.eq('id', reserva.sede_id).maybeSingle()
+      : await sedeTimingQuery.eq('nombre', reserva.sede).maybeSingle();
+    if (sedeTimingError) throw sedeTimingError;
     const horaInicio = reservaHoraInicioFromRow(reserva);
-    const reservaDt = new Date(`${reserva.fecha}T${horaInicio}:00-03:00`);
-    const nowAR     = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
-    const horasHasta = (reservaDt - nowAR) / (1000 * 60 * 60);
+    const horasHasta = horasAnticipacionReserva(reserva, { timezone: sedeTiming?.timezone });
     const eligibleForCredit = horasHasta > 24;
 
     const reservaEmail = reserva.email
@@ -3276,11 +3376,15 @@ app.post('/api/cancelar-reserva', reservasWriteRateLimit, async (req, res) => {
       : String(user.email || '').trim().toLowerCase();
 
     // Mark as cancelled
-    const { error: updateErr } = await supabaseAdmin
+    const { data: cancelled, error: updateErr } = await supabaseAdmin
       .from('reservas')
       .update({ estado: 'cancelada' })
-      .eq('id', reservaId);
+      .eq('id', reservaId)
+      .or('estado.is.null,estado.neq.cancelada')
+      .select('id')
+      .maybeSingle();
     if (updateErr) throw updateErr;
+    if (!cancelled) return res.status(409).json({ error: 'La reserva ya está cancelada' });
 
     let padcoinsParticipacionReversal = null;
     try {
@@ -3544,9 +3648,6 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
         error: 'Configuración del servidor incompleta (SUPABASE_SERVICE_ROLE_KEY). Contactá soporte.',
       });
     }
-    if (!RESERVA_RELEASE_TOKEN_SECRET) {
-      return res.status(503).json({ error: 'Liberación segura de reservas no configurada' });
-    }
 
     const {
       titulo,
@@ -3574,6 +3675,7 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
     let quote;
     try {
       quote = await quoteReservaPrice(db, {
+        priceContractVersion: req.body?.price_confirmation_strict === true ? 2 : 1,
         sedeId: resolvedSedeId,
         deporte: quoteInput.deporte ?? reservaData?.deporte ?? 'padbol',
         duracionMinutos: quoteInput.duracion_minutos ?? reservaData?.duracion_minutos ?? 90,
@@ -3590,13 +3692,59 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
     }
 
     try {
-      assertClientPrecioMatchesQuote(precio ?? reservaData?.precio ?? req.body?.pricing?.total, quote.total);
+      assertClientPrecioMatchesQuote(precio ?? reservaData?.precio ?? req.body?.pricing?.total, quote.total, undefined, { strict: req.body?.price_confirmation_strict === true });
     } catch (priceErr) {
       return res.status(priceErr.status || 400).json({
         error: priceErr.message,
         serverTotal: priceErr.serverTotal ?? quote.total,
         clientPrecio: priceErr.clientPrecio ?? precio,
       });
+    }
+
+    // A free slot never requires provider credentials or creates a payment.
+    if (quote.total === 0) {
+      const free = await confirmReservaGratuita({ db, pgPool, body: req.body, user, quote });
+      await registerMembresiaUsoIncluidaIfNeeded({ quote, user, reservaId: free.reserva_id, sedeId: resolvedSedeId });
+      return res.status(201).json(free);
+    }
+
+    // Payment mode is owned by the venue. A manual/on-site venue must never create
+    // a Mercado Pago preference or redirect the player to an external checkout.
+    const { rows: sedePaymentRows } = await pgPool.query(
+      'SELECT metodo_pago, pago_manual_instrucciones FROM sedes WHERE id = $1 LIMIT 1',
+      [resolvedSedeId],
+    );
+    const sedePayment = sedePaymentRows[0] || {};
+    const metodoPago = String(sedePayment.metodo_pago || '').trim().toLowerCase();
+    const isManualPayment = ['manual', 'presencial', 'efectivo', 'pago_en_sede', 'pago en sede'].includes(metodoPago);
+    if (isManualPayment) {
+      try {
+        const pending = await ensureReservaPendienteParaMpPg(pgPool, req.body, {
+          authUser: user,
+          quote,
+          paymentProvider: 'manual',
+          initialEstado: 'pendiente_pago_manual',
+          initialPagoEstado: 'pendiente',
+          requirePaymentSchema: true,
+        });
+        await registerMembresiaUsoIncluidaIfNeeded({ quote, user, reservaId: pending.reserva_id, sedeId: resolvedSedeId });
+        return res.status(201).json({
+          reserva_id: pending.reserva_id,
+          estado: 'pendiente_pago_manual',
+          payment_provider: 'manual',
+          checkout_type: 'manual',
+          manual_payment: true,
+          instrucciones: String(sedePayment.pago_manual_instrucciones || '').trim() || 'El pago se realiza en la sede.',
+        });
+      } catch (manualErr) {
+        logCrearPreferenciaError('reserva_manual', manualErr, ctx);
+        return res.status(manualErr.status || 500).json({ error: manualErr.message || 'No se pudo registrar la reserva para pago en sede' });
+      }
+    }
+
+    assertOutboundDeliveryEnabled(runtime);
+    if (!RESERVA_RELEASE_TOKEN_SECRET) {
+      return res.status(503).json({ error: 'Liberación segura de reservas no configurada' });
     }
 
     let client = mpClient;
@@ -3706,6 +3854,8 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
     });
   } catch (err) {
     logCrearPreferenciaError('handler', err, ctx);
+    const bookingError = classifyReservaWriteError(err);
+    if (bookingError && !res.headersSent) return res.status(bookingError.status).json({ error: bookingError.error });
     if (!res.headersSent) {
       console.error('[MP ERROR DETALLADO]', summarizeError(err));
       res.status(Number.isFinite(Number(err?.status)) ? Number(err.status) : 500).json({
@@ -3794,6 +3944,8 @@ app.post('/api/crear-pago-stripe', paymentsRateLimit, async (req, res) => {
       assertClientPrecioMatchesQuote(
         precio ?? reservaData?.precio ?? req.body?.pricing?.total,
         quote.total,
+        undefined,
+        { strict: req.body?.price_confirmation_strict === true },
       );
     } catch (priceErr) {
       return res.status(priceErr.status || 400).json({
@@ -4264,14 +4416,15 @@ async function getRankingEntryForEmail(email) {
 
   const { data: torneos, error: errT } = await supabase
     .from('torneos')
-    .select('id, sede_id, nivel_torneo, nombre')
+    .select('id, sede_id, nivel_torneo, nombre, es_prueba')
     .eq('estado', 'finalizado')
     .in('nivel_torneo', nivelesPermitidos);
 
   if (errT) throw errT;
   if (!torneos?.length) return null;
 
-  const torneoIds = torneos.map((t) => t.id);
+  const torneoIds = torneos.filter(rankingTournamentEligible).map((t) => t.id);
+  if (!torneoIds.length) return null;
 
   const { data: puntos, error: errP } = await supabase
     .from('tabla_puntos')
@@ -4284,21 +4437,21 @@ async function getRankingEntryForEmail(email) {
   const equipoIds = [...new Set(puntos.map((p) => p.equipo_id))];
   const { data: equipos, error: errE } = await supabase
     .from('equipos')
-    .select('id, nombre, jugadores')
+    .select('id, torneo_id, nombre, jugadores,modalidad_plantel,participantes_ranking')
     .in('id', equipoIds);
 
   if (errE) throw errE;
 
   const equipoMap = {};
-  (equipos || []).forEach((e) => { equipoMap[e.id] = e; });
+  (await projectVerifiedTournamentRankingTeams(supabaseAdmin, equipos || [])).forEach((e) => { equipoMap[e.id] = e; });
 
   const playerMap = {};
   puntos.forEach((p) => {
     const equipo = equipoMap[p.equipo_id];
     if (!equipo) return;
-    const jugadores = Array.isArray(equipo.jugadores) ? equipo.jugadores : [];
+    const jugadores = rankingPlayersForTeam(equipo);
 
-    if (jugadores.length === 0) {
+    if (jugadores.length === 0 && !isNationalRoster(equipo) && !equipo.registry_ranking_verified) {
       const key = `equipo:${equipo.id}`;
       if (!playerMap[key]) {
         playerMap[key] = {
@@ -4315,7 +4468,7 @@ async function getRankingEntryForEmail(email) {
     }
 
     jugadores.forEach((j) => {
-      const key = j.email || j.nombre;
+      const key = rankingPlayerKey(equipo,j);
       if (!key) return;
       if (!playerMap[key]) {
         playerMap[key] = {
@@ -4339,7 +4492,7 @@ async function getRankingEntryForEmail(email) {
       .in('email', emails);
 
     (perfiles || []).forEach((perfil) => {
-      const entry = playerMap[perfil.email];
+      const entry = playerMap[perfil.email] ?? Object.values(playerMap).find(p=>p.email===perfil.email);
       if (!entry) return;
       entry.nombre = perfil.nombre || entry.nombre;
       entry.nivel = perfil.nivel || entry.nivel;

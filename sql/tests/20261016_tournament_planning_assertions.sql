@@ -1,0 +1,30 @@
+BEGIN;
+DO $qa$
+DECLARE actor uuid:='11111111-1111-4111-8111-111111111111';res jsonb;plan jsonb:='[{"torneo_id":901,"sede_id":8,"equipo_a_id":1,"equipo_b_id":4,"estado":"pendiente","ronda":1,"bracket_round":1,"bracket_position":1},{"torneo_id":901,"sede_id":8,"equipo_a_id":2,"equipo_b_id":3,"estado":"pendiente","ronda":1,"bracket_round":1,"bracket_position":2},{"torneo_id":901,"sede_id":8,"equipo_a_id":null,"equipo_b_id":null,"estado":"pendiente","ronda":2,"bracket_round":2,"bracket_position":1}]';m1 bigint;m2 bigint;final_id bigint;roster jsonb;
+BEGIN
+ BEGIN PERFORM planificar_fixture_torneo(901,'99999999-9999-4999-8999-999999999999',ARRAY[1,2,3,4]::bigint[],'manual',plan);RAISE EXCEPTION 'foreign scope accepted';EXCEPTION WHEN insufficient_privilege THEN NULL;END;
+ BEGIN PERFORM planificar_fixture_torneo(901,actor,ARRAY[1,2,3]::bigint[],'manual',plan);RAISE EXCEPTION 'stale roster accepted';EXCEPTION WHEN serialization_failure THEN NULL;END;
+ res:=planificar_fixture_torneo(901,actor,ARRAY[1,2,3,4]::bigint[],'manual',plan);
+ IF res->>'estado'<>'abierto' OR (SELECT estado FROM torneos WHERE id=901)<>'abierto' OR (SELECT count(*) FROM partidos WHERE torneo_id=901)<>3 OR (SELECT count(*) FROM partidos WHERE torneo_id=901 AND partido_siguiente_id IS NOT NULL)<>2 THEN RAISE EXCEPTION 'Planning/state/links invalid';END IF;
+ IF (SELECT origen FROM torneo_fixture_planes WHERE torneo_id=901)<>'manual' THEN RAISE EXCEPTION 'origin missing';END IF;
+ BEGIN PERFORM planificar_fixture_torneo(901,actor,ARRAY[1,2,3,4]::bigint[],'manual',plan);RAISE EXCEPTION 'existing fixture overwritten';EXCEPTION WHEN unique_violation THEN NULL;END;
+ BEGIN UPDATE partidos SET estado='finalizado' WHERE torneo_id=901;RAISE EXCEPTION 'score before explicit start accepted';EXCEPTION WHEN object_not_in_prerequisite_state THEN NULL;END;
+ SELECT id INTO m1 FROM partidos WHERE torneo_id=901 AND bracket_round=1 AND bracket_position=1;SELECT id INTO m2 FROM partidos WHERE torneo_id=901 AND bracket_round=1 AND bracket_position=2;SELECT id INTO final_id FROM partidos WHERE torneo_id=901 AND bracket_round=2;
+ res:=programar_partido_torneo(901,m1,actor,13,'2026-11-20T10:00:00Z',60);
+ IF res->>'cancha'<>'1' OR (SELECT fecha_hora FROM partidos WHERE id=m1)<>'2026-11-20 10:00:00'::timestamp THEN RAISE EXCEPTION 'Court number/UTC timestamp invalid';END IF;
+ BEGIN INSERT INTO reservas VALUES(99,8,'QA',1,'confirmada','2026-11-20','11:30',60);RAISE EXCEPTION 'reverse reservation overlap accepted';EXCEPTION WHEN unique_violation THEN NULL;END;
+ BEGIN INSERT INTO torneo_nations_programacion VALUES(999,999,13,'2026-11-20T10:30Z',60);RAISE EXCEPTION 'reverse Nations overlap accepted';EXCEPTION WHEN unique_violation THEN NULL;END;
+ BEGIN PERFORM programar_partido_torneo(901,m2,actor,13,'2026-11-20T10:30:00Z',60);RAISE EXCEPTION 'court overlap accepted';EXCEPTION WHEN unique_violation THEN NULL;END;
+ BEGIN PERFORM programar_partido_torneo(901,final_id,actor,14,'2026-11-20T10:30:00Z',60);RAISE EXCEPTION 'final before predecessor accepted';EXCEPTION WHEN unique_violation THEN NULL;END;
+ INSERT INTO reservas VALUES(1,8,'QA',2,'confirmada','2026-11-20','12:00',60);
+ BEGIN PERFORM programar_partido_torneo(901,m2,actor,14,'2026-11-20T11:00:00Z',60);RAISE EXCEPTION 'reservation overlap accepted';EXCEPTION WHEN unique_violation THEN NULL;END;
+ DELETE FROM reservas WHERE id=1;
+ PERFORM programar_partido_torneo(901,m2,actor,14,'2026-11-20T10:00:00Z',60);
+ PERFORM programar_partido_torneo(901,final_id,actor,13,'2026-11-20T11:00:00Z',60);
+ SELECT jsonb_agg(jsonb_build_object('id',id,'jugadores',jugadores,'inscripcion_estado',inscripcion_estado) ORDER BY id) INTO roster FROM equipos WHERE torneo_id=901;
+ BEGIN PERFORM iniciar_torneo_planificado(901,actor,'[]');RAISE EXCEPTION 'stale start accepted';EXCEPTION WHEN serialization_failure THEN NULL;END;
+ res:=iniciar_torneo_planificado(901,actor,roster);IF res->>'estado'<>'en_curso' THEN RAISE EXCEPTION 'explicit start failed';END IF;
+ BEGIN PERFORM iniciar_torneo_planificado(901,actor,roster);RAISE EXCEPTION 'repeat start accepted';EXCEPTION WHEN object_not_in_prerequisite_state THEN NULL;END;
+ RAISE NOTICE 'PASS: scope, roster, plan/open, links, audit, preserve existing, UTC/court, conflict, order, reservation, explicit start';
+END $qa$;
+ROLLBACK;

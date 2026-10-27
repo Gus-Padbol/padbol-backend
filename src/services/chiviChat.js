@@ -14,7 +14,7 @@ function buildUserPrompt(message, context = {}) {
   return `Contexto del usuario:\n${contextText}\n\nConsulta:\n${message}`;
 }
 
-export async function sendChiviChatMessage({ message, userId, context = {} }) {
+export async function sendChiviChatMessage({ message, userId, context = {}, systemPrompt = CHIVI_SYSTEM_PROMPT, maxTokens = 512 }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error('ANTHROPIC_API_KEY no configurada');
@@ -34,8 +34,8 @@ export async function sendChiviChatMessage({ message, userId, context = {} }) {
     },
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
-      max_tokens: 512,
-      system: CHIVI_SYSTEM_PROMPT,
+      max_tokens: Math.max(64, Math.min(512, Number(maxTokens) || 512)),
+      system: String(systemPrompt || CHIVI_SYSTEM_PROMPT),
       messages: [
         {
           role: 'user',

@@ -2,10 +2,93 @@ import express from 'express';
 import { pushSendRateLimit, pushTokensRateLimit } from '../lib/rateLimit.js';
 import { requireAdminOrInternalSecret } from '../lib/authAccess.js';
 import { sendPushToTokens } from '../utils/push.js';
+import { createNotificacion } from '../utils/notificaciones.js';
 
 const ADMIN_PUSH_ROLES = new Set(['super_admin', 'admin_nacional', 'admin_club']);
 const ADMIN_PUSH_WEEKLY_QUOTA = Math.max(1, Number.parseInt(process.env.ADMIN_PUSH_WEEKLY_QUOTA || '10', 10) || 10);
 const ADMIN_PUSH_HISTORY_TABLE = 'admin_push_notifications';
+const PUSH_PREFERENCES_TABLE = 'push_notification_preferences';
+
+function normalizePushPreferences(row = {}) {
+  return {
+    transactionalEnabled: row?.transactional_enabled !== false,
+    marketingEnabled: row?.marketing_enabled === true,
+    updatedAt: row?.updated_at ?? null,
+  };
+}
+
+function buildPushPreferencesRow(current = {}, patch = {}) {
+  const next = normalizePushPreferences(current);
+  if (typeof patch?.transactionalEnabled === 'boolean') {
+    next.transactionalEnabled = patch.transactionalEnabled;
+  }
+  if (typeof patch?.marketingEnabled === 'boolean') {
+    next.marketingEnabled = patch.marketingEnabled;
+  }
+  return {
+    transactional_enabled: next.transactionalEnabled,
+    marketing_enabled: next.marketingEnabled,
+  };
+}
+
+function buildAdminPushData(segmentType) {
+  return {
+    type: 'admin_message',
+    route: 'Notificaciones',
+    segment: String(segmentType || ''),
+  };
+}
+
+function normalizeAdminPushDestination(raw = {}) {
+  const type = String(raw?.type || 'inbox').trim().toLowerCase();
+  if (type === 'inbox') return { type, route: 'Notificaciones', params: {} };
+  if (type === 'reserva') {
+    const sedeId = Number(raw?.sedeId ?? raw?.sede_id);
+    if (!Number.isFinite(sedeId) || sedeId <= 0) return null;
+    return {
+      type,
+      route: 'Reserva',
+      params: { sedeId, deporte: String(raw?.deporte || 'padbol').trim().toLowerCase() || 'padbol' },
+    };
+  }
+  if (type === 'torneo') {
+    const torneoId = Number(raw?.torneoId ?? raw?.torneo_id);
+    if (!Number.isFinite(torneoId) || torneoId <= 0) return null;
+    return { type, route: 'TorneoDetalle', params: { torneoId } };
+  }
+  if (type === 'external') {
+    const url = String(raw?.url || '').trim();
+    if (!/^https:\/\//i.test(url) || url.length > 500) return null;
+    return { type, route: 'ExternalUrl', params: { url }, url };
+  }
+  return null;
+}
+
+function buildAdminPushNavigationData(segmentType, destination) {
+  return {
+    type: 'admin_message',
+    route: destination.route,
+    params: destination.params,
+    segment: String(segmentType || ''),
+  };
+}
+
+function buildAdminInboxNotification(destination) {
+  if (destination.type === 'torneo') {
+    return { tipo: 'torneo', data: { torneo_id: destination.params.torneoId }, link: null };
+  }
+  if (destination.type === 'reserva') {
+    return {
+      tipo: 'admin_message',
+      data: { action: 'reserva_sede', sede_id: destination.params.sedeId, deporte: destination.params.deporte },
+      link: null,
+    };
+  }
+  if (destination.type === 'external') {
+    return { tipo: 'admin_message', data: { action: 'open_url' }, link: destination.url };
+  }
+  return { tipo: 'admin_message', data: {}, link: null };
+}
 
 function startOfCurrentWeekIso(now = new Date()) {
   const date = new Date(now);
@@ -31,7 +114,8 @@ function normalizeAdminPushSegment(raw = {}) {
 
 function isMissingAdminPushTable(error) {
   return error?.code === '42P01'
-    || String(error?.message || '').toLowerCase().includes(ADMIN_PUSH_HISTORY_TABLE);
+    || (error?.code === 'PGRST205'
+      && String(error?.message || '').toLowerCase().includes(ADMIN_PUSH_HISTORY_TABLE));
 }
 
 async function requirePushAdmin(req, res, {
@@ -144,13 +228,21 @@ async function fetchTokensForProfiles(supabaseAdmin, profiles) {
 }
 
 async function readAdminPushQuota(supabaseAdmin, auth) {
-  const targetedUnlimited = auth.role === 'super_admin';
+  const unlimited = auth.role === 'super_admin';
+  if (unlimited) {
+    return {
+      limit: null,
+      used: null,
+      remaining: null,
+      unlimited: true,
+      unlimitedTargeted: true,
+    };
+  }
   let query = supabaseAdmin
     .from(ADMIN_PUSH_HISTORY_TABLE)
     .select('id', { count: 'exact', head: true })
     .eq('admin_user_id', auth.user.id)
     .gte('created_at', startOfCurrentWeekIso());
-  if (targetedUnlimited) query = query.neq('segment_type', 'jugador');
   const { count, error } = await query;
   if (error) throw error;
   const used = Math.max(0, Number(count) || 0);
@@ -158,13 +250,21 @@ async function readAdminPushQuota(supabaseAdmin, auth) {
     limit: ADMIN_PUSH_WEEKLY_QUOTA,
     used,
     remaining: Math.max(0, ADMIN_PUSH_WEEKLY_QUOTA - used),
-    unlimitedTargeted: targetedUnlimited,
+    unlimited: false,
+    unlimitedTargeted: false,
   };
 }
 
 export {
   assertSegmentAllowed,
+  buildAdminPushData,
+  buildAdminPushNavigationData,
+  buildAdminInboxNotification,
+  buildPushPreferencesRow,
   normalizeAdminPushSegment,
+  normalizeAdminPushDestination,
+  normalizePushPreferences,
+  readAdminPushQuota,
   startOfCurrentWeekIso,
 };
 
@@ -175,6 +275,63 @@ export function mountPushRoutes(app, {
   legacySuperAdminEmails = [],
 }) {
   const router = express.Router();
+
+  router.get('/push-preferences', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+      }
+      const { data, error } = await supabaseAdmin
+        .from(PUSH_PREFERENCES_TABLE)
+        .select('transactional_enabled, marketing_enabled, updated_at')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (error) throw error;
+      return res.json(normalizePushPreferences(data));
+    } catch (error) {
+      console.error('❌ GET /api/push-preferences:', error.message);
+      return res.status(500).json({ error: 'No se pudieron cargar las preferencias de notificaciones' });
+    }
+  });
+
+  router.patch('/push-preferences', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) {
+        return res.status(status ?? 401).json({ error: authError ?? 'No autorizado' });
+      }
+      const hasTransactional = typeof req.body?.transactionalEnabled === 'boolean';
+      const hasMarketing = typeof req.body?.marketingEnabled === 'boolean';
+      if (!hasTransactional && !hasMarketing) {
+        return res.status(400).json({ error: 'Preferencias inválidas' });
+      }
+
+      const { data: current, error: readError } = await supabaseAdmin
+        .from(PUSH_PREFERENCES_TABLE)
+        .select('transactional_enabled, marketing_enabled, updated_at')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (readError) throw readError;
+
+      const now = new Date().toISOString();
+      const row = {
+        user_id: user.id,
+        ...buildPushPreferencesRow(current, req.body),
+        updated_at: now,
+      };
+      const { data, error } = await supabaseAdmin
+        .from(PUSH_PREFERENCES_TABLE)
+        .upsert(row, { onConflict: 'user_id' })
+        .select('transactional_enabled, marketing_enabled, updated_at')
+        .single();
+      if (error) throw error;
+      return res.json(normalizePushPreferences(data));
+    } catch (error) {
+      console.error('❌ PATCH /api/push-preferences:', error.message);
+      return res.status(500).json({ error: 'No se pudieron guardar las preferencias de notificaciones' });
+    }
+  });
 
   router.post('/push-tokens', pushTokensRateLimit, async (req, res) => {
     try {
@@ -309,8 +466,10 @@ export function mountPushRoutes(app, {
       const auth = await requirePushAdmin(req, res, adminDeps);
       if (!auth) return;
       const segment = normalizeAdminPushSegment(req.body?.segment);
+      const destination = normalizeAdminPushDestination(req.body?.destination);
       const segmentError = assertSegmentAllowed(auth, segment);
       if (segmentError) return res.status(400).json({ error: segmentError });
+      if (!destination) return res.status(400).json({ error: 'Destino inválido' });
       const profiles = await fetchProfilesForSegment(supabaseAdmin, auth, segment);
       const tokens = await fetchTokensForProfiles(supabaseAdmin, profiles);
       return res.json({ recipients: profiles.length, withPushToken: tokens.length });
@@ -360,22 +519,31 @@ export function mountPushRoutes(app, {
       const title = String(req.body?.title || '').trim().slice(0, 50);
       const body = String(req.body?.body || '').trim().slice(0, 150);
       const segment = normalizeAdminPushSegment(req.body?.segment);
+      const destination = normalizeAdminPushDestination(req.body?.destination);
       const segmentError = assertSegmentAllowed(auth, segment);
       if (segmentError) return res.status(400).json({ error: segmentError });
+      if (!destination) return res.status(400).json({ error: 'Destino inválido' });
       if (!title || !body) return res.status(400).json({ error: 'Título y mensaje son obligatorios' });
 
       const quota = await readAdminPushQuota(supabaseAdmin, auth);
-      const consumesQuota = !(segment.type === 'jugador' && quota.unlimitedTargeted);
+      const consumesQuota = !quota.unlimited;
       if (consumesQuota && quota.remaining <= 0) {
         return res.status(429).json({ error: 'Se alcanzó el cupo semanal de notificaciones', quota });
       }
 
       const profiles = await fetchProfilesForSegment(supabaseAdmin, auth, segment);
       const tokens = await fetchTokensForProfiles(supabaseAdmin, profiles);
-      const result = await sendPushToTokens(tokens, title, body, {
-        type: 'admin_broadcast',
-        segment: segment.type,
-      });
+      const pushData = buildAdminPushNavigationData(segment.type, destination);
+      const inbox = buildAdminInboxNotification(destination);
+      await Promise.all((profiles || []).map((profile) => createNotificacion(supabaseAdmin, {
+        user_id: profile.user_id,
+        tipo: inbox.tipo,
+        titulo: title,
+        mensaje: body,
+        data: { ...inbox.data, source: 'admin_push', segment: segment.type },
+        link: inbox.link,
+      })));
+      const result = await sendPushToTokens(tokens, title, body, pushData);
       const sentCount = tokens.length;
       const { error: historyError } = await supabaseAdmin
         .from(ADMIN_PUSH_HISTORY_TABLE)

@@ -6,6 +6,7 @@ export const SEDE_PUBLIC_COLUMNS = [
   'ciudad',
   'provincia',
   'pais',
+  'timezone',
   'telefono',
   'email_contacto',
   'horario_apertura',

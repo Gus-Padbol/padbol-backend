@@ -1,3 +1,4 @@
+import { canReadQaCatalogRow, pickPlayerSedeSummary } from '../lib/qaCatalogVisibility.js';
 import { normalizeSedeAmenities } from '../utils/sedeAmenities.js';
 import { enrichSedesWithCourtCatalog } from '../lib/sedeCourtCatalog.js';
 import {
@@ -121,6 +122,7 @@ async function fetchHubHeroImage(supabaseAdmin, deporte = 'padbol') {
 }
 
 export function mountSedesProfileRoutes(app, {
+  qaCatalogAudience = async () => null,
   supabase,
   supabaseAdmin,
   getAuthenticatedUser,
@@ -146,12 +148,12 @@ export function mountSedesProfileRoutes(app, {
 
       const { data: sede, error } = await supabase
         .from('sedes')
-        .select(SEDE_PERFIL_SELECT)
+        .select(`${SEDE_PERFIL_SELECT},es_prueba`)
         .eq('id', sedeId)
         .maybeSingle();
 
       if (error) throw error;
-      if (!sede) {
+      if (!sede || !canReadQaCatalogRow(sede, await qaCatalogAudience(req))) {
         return res.status(404).json({ error: 'Sede no encontrada' });
       }
 
@@ -171,7 +173,7 @@ export function mountSedesProfileRoutes(app, {
 
       res.json({
         sede: {
-          ...pickPublicSedeRow(sedeEnriched),
+          ...pickPlayerSedeSummary(pickPublicSedeRow(sedeEnriched)),
           catalogo_canchas_configurado: sedeEnriched.catalogo_canchas_configurado,
           canchas_activas: sedeEnriched.canchas_activas,
           canchas_por_deporte: sedeEnriched.canchas_por_deporte,
@@ -213,7 +215,7 @@ export function mountSedesProfileRoutes(app, {
 
       let query = supabase
         .from('torneos')
-        .select(TORNEO_PUBLIC_SELECT)
+        .select(`${TORNEO_PUBLIC_SELECT},es_prueba`)
         .eq('sede_id', sedeId);
 
       if (upcoming) {
@@ -229,7 +231,8 @@ export function mountSedesProfileRoutes(app, {
       const { data, error } = await query;
       if (error) throw error;
 
-      res.json({ torneos: (data ?? []).map(mapTorneoPublicRow) });
+      const audience = await qaCatalogAudience(req);
+      res.json({ torneos: (data ?? []).filter(row => canReadQaCatalogRow(row, audience)).map(mapTorneoPublicRow) });
     } catch (err) {
       console.error('❌ Error GET /api/sedes/:id/torneos:', err.message);
       res.json({ torneos: [] });
