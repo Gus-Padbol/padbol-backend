@@ -28,12 +28,12 @@ create or replace function public.crm_support_executor_scope(p_case bigint,p_eve
 select exists(select 1 from crm_support_cases k join crm_conversations c on c.id=k.conversation_id join crm_inbound_events e on e.conversation_id=c.id and e.id::text=p_event
 where k.id=p_case and k.source_channel=c.source_channel and e.source_channel=c.source_channel and e.origin=c.origin and k.public_reference='PB-'||c.ticket_number
 and ((c.source_channel='email' and c.origin='support_email' and c.qualification_data#>>'{mailbox,address}'='support@padbol.com')
-or(c.source_channel='whatsapp' and exists(select 1 from crm_support_event_context x where x.event_id=e.id and x.conversation_id=c.id and x.origin=e.origin and x.tenant_id=k.tenant_id and x.channel_id=k.channel_id and x.confirmed and x.effective_topic='soporte'))));
+or(c.source_channel='whatsapp' and exists(select 1 from crm_support_event_context x where x.event_id=e.id and x.conversation_id=c.id and x.origin=e.origin and x.source_ref=e.source_ref and x.tenant_id=k.tenant_id and x.channel_id=k.channel_id and x.confirmed and x.effective_topic='soporte'))));
 $$;
 revoke all on function public.crm_support_executor_scope(bigint,text)from public,anon,authenticated,service_role;
 create or replace function public.crm_support_executor_claim(p_principal uuid,p_request uuid,p_worker uuid,p_seconds integer default 120)
 returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
-declare j public.crm_support_executor_jobs%rowtype;c public.crm_support_cases%rowtype; effect public.crm_support_lifecycle_effects%rowtype;r jsonb;body text;
+declare j public.crm_support_executor_jobs%rowtype;c public.crm_support_cases%rowtype; effect public.crm_support_lifecycle_effects%rowtype;r jsonb;body text;ack jsonb;effects jsonb;ack_status text;ack_outbox uuid;review_required boolean;
 begin
  if p_request is null or p_worker is null or (p_seconds is null or p_seconds not between 30 and 180) or not exists(select 1 from crm_support_executor_principals where id=p_principal and enabled and capability='mini_prepare') then raise exception 'SUPPORT_EXECUTOR_FORBIDDEN';end if;
  perform pg_advisory_xact_lock(hashtextextended(p_principal::text||p_request::text,0));
@@ -49,6 +49,35 @@ begin
   end if;
   return jsonb_build_object('job',null,'repeated',true,'state',j.state);
  end if;
+ -- Bridge durable intake to lifecycle: no fabricated ticket, actor or manual staging.
+ for c in select k.* from crm_support_cases k
+  where k.lifecycle_state='received' and crm_support_executor_scope(k.id,k.source_event_id::text)
+  and exists(select 1 from crm_support_preparation_jobs p where p.event_id=k.source_event_id and p.conversation_id=k.conversation_id and p.mode='preparation')
+  order by k.created_at,k.id for update of k skip locked limit 10 loop
+  effects:=jsonb_build_array(jsonb_build_object('type','technical_delegation','key','technical:'||c.source_event_id,'payload',jsonb_build_object('event_id',c.source_event_id,'conversation_id',c.conversation_id,'channel',c.source_channel,'case_reference',c.public_reference,'send_enabled',false,'instructions','Preparar una propuesta técnica; sin ejecución, aprobación, envío ni cierre automático.')));
+  review_required:=false;ack_outbox:=null;ack_status:=null;
+  if c.source_channel='whatsapp' then
+   if c.acknowledgement_policy is distinct from 'reuse_existing_menu_only' then raise exception 'SUPPORT_EXECUTOR_ACK_POLICY_INVALID';end if;
+   -- Optional transport tables are queried only when installed. Missing evidence fails closed.
+   if to_regclass('public.crm_whatsapp_menu_events') is not null and to_regclass('public.whatsapp_outbox') is not null then
+    execute $ack$select o.id,case when o.last_error='WHATSAPP_SEND_UNCERTAIN_NO_RETRY' then 'uncertain' else o.status end
+      from public.crm_support_event_context x join public.crm_whatsapp_menu_events m on m.inbound_message_id=x.menu_inbound_id and m.conversation_id=x.conversation_id and m.menu_revision=x.menu_revision
+      join public.whatsapp_outbox o on o.id=m.outbox_id and o.inbound_message_id=x.menu_inbound_id and o.tenant_id=x.tenant_id and o.channel_id=x.channel_id
+      where x.event_id=$1 and x.conversation_id=$2 and x.confirmed and x.effective_topic='soporte' and x.tenant_id=$3 and x.channel_id=$4
+      and o.text_body~('(^|[^[:alnum:]])'||$5||'([^[:alnum:]]|$)') limit 1$ack$
+      into ack_outbox,ack_status using c.source_event_id,c.conversation_id,c.tenant_id,c.channel_id,c.public_reference;
+   end if;
+   if ack_outbox is not null and ack_status in('pending','sending','sent','uncertain') then
+    ack:=jsonb_build_object('policy','reuse_existing_menu_only','reference',c.public_reference,'status',ack_status,'outboxId',ack_outbox);
+    review_required:=ack_status in('sending','uncertain');
+   else ack:=jsonb_build_object('policy','reuse_existing_menu_only','status','not_verified');review_required:=true;end if;
+  else
+   if c.acknowledgement_policy is distinct from 'prepare_only' then raise exception 'SUPPORT_EXECUTOR_ACK_POLICY_INVALID';end if;
+   ack:=jsonb_build_object('policy','prepare_only','status','draft_only');
+   effects:=effects||jsonb_build_array(jsonb_build_object('type','acknowledgement_draft','key','ack:'||c.source_event_id,'payload',jsonb_build_object('conversation_id',c.conversation_id,'channel',c.source_channel,'case_reference',c.public_reference,'send_enabled',false,'body','Recibimos tu consulta. Tu caso de soporte es el N.º '||c.public_reference||'. Vamos a revisarlo y te responderemos por este mismo medio.')));
+  end if;
+  r:=crm_support_apply_lifecycle(c.id,'executor-prepare:'||c.source_event_id,repeat('1',64),c.version,p_principal,'prepare','technical_pending',jsonb_build_object('source_event_id',c.source_event_id,'acknowledgement',ack,'delivery_review_required',review_required,'resolved',false,'actor_kind','service_principal'),effects);
+ end loop;
  insert into crm_support_executor_jobs(effect_id,case_id)
  select e.id,e.case_id from crm_support_lifecycle_effects e join crm_support_cases k on k.id=e.case_id
  where crm_support_executor_scope(k.id,coalesce(e.payload->>'event_id',k.source_event_id::text)) and e.effect_type='technical_delegation' and e.disposition='draft_only' and k.lifecycle_state in('technical_pending','technical_review')
