@@ -451,7 +451,7 @@ export function mountScoreboardRoutes(app, {
     });
   }
   installScoreboardWatchRoutes(app, {
-    db: supabaseAdmin, authenticate: getAuthenticatedUser,
+    db: supabaseAdmin, boardColumns: `${SCOREBOARD_PARTIDO_SELECT}, revision`, authenticate: getAuthenticatedUser,
     authorize: async (user, row) => assertCanControlScoreboard(await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), row.sede_id),
     present: row => enrichPartidoWithVenue(supabaseAdmin, row),
     publish: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin),

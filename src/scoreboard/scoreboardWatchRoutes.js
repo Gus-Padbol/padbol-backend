@@ -7,9 +7,9 @@ import { registrarPunto, deshacerPunto, cambiarSaque, iniciarTiebreak, startCron
 import { sendHttpError } from '../../lib/httpErrors.js';
 import { scoreboardControlWriteRateLimit } from '../../lib/rateLimit.js';
 
-export function installScoreboardWatchRoutes(app, { db, authenticate, authorize, present, publish, fetchHistory, assertHistory, afterMutation }) {
+export function installScoreboardWatchRoutes(app, { db, boardColumns, authenticate, authorize, present, publish, fetchHistory, assertHistory, afterMutation }) {
   async function board(id) {
-    const { data, error } = await db.from('scoreboard_partidos').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await db.from('scoreboard_partidos').select(boardColumns).eq('id', id).maybeSingle();
     if (error) throw error;
     if (!data) throw Object.assign(new Error('Partido no encontrado'), { status:404 });
     return stripSensitiveControlFields(data);
@@ -38,7 +38,8 @@ export function installScoreboardWatchRoutes(app, { db, authenticate, authorize,
     const s=await claimWatchSession(db,req.body?.pairing_code,req.body?.device_id);
     return res.json({control_token:s.control_token,scoreboard_id:s.scoreboard_id,revision:Number(s.revision),expires_at:s.expires_at});
   }));
-  const response=async(result)=>({accepted:true,duplicate:result.deduplicated===true,revision:Number(result.revision),scoreboard:await present(stripSensitiveControlFields(result.scoreboard)),server_time:new Date().toISOString()});
+  const publicBoard = row => Object.fromEntries(boardColumns.split(',').map(key=>key.trim()).filter(key=>Object.hasOwn(row,key)).map(key=>[key,row[key]]));
+  const response=async(result)=>({accepted:true,duplicate:result.deduplicated===true,revision:Number(result.revision),scoreboard:await present(publicBoard(result.scoreboard)),server_time:new Date().toISOString()});
   app.get('/api/scoreboard/watch/v1/control/:token',wrap(async(req,res)=>{
     const s=await resolveWatchSession(db,req.params.token,req.query.device_id);
     const row=await board(s.scoreboard_id);
