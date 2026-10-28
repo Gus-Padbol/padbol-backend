@@ -4,7 +4,7 @@ The previous CRM reply service rejected every non-WhatsApp conversation before l
 
 The implemented provider is Resend, already used by the backend for invitations. SMTP is not implemented and therefore is not reported as enabled merely because `SMTP_URL` is present. The adapter has no default sender, recipient, credentials or automated sweep. It uses the conversation's stored contact email and the persisted reply ID as the provider idempotency key.
 
-Required operational configuration: `BACKEND_RUNTIME_MODE=production`, `OUTBOUND_DELIVERY_ENABLED=true`, `CRM_OUTBOUND_EMAIL_ENABLED=true`, `CRM_OUTBOUND_EMAIL_PROVIDER=resend`, `CRM_OUTBOUND_EMAIL_FROM` with an explicitly authorized and provider-verified sender, and `CRM_OUTBOUND_EMAIL_API_KEY` for that provider account. Those credentials and sender ownership must be checked before activation. No variables have been set or enabled by this patch.
+Required operational configuration: `BACKEND_RUNTIME_MODE=production`, `OUTBOUND_DELIVERY_ENABLED=true`, `CRM_OUTBOUND_EMAIL_ENABLED=true`, `CRM_OUTBOUND_EMAIL_PROVIDER=resend`, `CRM_OUTBOUND_EMAIL_FROM` with an explicitly authorized and provider-verified sender, `CRM_OUTBOUND_EMAIL_API_KEY` for that provider account, and `CRM_OUTBOUND_EMAIL_REPLY_TO` containing a single explicitly authorized receiving mailbox. The sender fails closed when that reply mailbox is missing or malformed. Those credentials and sender ownership must be checked before activation. No variables have been set or enabled by this patch.
 
 The patch preserves existing operator/audit permissions. Availability of a transport does not confer operator permissions on an audit-only superadmin or on another user. Existing authorized operators can reply once the transport is deliberately configured; broader role changes need their own authorization.
 
@@ -15,3 +15,20 @@ Tests use a fake transport and repository, proving configuration gates, authoriz
 Email replies require a UUID `requestId` in the reply POST. The frontend must retain it for retries of the same composition, and replace it after success or when composing another response. A deterministic UUID scoped to the conversation claims the existing `crm_replies` primary key atomically before contacting the provider. A replay of a sent request returns its prior result; a pending or cancelled request returns 409 without delivery. Reusing a reference with a different body or operator also returns 409. Separate compositions can contain identical text using different references. No schema migration is required for this claim.
 
 Email audit updates require persistence of `provider_message_id`; they do not fall back to dropping that identifier when the column is unavailable. WhatsApp's existing compatibility behavior is preserved.
+
+
+## Reply routing and operational verification
+
+The provider-verified `From` address does not prove that it can receive replies.
+Configure `CRM_OUTBOUND_EMAIL_REPLY_TO` only after confirming ownership, reception,
+and the intended mailbox workflow. It is sent as Resend's `reply_to` field and
+never inferred from a browser-supplied operator or conversation field. Existing
+messages already sent cannot be updated by changing this configuration.
+
+If replies must appear inside the CRM, an enabled, configured inbound adapter
+and verified conversation correlation are separate requirements. The current
+IMAP adapter imports each message as an independent institutional-email
+conversation; this sender change alone neither links it to the commercial lead
+nor grants commercial access. Do not describe provider acceptance (`sent`) as
+confirmed delivery or a completed two-way email conversation. No production
+mailbox, credentials, or flags are changed by this patch.
