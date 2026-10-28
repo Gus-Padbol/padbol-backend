@@ -1,3 +1,4 @@
+import { installScoreboardWatchRoutes } from '../src/scoreboard/scoreboardWatchRoutes.js';
 import { validatePartialCorrection } from '../src/scoreboard/scoreboardPartialCorrection.js';
 import { installScoreboardSuspensionRoutesCandidate } from '../src/scoreboard/scoreboardSuspensionRoutesCandidate.js';
 import {assertNationsScoreboardAudience,safeNationsScoreboardProjection} from '../lib/torneos/nationsPublicAccess.js';
@@ -449,6 +450,18 @@ export function mountScoreboardRoutes(app, {
       presentPartido: row => enrichPartidoWithVenue(supabaseAdmin, row),
     });
   }
+  installScoreboardWatchRoutes(app, {
+    db: supabaseAdmin, authenticate: getAuthenticatedUser,
+    authorize: async (user, row) => assertCanControlScoreboard(await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), row.sede_id),
+    present: row => enrichPartidoWithVenue(supabaseAdmin, row),
+    publish: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin),
+    fetchHistory: id => fetchUltimoHistorialPunto(supabaseAdmin, id),
+    assertHistory: assertLatestHistoryMatchesSnapshot,
+    afterMutation: async (row, before) => {
+      await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, row, before);
+      await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin, row, before);
+    },
+  });
   async function saveAndEmit(partido, expectedUpdatedAt, options) {
     const saved = await savePartido(supabaseAdmin, partido, expectedUpdatedAt, options);
     await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
