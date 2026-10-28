@@ -23,6 +23,7 @@ import { isNationalRoster, rankingPlayersForTeam, rankingPlayerKey, closeNationa
 import { mountNationalTeamRoutes } from './routes/nationalTeams.js';
 import { createCrmEmailSender } from './lib/crmEmailSender.js';
 import { CRM_EMAIL_PROVIDER_PATH, createCrmEmailReturn, registerCrmEmailProviderRoute } from './lib/crmEmailReturn.js';
+import { createCrmEmailReturnQueue } from './lib/crmEmailReturnQueue.js';
 import { createMetaDailyMonitor } from './lib/contentMetaMonitor.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
@@ -798,7 +799,7 @@ registerWhatsappContextRoute(app, { repository: createWhatsappContextRepository(
 const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin),
   whatsappAtomicConversationEnabled: resolveWhatsappProductionMenuFlags(process.env).reviewEnabled });
 const crmLeadAnalyzer = createCrmLeadAutoAnalyzer({ crmService });
-const crmEmailReturn = createCrmEmailReturn({pool:pgPool});
+const crmEmailReturn = createCrmEmailReturnQueue({pool:pgPool,emailReturn:createCrmEmailReturn({pool:pgPool})});
 registerCrmEmailProviderRoute(app,{emailReturn:crmEmailReturn});
 const crmEmailSender = routeCrmEmailSender({commercialSender:createCrmEmailSender({ runtime }),supportSender:createCrmSupportSender({ runtime })});
 const crmAdminService = createCrmAdminService({
@@ -847,7 +848,7 @@ registerCrmInboundRoutes(app, {
 });
 const crmImapInboxSync = createCrmImapInboxSync({
   crmService,
-  config: readCrmImapConfig(process.env),
+  config: {...readCrmImapConfig(process.env),readOnly:true,redactErrors:true},
   emailReturn: crmEmailReturn.enabled ? crmEmailReturn : null,
 });
 crmImapInboxSync.start();
