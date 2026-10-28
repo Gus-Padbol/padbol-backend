@@ -22,6 +22,9 @@ import { mountNationsCupRoutes } from './routes/nationsCup.js';
 import { isNationalRoster, rankingPlayersForTeam, rankingPlayerKey, closeNationalTournament } from './lib/nationalTeamLineup.js';
 import { mountNationalTeamRoutes } from './routes/nationalTeams.js';
 import { createCrmEmailSender } from './lib/crmEmailSender.js';
+import { CRM_EMAIL_PROVIDER_PATH, createCrmEmailReturn, registerCrmEmailProviderRoute } from './lib/crmEmailReturn.js';
+import { createCrmEmailReturnQueue } from './lib/crmEmailReturnQueue.js';
+import { createMetaDailyMonitor } from './lib/contentMetaMonitor.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
 import { createCrmWhatsappManualSender } from './lib/crmWhatsappManualSender.js';
@@ -342,7 +345,7 @@ app.use(RELAY_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (re
 app.use('/api/internal/whatsapp-context', express.raw({ type: 'application/json', limit: '16kb' }));
 app.use(express.json({
   verify: (req, _res, buf) => {
-    if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe') {
+    if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe' || req.path === CRM_EMAIL_PROVIDER_PATH) {
       req.rawBody = buf;
     }
   },
@@ -427,6 +430,9 @@ const pgPool = DATABASE_URL
       ssl: DATABASE_URL.includes('sslmode=disable') ? false : { rejectUnauthorized: false },
     })
   : null;
+// Inert unless the dedicated read authorization and explicit rollout flag exist.
+const metaDailyMonitor = createMetaDailyMonitor({pool:pgPool});
+metaDailyMonitor.start();
 
 async function verifyPgPoolConnection() {
   if (!pgPool) {
@@ -793,6 +799,8 @@ registerWhatsappContextRoute(app, { repository: createWhatsappContextRepository(
 const crmService = createCrmService({ repository: createSupabaseCrmRepository(supabaseAdmin),
   whatsappAtomicConversationEnabled: resolveWhatsappProductionMenuFlags(process.env).reviewEnabled });
 const crmLeadAnalyzer = createCrmLeadAutoAnalyzer({ crmService });
+const crmEmailReturn = createCrmEmailReturnQueue({pool:pgPool,emailReturn:createCrmEmailReturn({pool:pgPool})});
+registerCrmEmailProviderRoute(app,{emailReturn:crmEmailReturn});
 const crmEmailSender = routeCrmEmailSender({commercialSender:createCrmEmailSender({ runtime }),supportSender:createCrmSupportSender({ runtime })});
 const crmAdminService = createCrmAdminService({
   repository: createSupabaseCrmRepository(supabaseAdmin),
@@ -840,7 +848,8 @@ registerCrmInboundRoutes(app, {
 });
 const crmImapInboxSync = createCrmImapInboxSync({
   crmService,
-  config: readCrmImapConfig(process.env),
+  config: {...readCrmImapConfig(process.env),readOnly:true,redactErrors:true},
+  emailReturn: crmEmailReturn.enabled ? crmEmailReturn : null,
 });
 crmImapInboxSync.start();
 const crmSupportInboxSync = createCrmImapInboxSync({crmService,config:readCrmSupportImapConfig(process.env)});
