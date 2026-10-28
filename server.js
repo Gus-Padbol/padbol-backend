@@ -49,6 +49,7 @@ import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
 import { registerCrmInboundRoutes } from './lib/crmInboundRoutes.js';
 import { createCrmLeadAutoAnalyzer } from './lib/crmLeadAutoAnalysis.js';
 import { createCrmImapInboxSync, readCrmImapConfig } from './lib/crmImapInbound.js';
+import {createCommercialImapSenderReader} from './lib/crmCommercialImapScope.js';
 import {readCrmSupportImapConfig, createCrmSupportSender, routeCrmEmailSender, CRM_SUPPORT_OPERATORS} from './lib/crmSupportMailbox.js';
 import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
@@ -850,6 +851,7 @@ const crmImapInboxSync = createCrmImapInboxSync({
   crmService,
   config: {...readCrmImapConfig(process.env),readOnly:true,redactErrors:true},
   emailReturn: crmEmailReturn.enabled ? crmEmailReturn : null,
+  readCommercialSenders: createCommercialImapSenderReader({pool:pgPool}),
 });
 crmImapInboxSync.start();
 const crmSupportInboxSync = createCrmImapInboxSync({crmService,config:readCrmSupportImapConfig(process.env)});
