@@ -23,6 +23,7 @@ import { isNationalRoster, rankingPlayersForTeam, rankingPlayerKey, closeNationa
 import { mountNationalTeamRoutes } from './routes/nationalTeams.js';
 import { createCrmEmailSender } from './lib/crmEmailSender.js';
 import { CRM_EMAIL_PROVIDER_PATH, createCrmEmailReturn, registerCrmEmailProviderRoute } from './lib/crmEmailReturn.js';
+import { createMetaDailyMonitor } from './lib/contentMetaMonitor.js';
 import { createWhatsappMetaQaStartupCheck } from './lib/whatsappMetaStartupCheck.js';
 import { createWhatsappQaSandboxServiceFactory } from './lib/whatsappQaSandboxSend.js';
 import { createCrmWhatsappManualSender } from './lib/crmWhatsappManualSender.js';
@@ -428,6 +429,9 @@ const pgPool = DATABASE_URL
       ssl: DATABASE_URL.includes('sslmode=disable') ? false : { rejectUnauthorized: false },
     })
   : null;
+// Inert unless the dedicated read authorization and explicit rollout flag exist.
+const metaDailyMonitor = createMetaDailyMonitor({pool:pgPool});
+metaDailyMonitor.start();
 
 async function verifyPgPoolConnection() {
   if (!pgPool) {
