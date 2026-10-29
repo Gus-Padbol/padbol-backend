@@ -22,4 +22,13 @@ revoke all on function public.crm_commercial_form_is_allowed(uuid) from public,a
 grant execute on function public.crm_commercial_form_is_allowed(uuid) to service_role;
 
 
+with added as (
+ insert into public.crm_commercial_form_cases(conversation_id,assigned_user_id)
+ select id,'7225442b-defd-42c1-a5a2-b9c1c339fa69'::uuid from public.crm_conversations
+ where origin='web_form:Consulta Padbol · Otra consulta' and public.crm_commercial_form_is_allowed(id)
+ on conflict do nothing returning conversation_id
+)
+insert into public.crm_commercial_team_audit(actor_id,action,subject_id,details)
+select '8beebdbe-e1d7-4607-9bb0-9a7d64701408'::uuid,'form_registered',conversation_id,
+ jsonb_build_object('reason','Owner authorized Other consultation in commercial inbox','migration','20261029170000') from added;
 commit;
