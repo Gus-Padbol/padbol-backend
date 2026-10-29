@@ -5,6 +5,27 @@ export function mountFipaRankingClaimRoutes(app,{pgPool,getAuthenticatedUser,fet
  const store=createFipaClaimStore(pgPool);
  const run=fn=>async(req,res)=>{res.setHeader('Cache-Control','no-store');try{if(!pgPool)throw claimError('Vinculación temporalmente no disponible.',503);await fn(req,res);}catch(e){console.error('[fipa-claim]',e.code||e.status||'error');res.status(e.status||503).json({error:e.status?e.message:'No se pudo completar la vinculación. Intenta nuevamente.'});}};
  async function operator(req,res){const user=await requireAuthenticatedUser(req,res,getAuthenticatedUser);if(!user)return null;const role=await resolveAuthRoleForUser(user,{fetchUserRoleRowForAuthUser});if(role.rol!=='super_admin'&&!await store.operator(user.id)){res.status(403).json({error:'Se requiere habilitación de coordinación FIPA.'});return null;}return user;}
+ const withPlayers=async rows=>{const source=await loadSource();return rows.map(r=>({...r,jugador:source.players.find(p=>p.source_key===r.source_key)||null}));};
+ app.get('/api/fipa/solicitudes',run(async(req,res)=>{
+  const user=await requireAuthenticatedUser(req,res,getAuthenticatedUser);if(!user)return;
+  const rows=await store.requests(user.id);res.json({solicitudes:await withPlayers(rows.map(({email,reviewed_by,...r})=>r))});
+ }));
+ app.post('/api/fipa/solicitudes',run(async(req,res)=>{
+  const user=await requireAuthenticatedUser(req,res,getAuthenticatedUser);if(!user)return;
+  const source=await loadSource();const player=source.players.find(p=>p.source_key===req.body?.source_key);if(!player)throw claimError('Jugador no encontrado en el ranking oficial.',404);
+  const row=await store.request(player,user,req.body?.identidad_confirmada);res.status(201).json({solicitud:(await withPlayers([row]))[0]});
+ }));
+ app.get('/api/admin/fipa/solicitudes',run(async(req,res)=>{
+  if(!await operator(req,res))return;res.json({solicitudes:await withPlayers(await store.requests())});
+ }));
+ app.post('/api/admin/fipa/solicitudes/:id/resolver',run(async(req,res)=>{
+  const user=await operator(req,res);if(!user)return;
+  if(req.body?.decision==='approved'){
+   const rows=await store.requests();const row=rows.find(r=>r.id===req.params.id);const source=await loadSource();
+   if(!row||!source.players.some(p=>p.source_key===row.source_key))throw claimError('El perfil requiere revisión del ranking oficial.',409);
+  }
+  const row=await store.review(req.params.id,user,req.body?.decision,req.body?.nota);res.json({ok:true,solicitud:row});
+ }));
  app.get('/api/admin/fipa/jugadores',run(async(req,res)=>{
   if(!await operator(req,res))return;
   const [source,links,invitations]=await Promise.all([loadSource(),store.links(),store.invitations()]);
