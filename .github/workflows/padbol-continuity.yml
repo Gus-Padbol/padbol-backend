@@ -1,0 +1,35 @@
+name: Supervisión externa de Padbol
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      test_alert:
+        description: 'Simulacro explícito: generar una alarma sin afectar los servicios'
+        required: false
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: padbol-external-monitor
+  cancel-in-progress: false
+jobs:
+  availability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Comprobar detector y recuperación
+        run: python3 scripts/test-monitor-public-services.py
+      - name: Verificar servicios públicos
+        env:
+          TEST_ALERT: ${{ inputs.test_alert }}
+        run: |
+          if [ "$TEST_ALERT" = "true" ]; then
+            python3 scripts/monitor-public-services.py --test-alert
+          else
+            python3 scripts/monitor-public-services.py
+          fi
