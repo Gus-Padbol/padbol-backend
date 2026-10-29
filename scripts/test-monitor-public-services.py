@@ -1,4 +1,4 @@
-import importlib.util, unittest
+import importlib.util, unittest, io, contextlib
 from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('monitor','scripts/monitor-public-services.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class Response:
@@ -24,6 +24,7 @@ class Checks(unittest.TestCase):
             self.assertEqual(m.check(m.TARGETS[1],transient)['attempts'],2)
             self.assertFalse(m.check(m.TARGETS[2],lambda *a,**k:Response(b'{"status":"bad"}'))['healthy'])
     def test_alarm_test_has_nonzero_exit_without_network(self):
-        with patch('sys.argv',['monitor','--test-alert']),patch.object(m,'check',side_effect=AssertionError('unexpected network')):
+        with patch('sys.argv',['monitor','--test-alert']),patch.object(m,'check',side_effect=AssertionError('unexpected network')),contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(m.main(),1)
+            self.assertIn('::error::',output.getvalue())
 if __name__=='__main__':unittest.main()
