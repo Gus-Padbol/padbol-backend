@@ -98,7 +98,8 @@ import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountSurgeRoutes } from './routes/surge.js';
 import { mountCanchasRoutes } from './routes/canchas.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
-import { mountFipaOfficialRankingRoutes } from './routes/fipaOfficialRanking.js';
+import { mountFipaRankingClaimRoutes } from './routes/fipaRankingClaims.js';
+import { loadOfficialFipaSource, mountFipaOfficialRankingRoutes } from './routes/fipaOfficialRanking.js';
 import { mountResenasRoutes } from './routes/resenas.js';
 import {
   mountReputacionRoutes,
@@ -1308,7 +1309,8 @@ mountStripeWebhookRoutes(app, {
   sendWhatsAppConfirmation,
 });
 mountRankingsLeaderboardRoutes(app, { supabaseAdmin, getAuthenticatedUser });
-mountFipaOfficialRankingRoutes(app);
+const fipaClaimStore = mountFipaRankingClaimRoutes(app,{pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser});
+mountFipaOfficialRankingRoutes(app,{readLinks:()=>fipaClaimStore.links()});
 mountArenaRoutes(app, { supabaseAdmin, getAuthenticatedUser });
 mountComunidadRoutes(app, {
   supabaseAdmin,
@@ -5059,7 +5061,9 @@ jugadorRouter.get('/rankings', async (req, res) => {
       return res.status(status).json({ error: authError });
     }
 
-    const rankings = await fetchJugadorRankingsForUserId(user.id);
+    let rankings = await fetchJugadorRankingsForUserId(user.id);
+    const link=(await fipaClaimStore.links()).find(row=>row.user_id===user.id);
+    if(link){const source=await loadOfficialFipaSource();const player=source.players.find(row=>row.source_key===link.source_key);if(player){rankings=rankings.filter(row=>!(row.tipo==='fipa'&&row.deporte==='padbol'));rankings.push({tipo:'fipa',deporte:'padbol',categoria:'oficial',posicion:player.posicion,puntos:player.puntos,ranking_oficial:true});}}
     res.json({ rankings });
   } catch (err) {
     console.error('❌ Error GET /api/jugador/rankings:', err.message);
