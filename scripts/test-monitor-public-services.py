@@ -24,7 +24,7 @@ class Checks(unittest.TestCase):
             self.assertEqual(m.check(m.TARGETS[1],transient)['attempts'],2)
             self.assertFalse(m.check(m.TARGETS[2],lambda *a,**k:Response(b'{"status":"bad"}'))['healthy'])
     def test_alarm_test_has_nonzero_exit_without_network(self):
-        with patch('sys.argv',['monitor','--test-alert']),patch.object(m,'check',side_effect=AssertionError('unexpected network')),contextlib.redirect_stdout(io.StringIO()) as output:
+        with patch('sys.argv',['monitor','--test-alert']),patch.object(m,'check',side_effect=AssertionError('unexpected network')),patch.dict(m.os.environ,{'GITHUB_STEP_SUMMARY':''}),contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(m.main(),1)
             self.assertIn('::error::',output.getvalue())
 if __name__=='__main__':unittest.main()
