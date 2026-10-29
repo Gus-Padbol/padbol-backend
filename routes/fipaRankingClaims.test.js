@@ -10,3 +10,13 @@ test('token inválido y aceptación sin sesión no cambian identidad ni puntos',
  const response=await fetch(base+'/api/fipa/invitaciones/validar',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"token":"invalid"}'});assert.equal(response.status,404);assert.equal(response.headers.get('cache-control'),'no-store');
  assert.equal((await fetch(base+'/api/fipa/invitaciones/aceptar',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);assert.equal(queries.length,0);
 });});
+test('autoservicio requiere sesión y la aprobación exige rol de coordinación persistido',async()=>{
+ await server(null,async(base,queries)=>{
+  for(const [path,method] of [['/api/fipa/solicitudes','GET'],['/api/fipa/solicitudes','POST'],['/api/admin/fipa/solicitudes','GET'],['/api/admin/fipa/solicitudes/11111111-1111-4111-8111-111111111111/resolver','POST']])assert.equal((await fetch(base+path,{method,headers:{'Content-Type':'application/json'},...(method==='POST'?{body:'{}'}:{})})).status,401);
+  assert.equal(queries.length,0);
+ });
+ await server({id:'actor',email:'jpgarcia1710@gmail.com'},async(base)=>{
+  assert.equal((await fetch(base+'/api/admin/fipa/solicitudes')).status,403);
+  assert.equal((await fetch(base+'/api/admin/fipa/solicitudes/11111111-1111-4111-8111-111111111111/resolver',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision:'approved',nota:'Soy el propietario'})})).status,403);
+ });
+});
