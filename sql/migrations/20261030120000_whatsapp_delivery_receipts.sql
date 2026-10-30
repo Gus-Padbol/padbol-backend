@@ -38,4 +38,5 @@ language sql stable security definer set search_path=pg_catalog,public as $$
 $$;
 revoke all on function public.whatsapp_record_delivery_receipt(text,text,text,text,text,timestamptz,integer),public.crm_whatsapp_delivery_summary(uuid) from public,anon,authenticated;
 grant execute on function public.whatsapp_record_delivery_receipt(text,text,text,text,text,timestamptz,integer),public.crm_whatsapp_delivery_summary(uuid) to service_role;
+notify pgrst, 'reload schema';
 commit;
