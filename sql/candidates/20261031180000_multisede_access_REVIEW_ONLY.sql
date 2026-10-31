@@ -1,0 +1,10 @@
+-- REVIEW ONLY: every statement is commented out; NOT APPLIED.
+-- Must be approved and combined atomically with the schema proposal before COMMIT.
+-- Inspect owner/default privileges first; creation may inherit permissive default grants.
+-- No existing-table grants, role constraints, memberships, links or policy expansions.
+-- ALTER TABLE public.organizacion_sedes ENABLE ROW LEVEL SECURITY;
+-- REVOKE ALL ON public.organizacion_sedes FROM PUBLIC, anon, authenticated;
+-- REVOKE ALL ON public.organizacion_sedes FROM service_role;
+-- GRANT SELECT, INSERT, DELETE ON public.organizacion_sedes TO service_role;
+-- Backend uses service_role. New-table RLS and these exact grants need separate confirmation.
+-- No authenticated/anon direct policy is proposed. No UPDATE privilege is required by current callers.
