@@ -5,6 +5,7 @@
 -- after its conversation-scope checks; never exposed to browser database roles.
 begin;
 alter table public.crm_activities add column if not exists support_command_hash text;
+alter table public.crm_replies add column if not exists support_protocol smallint check (support_protocol=1);
 alter table public.crm_conversations
  add column if not exists support_protocol smallint check (support_protocol=1),
  add column if not exists support_last_command_id uuid;
@@ -12,8 +13,8 @@ create or replace function public.crm_register_activity_with_state(p_activity js
 returns jsonb language plpgsql security invoker set search_path = public as $$
 declare v_conversation public.crm_conversations%rowtype; v_activity public.crm_activities%rowtype; v_support boolean; v_id uuid; v_hash text;
 begin
-  if p_activity = '{"support_probe":"dg11-compatible-v1"}'::jsonb and p_state is null then
-    return jsonb_build_object('support_protocol',1,'legacy_compatible',true);
+  if p_activity = '{"support_probe":"dg11-compatible-v2"}'::jsonb and p_state is null then
+    return jsonb_build_object('support_protocol',1,'legacy_compatible',true,'reply_claim_protocol',1);
   end if;
   if p_state is null or p_state not in ('nuevo','en_atencion','derivado','cerrado') then
     raise exception 'Invalid conversation state' using errcode='22023';
@@ -76,6 +77,9 @@ declare c public.crm_conversations%rowtype;
 begin
  select * into c from public.crm_conversations where id=NEW.conversation_id for update;
  if c.support_protocol=1 then
+  if NEW.support_protocol is distinct from 1 and not exists(select 1 from public.crm_replies where id=NEW.id) then
+   raise exception 'SUPPORT_MANAGED_CASE_REQUIRES_CURRENT_CLIENT' using errcode='23514';
+  end if;
   if current_setting('transaction_isolation') <> 'read committed' then raise exception 'Support requires read committed' using errcode='P0001'; end if;
   if c.estado='cerrado' and not exists(select 1 from public.crm_replies where id=NEW.id) then
    raise exception 'Support already closed' using errcode='23514';

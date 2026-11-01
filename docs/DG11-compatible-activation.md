@@ -8,7 +8,7 @@ Casos existentes: support_protocol NULL. SQL nuevo + backend anterior o actual c
 
 El operador YA autorizado elige Tomar caso de soporte desde el caller nuevo. Solo esa asignación, con referencia estable y marcadores construidos por backend, adopta atómicamente el caso al protocolo1; guarda la actividad, su hash, estado y último comando. La pantalla no concede autoridad nueva. Notas/estado posteriores del protocolo1 requieren identidad estable. La sonda sin escrituras de la RPC existente impide que un gate habilitado antes del SQL ejecute accidentalmente el contrato antiguo. Se verifica además identidad/hash del resultado, sin fallback tras incertidumbre.
 
-Un caso adoptado no vuelve silenciosamente al contrato legacy. Las guardas bloquean antiguas pestañas/backends que intentan modificar su estado, insertar una nota sin identidad o reabrirlo; solicitan actualizar/revisar el caso. Las respuestas conservan el claim previo y se serializan con cierre. No se cambian lectura, historial, CRM comercial, recepción o permisos. La guardia de aislamiento READ COMMITTED se limita al protocolo nuevo; el contrato antiguo en casos no adoptados sigue intacto.
+Un caso adoptado no vuelve silenciosamente al contrato legacy. Las guardas bloquean antiguas pestañas/backends que intentan modificar su estado, insertar una nota sin identidad o reabrirlo; solicitan actualizar/revisar el caso. Las respuestas conservan el claim previo y se serializan con cierre; en casos adoptados, el backend compatible marca el claim y la base rechaza claims nuevos de backends antiguos antes del proveedor. Los replays de IDs existentes no vuelven a enviar. No se cambian lectura, historial, CRM comercial, recepción o permisos. La guardia de aislamiento READ COMMITTED se limita al protocolo nuevo; el contrato antiguo en casos no adoptados sigue intacto.
 
 ## Orden concreto propuesto, aún sin ejecutar
 
@@ -19,10 +19,12 @@ Un caso adoptado no vuelve silenciosamente al contrato legacy. Las guardas bloqu
 
 ## Recuperación
 
-Apagar CRM_SUPPORT_PROTOCOL_ENABLED no cambia permisos ni revierte el SQL. Pausa solo las nuevas mutaciones de casos ya adoptados; los no adoptados continúan legacy. Una orden pendiente conserva requestId y contenido/huella. Al reactivar versión compatible se recupera la misma orden, sin duplicar auditoría. Mantener lectura e historial; no borrar hash, último comando, propiedad del protocolo ni filas para destrabar un caso.
+Apagar CRM_SUPPORT_PROTOCOL_ENABLED no cambia permisos ni revierte el SQL. Pausa la admisión de nuevas asignaciones, notas, cambios de estado y envíos de casos ya adoptados; los no adoptados continúan legacy. Una orden pendiente conserva requestId y contenido/huella. Al reactivar versión compatible se recupera la misma orden, sin duplicar auditoría. Esto no cancela operaciones/proveedores ya aceptados antes de la pausa: conservar sus pending/comprobantes y dejar que su resultado se registre sin reenviarlo. Mantener lectura e historial; no borrar hash, último comando, propiedad del protocolo ni filas para destrabar un caso.
 
 No restaurar la RPC antigua ni quitar guardas con casos adoptados. Un rollback de aplicación anterior conserva los casos antiguos y las guardas de los adoptados; estos últimos quedan protegidos hasta volver a código compatible, no silenciosamente reenviados. No crear reintentos automáticos ni otro receptor.
 
 ## Evidencia local
 
 scripts/dg11SupportCompatibility.pg.mjs usa handlers y repositorio del backend eb9d32ec importados solo como fixtures de referencia, payload legacy real sin requestId y SQL nuevo; también ON temprano sin esquema, OFF actual, pestaña vieja con ON, adopción, pérdida/recuperación por gate, nota directa, handoff legacy, aislamiento y rollback DDL. scripts/dg11SupportHandlers.pg.mjs y dg11SupportCallerDelta.pg.mjs usan la propuesta compatible. Prueba React adicional comprueba nueva UI + capacidad ausente del backend anterior sin requestId. Proveedores/autoridad/diagnóstico falsos, PostgreSQL efímero y red externa bloqueada; no acreditan operación autónoma desplegada. Revisión independiente requerida; DG11 no cerrado por este documento.
+
+Revisión de pausa corregida: la propiedad del protocolo se marca también en claims nuevos de respuesta (columna nullable sin backfill ni ACL). GateOFF bloquea reply antes de claim/proveedor; SQL protege contra nuevos claims legacy en casos adoptados. La sonda v2 comprueba este contrato antes de adoptar.
