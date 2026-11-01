@@ -25,7 +25,7 @@ function pgTransport(){return {from(table){ident(table);let mode='select',payloa
  let rows=(await dbq(sql,args)).rows;
  if(selection.includes('contact:crm_contacts'))for(const row of rows)row.contact=(await dbq('SELECT * FROM crm_contacts WHERE id=$1',[row.contact_id])).rows[0];
  return {data:one?(rows[0]||null):rows,error:null};}catch(error){return {data:null,error};}}
- return q;},async rpc(name,p){assert.equal(name,'crm_register_activity_with_state');try{const data=(await dbq('SELECT crm_register_activity_with_state($1::jsonb,$2::text) result',[JSON.stringify(p.p_activity),p.p_state])).rows[0].result;if(loseRpc){loseRpc=false;throw Error('synthetic response lost AFTER commit');}return {data,error:null};}catch(error){return {data:null,error};}}};}
+ return q;},async rpc(name,p){assert.equal(name,'crm_register_activity_with_state');try{const data=(await dbq('SELECT crm_register_activity_with_state($1::jsonb,$2::text) result',[JSON.stringify(p.p_activity),p.p_state])).rows[0].result;if(loseRpc&&!p.p_activity?.support_probe){loseRpc=false;throw Error('synthetic response lost AFTER commit');}return {data,error:null};}catch(error){return {data:null,error};}}};}
 try{
  execFileSync(bin+'/initdb',['-D',dir+'/data','--username=postgres','--auth-local=trust','--auth-host=reject','--no-locale','--encoding=UTF8'],{stdio:'pipe',env:{...process.env,LC_ALL:'C',LANG:'C'}});
  execFileSync(bin+'/pg_ctl',['-D',dir+'/data','-l',dir+'/server.log','-o',`-F -h '' -k ${dir} -p5432`,'-w','start'],{stdio:'pipe'});running=true;
@@ -33,7 +33,7 @@ try{
  await pool.query('CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role BYPASSRLS;');
  for(const p of ['sql/20260915000000_crm_unified_inbox.sql','sql/20260916000000_crm_inbound_content.sql','sql/20260917000000_crm_operational_history_and_inbound_events.sql','sql/20261019160000_crm_activity_state_atomic.sql'])await pool.query(await readFile(root+'/'+p,'utf8'));
  await pool.query('ALTER TABLE crm_replies ADD COLUMN provider_message_id text;');
- if(!baseline)await pool.query(await readFile(root+'/sql/candidates/dg11_support_activity_atomic.sql','utf8'));
+ if(!baseline)await pool.query(await readFile(root+'/sql/candidates/dg11_support_activity_compatible.sql','utf8'));
  const repo=createSupabaseCrmRepository(pgTransport(),{commercialEmailTriageEnabled:false});const service=createCrmService({repository:repo});
  const config=readCrmSupportImapConfig({PADBOL_RUNTIME:'production',NODE_ENV:'production',CRM_SUPPORT_IMAP_ENABLED:'true',CRM_SUPPORT_IMAP_HOST:'imap.example.invalid',CRM_SUPPORT_IMAP_USER:'support@padbol.com',CRM_SUPPORT_IMAP_PASSWORD:'fixture-only',CRM_SUPPORT_IMAP_PORT:'993'});
  // Explicit fixture readiness: no production configuration/credentials are loaded.
@@ -78,14 +78,14 @@ try{
   const waitLock=async pid=>{for(let i=0;i<50;i++){if((await pool.query("SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1",[pid])).rows[0]?.wait_event_type==='Lock')return;await new Promise(r=>setTimeout(r,10));}assert.fail('Expected actual PostgreSQL lock wait');};
   const race=await fresh(30),one=await pool.connect(),two=await pool.connect();
   try{await one.query('BEGIN');await one.query('SET LOCAL ROLE service_role');
-   await one.query('SELECT crm_register_activity_with_state($1::jsonb,$2)',[JSON.stringify({id:uuid(32),conversation_id:race.id,contact_id:race.contact_id,activity_type:'note',summary:'Race close',outcome:'Recorded synthetic correction',author:users.operator.email}),'cerrado']);
+   await one.query('SELECT crm_register_activity_with_state($1::jsonb,$2)',[JSON.stringify({support_protocol:1,support_action:'activity',id:uuid(32),conversation_id:race.id,contact_id:race.contact_id,activity_type:'note',summary:'Race close',outcome:'Recorded synthetic correction',author:users.operator.email}),'cerrado']);
    const waiting=two.query("INSERT INTO crm_replies(id,conversation_id,body,operador,status) VALUES($1,$2,'New synthetic reply',$3,'pending')",[uuid(33),race.id,users.operator.email]).then(()=>({ok:true}),error=>({error}));await waitLock(two.processID);await one.query('COMMIT');assert.equal((await waiting).error?.code,'23514');check('close_versus_new_reply_parent_row_lock_rejects_late_insert');
   }finally{await one.query('ROLLBACK');one.release();two.release();}
   const race2=await fresh(40),three=await pool.connect();
   try{await three.query('BEGIN');await three.query("INSERT INTO crm_replies(id,conversation_id,body,operador,status) VALUES($1,$2,'Pending synthetic reply',$3,'pending')",[uuid(42),race2.id,users.operator.email]);
    const closing=call('activities',{...close,requestId:uuid(43)});let locked=false;for(let i=0;i<50;i++){const n=(await pool.query("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock' AND pid<>$1",[three.processID])).rows[0].count;if(Number(n)>0){locked=true;break;}await new Promise(r=>setTimeout(r,10));}assert.equal(locked,true);await three.query('COMMIT');assert.equal((await closing).status,409);assert.notEqual((await pool.query('SELECT estado FROM crm_conversations WHERE id=$1',[race2.id])).rows[0].estado,'cerrado');check('new_pending_reply_versus_close_waits_then_rejects_closure');
   }finally{await three.query('ROLLBACK');three.release();}
-  const rr=await pool.connect();try{await rr.query('BEGIN ISOLATION LEVEL REPEATABLE READ');await rr.query('SET LOCAL ROLE service_role');await assert.rejects(rr.query('SELECT crm_register_activity_with_state($1::jsonb,$2)',[JSON.stringify({id:uuid(44),conversation_id:race2.id,contact_id:race2.contact_id,activity_type:'note',summary:'RR',author:users.operator.email}),'en_atencion']),e=>e.code==='P0001');check('incompatible_isolation_fails_before_write');}finally{await rr.query('ROLLBACK');rr.release();}
+  const rr=await pool.connect();try{await rr.query('BEGIN ISOLATION LEVEL REPEATABLE READ');await rr.query('SET LOCAL ROLE service_role');await assert.rejects(rr.query('SELECT crm_register_activity_with_state($1::jsonb,$2)',[JSON.stringify({support_protocol:1,support_action:'activity',id:uuid(44),conversation_id:race2.id,contact_id:race2.contact_id,activity_type:'note',summary:'RR',author:users.operator.email}),'en_atencion']),e=>e.code==='P0001');check('incompatible_isolation_fails_before_write');}finally{await rr.query('ROLLBACK');rr.release();}
   a.id=id;
  }
  const privileges=(await pool.query("SELECT has_function_privilege('anon','crm_register_activity_with_state(jsonb,text)','execute') anon,has_function_privilege('authenticated','crm_register_activity_with_state(jsonb,text)','execute') authenticated,has_function_privilege('service_role','crm_register_activity_with_state(jsonb,text)','execute') service")).rows[0];assert.deepEqual(privileges,{anon:false,authenticated:false,service:true});check('existing_RPC_ACL_preserved_no_new_permission');

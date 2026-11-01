@@ -25,7 +25,7 @@ function pgTransport(){return {from(table){ident(table);let mode='select',payloa
  let rows=(await dbq(sql,args)).rows;
  if(selection.includes('contact:crm_contacts'))for(const row of rows)row.contact=(await dbq('SELECT * FROM crm_contacts WHERE id=$1',[row.contact_id])).rows[0];
  return {data:one?(rows[0]||null):rows,error:null};}catch(error){return {data:null,error};}}
- return q;},async rpc(name,p){assert.equal(name,'crm_register_activity_with_state');try{const data=(await dbq('SELECT crm_register_activity_with_state($1::jsonb,$2::text) result',[JSON.stringify(p.p_activity),p.p_state])).rows[0].result;if(loseRpc){loseRpc=false;throw Error('synthetic response lost AFTER commit');}return {data,error:null};}catch(error){return {data:null,error};}}};}
+ return q;},async rpc(name,p){assert.equal(name,'crm_register_activity_with_state');try{const data=(await dbq('SELECT crm_register_activity_with_state($1::jsonb,$2::text) result',[JSON.stringify(p.p_activity),p.p_state])).rows[0].result;if(loseRpc&&!p.p_activity?.support_probe){loseRpc=false;throw Error('synthetic response lost AFTER commit');}return {data,error:null};}catch(error){return {data:null,error};}}};}
 try{
  execFileSync(bin+'/initdb',['-D',dir+'/data','--username=postgres','--auth-local=trust','--auth-host=reject','--no-locale','--encoding=UTF8'],{stdio:'pipe',env:{...process.env,LC_ALL:'C',LANG:'C'}});
  execFileSync(bin+'/pg_ctl',['-D',dir+'/data','-l',dir+'/server.log','-o',`-F -h '' -k ${dir} -p5432`,'-w','start'],{stdio:'pipe'});running=true;
@@ -33,7 +33,7 @@ try{
  await pool.query('CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role BYPASSRLS;');
  for(const p of ['sql/20260915000000_crm_unified_inbox.sql','sql/20260916000000_crm_inbound_content.sql','sql/20260917000000_crm_operational_history_and_inbound_events.sql','sql/20261019160000_crm_activity_state_atomic.sql'])await pool.query(await readFile(root+'/'+p,'utf8'));
  await pool.query('ALTER TABLE crm_replies ADD COLUMN provider_message_id text;');
- if(!baseline)await pool.query(await readFile(root+'/sql/candidates/dg11_support_activity_atomic.sql','utf8'));
+ if(!baseline)await pool.query(await readFile(root+'/sql/candidates/dg11_support_activity_compatible.sql','utf8'));
  const repo=createSupabaseCrmRepository(pgTransport(),{commercialEmailTriageEnabled:false});const service=createCrmService({repository:repo});
  const config=readCrmSupportImapConfig({PADBOL_RUNTIME:'production',NODE_ENV:'production',CRM_SUPPORT_IMAP_ENABLED:'true',CRM_SUPPORT_IMAP_HOST:'imap.example.invalid',CRM_SUPPORT_IMAP_USER:'support@padbol.com',CRM_SUPPORT_IMAP_PASSWORD:'fixture-only',CRM_SUPPORT_IMAP_PORT:'993'});
  // Explicit fixture readiness: no production configuration/credentials are loaded.
