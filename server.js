@@ -815,6 +815,7 @@ const crmAdminService = createCrmAdminService({
   superAdminCanOperate: Boolean(whatsappQaCrmManualSenderFactory),
   commercialOperators: CRM_COMMERCIAL_OPERATORS,
   supportOperators: CRM_SUPPORT_OPERATORS,
+  supportActivityAtomicEnabled: process.env.CRM_SUPPORT_PROTOCOL_ENABLED === 'true',
   deskOperators: readCrmDeskOperators(process.env),
   whatsappMenuReviewEnabled: resolveWhatsappProductionMenuFlags(process.env).reviewEnabled,
 });
