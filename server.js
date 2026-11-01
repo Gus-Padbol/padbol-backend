@@ -1,3 +1,4 @@
+import {hasCheckoutQuote,checkoutQuoteParameters,assertOptionalCheckoutPriceQuote,checkoutQuoteRejection,createCheckoutPriceQuoteHandler} from './lib/checkoutPriceQuote.js';
 import { createWhatsappContextRepository, registerWhatsappContextRoute } from './lib/whatsappContextBinding.js';
 import { resolveWhatsappProductionMenuFlags } from './lib/whatsappProductionMenuFlagsCandidate.js';
 import { mountBookingCapabilities } from './routes/bookingCapabilities.js';
@@ -3625,6 +3626,9 @@ function logCrearPreferenciaSupabaseQuery(client, table, operation, params = {})
   });
 }
 
+// Read-only quote for opt-in clients; no reservation, notification or provider call.
+app.post('/api/reservas/cotizacion', paymentsRateLimit, createCheckoutPriceQuoteHandler({db:supabaseAdmin,pool:pgPool,getAuthenticatedUser}));
+
 // POST /api/crear-preferencia — Mercado Pago Checkout Pro
 app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
   crearPreferenciaSupabaseLogActive = true;
@@ -3675,22 +3679,13 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
 
     let quote;
     try {
-      quote = await quoteReservaPrice(db, {
-        priceContractVersion: req.body?.price_confirmation_strict === true ? 2 : 1,
-        sedeId: resolvedSedeId,
-        deporte: quoteInput.deporte ?? reservaData?.deporte ?? 'padbol',
-        duracionMinutos: quoteInput.duracion_minutos ?? reservaData?.duracion_minutos ?? 90,
-        fecha: quoteInput.fecha ?? reservaData?.fecha,
-        hora: quoteInput.hora ?? quoteInput.hora_inicio ?? reservaData?.hora,
-        extras: extras ?? reservaData?.extras ?? [],
-        moneda,
-        userId: user.id,
-        email: user.email,
-      });
+      quote = await quoteReservaPrice(db, checkoutQuoteParameters(req.body,user,{provider:'mercadopago',sedeId:resolvedSedeId,input:quoteInput,readOnly:hasCheckoutQuote(req.body)}));
     } catch (quoteErr) {
       logCrearPreferenciaError('quote', quoteErr, ctx);
       return res.status(quoteErr.status || 500).json({ error: quoteErr.message || 'No se pudo calcular el precio' });
     }
+
+    if(hasCheckoutQuote(req.body)){try{await assertOptionalCheckoutPriceQuote(pgPool,req.body,user,quote,'mercadopago',db);}catch(error){return res.status(error.status||503).json(checkoutQuoteRejection(error));}}
 
     try {
       assertClientPrecioMatchesQuote(precio ?? reservaData?.precio ?? req.body?.pricing?.total, quote.total, undefined, { strict: req.body?.price_confirmation_strict === true });
@@ -3926,20 +3921,12 @@ app.post('/api/crear-pago-stripe', paymentsRateLimit, async (req, res) => {
 
     let quote;
     try {
-      quote = await quoteReservaPrice(supabaseAdmin, {
-        sedeId: resolvedSedeId,
-        deporte: quoteInput.deporte ?? reservaData?.deporte ?? 'padbol',
-        duracionMinutos: quoteInput.duracion_minutos ?? reservaData?.duracion_minutos ?? 90,
-        fecha: quoteInput.fecha ?? reservaData?.fecha,
-        hora: quoteInput.hora ?? quoteInput.hora_inicio ?? reservaData?.hora,
-        extras: extras ?? reservaData?.extras ?? [],
-        moneda,
-        userId: user.id,
-        email: user.email,
-      });
+      quote = await quoteReservaPrice(supabaseAdmin, checkoutQuoteParameters(req.body,user,{provider:'stripe',sedeId:resolvedSedeId,input:quoteInput,readOnly:hasCheckoutQuote(req.body)}));
     } catch (quoteErr) {
       return res.status(quoteErr.status || 500).json({ error: quoteErr.message || 'No se pudo calcular el precio' });
     }
+
+    if(hasCheckoutQuote(req.body)){try{await assertOptionalCheckoutPriceQuote(pgPool,req.body,user,quote,'stripe',supabaseAdmin);}catch(error){return res.status(error.status||503).json(checkoutQuoteRejection(error));}}
 
     try {
       assertClientPrecioMatchesQuote(
