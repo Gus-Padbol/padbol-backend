@@ -1,3 +1,4 @@
+import {isScoreboardReadId} from '../lib/scoreboardReadId.js';
 import { installScoreboardWatchRoutes } from '../src/scoreboard/scoreboardWatchRoutes.js';
 import { validatePartialCorrection } from '../src/scoreboard/scoreboardPartialCorrection.js';
 import { installScoreboardSuspensionRoutesCandidate } from '../src/scoreboard/scoreboardSuspensionRoutesCandidate.js';
@@ -875,6 +876,9 @@ export function mountScoreboardRoutes(app, {
 
   app.get('/api/scoreboard/partidos/:id', async (req, res) => {
     try {
+      if (!isScoreboardReadId(req.params.id)) {
+        return res.status(400).json({ok:false,error:'Identificador de marcador inválido.'});
+      }
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       await assertNationsScoreboardRead(req,partido);
       return res.json({ ...(await enrichPartidoWithVenue(supabaseAdmin, partido)), scoreboard_suspension_candidate_enabled: scoreboardSuspensionCandidateEnabled === true, scoreboard_suspension_resume_enabled: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true, scoreboard_partial_correction_enabled: true });
