@@ -1238,6 +1238,7 @@ mountNextGenerationStatusRoutes(app, {
 });
 registerNextGenerationAdminRoutes(app, {
   supabaseAdmin,
+  pgPool,
   adminListScopeFromRequest: (req) => releaseServices.adminListScopeFromRequest(req),
 });
 mountAdminProfesoresRoutes(app, {
