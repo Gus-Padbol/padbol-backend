@@ -1,0 +1,15 @@
+# Next Generation: reasignación local y auditoría atómica
+
+Base local: origin/main 943cb04ad279cc971c6a433204d75250035f8ce8 (incluye PR57). No publicación ni comprobación de versión remota por este trabajo.
+
+Contrato conservado: PATCH /api/admin/next-generation/registrations/:id/assignment, campos sede_id/venueId, sesion_id/sessionId y categoria/category; respuesta {registration}. Superadmin global; admin_club solo su sede, comprobado otra vez bajo bloqueo. Estados existentes: borrador/confirmada/en_espera/cancelada; jornadas borrador/programada/activa/cerrada/cancelada (nextGenerationAdmin.js SESSION_STATES). La conversión CRM sigue siendo explícita y crea borradores; no se modifica.
+
+La reasignación y asignacion_actualizada se confirman juntas en una conexión pgPool existente, READ COMMITTED explícito y bloqueos de inscripción y sesiones. Jornada cerrada/cancelada rechazada; para conservar una confirmación, destino programada/activa y con cupo. Categoría comparada por etiqueta registrada, sin calcular edades ni traducir U13/U15/U17 a categorías actuales; una inscripción confirmada no se recategoriza mediante este traslado. Categoría del destino vacía/incompatible rechazada. Idéntica asignación es no-op sin otro evento, incluso si la jornada histórica cerró después. No migra históricos.
+
+Una inscripción en espera conserva ese estado y se ubica al final de la cola destino, compactando la cola origen dentro de la misma transacción. La reasignación no promueve automáticamente a otra inscripción: se conserva la política anterior del endpoint; cancelación/promoción existentes no se reemplazan. Cupo se cuenta por inscripción, igual que ng_confirm_registration existente.
+
+Fallo de evento o consulta: rollback completo, 503 controlado. COMMIT con respuesta incierta: 503 NG_ASSIGNMENT_OUTCOME_UNCERTAIN, sin compensación ni reintento automático. Consultar overview canónico, comparar asignación y evento antes de resolver; repetir exactamente una asignación ya efectiva no crea otro evento. Cambio posterior legítimo o cancelación debe revisarse, no sobrescribirse. Bloqueo/deadlock aborta de forma controlada; volver a leer antes de una nueva decisión. Conexión dañada se descarta si rollback falla.
+
+Dependencia para una futura publicación: verificar el pgPool desplegado existente, su destino, capacidad de transacción y visibilidad completa requerida (SELECT/UPDATE ng_inscripciones, SELECT con bloqueo de ng_sesiones, INSERT ng_inscripcion_eventos, políticas RLS). No asumirlo por las pruebas con postgres efímero. No se crea esquema, rol, función SQL, grant ni ACL; si el pool no está disponible, falla cerrado 503, sin volver a escrituras Supabase separadas. No se leyó DATABASE_URL ni secretos. No habilitar permisos para suplir esa comprobación.
+
+Fuera de alcance: ruta de conversión CRM y sus eventos, inscripción pública de interés ng_jugadores, normalización global de categorías, beneficio Academy gratuito, corrección web Academy, edades y comunicaciones. Revisión independiente posterior pendiente. Esta corrección no cierra los 14 objetivos.
