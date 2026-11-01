@@ -3535,14 +3535,19 @@ app.get('/api/creditos/:email', async (req, res) => {
 
     const now = new Date().toISOString();
 
-    const { data, error } = await supabaseAdmin
+    let creditQuery = supabaseAdmin
       .from('creditos')
       .select('id, monto, sede_id, created_at, vence_at')
       .eq('email', emailParam)
       .eq('usado', false)
-      .gt('vence_at', now)
-      .order('created_at', { ascending: false })
-      .limit(20);
+      .gt('vence_at', now);
+    // Personal ownership remains valid across venues. A club administrator reading
+    // someone else's balance receives only that administrator's trusted venue.
+    const creditRole = String(role?.role || role?.rol || '').trim().toLowerCase();
+    if (emailParam !== userEmail && creditRole === 'admin_club') {
+      creditQuery = creditQuery.eq('sede_id', role.sede_id);
+    }
+    const { data, error } = await creditQuery.order('created_at', { ascending: false }).limit(20);
 
     if (error) throw error;
 
