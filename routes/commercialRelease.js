@@ -1,3 +1,4 @@
+import {createQaGuardedPool,mountSedeQaDiagnostic,mountQaLegacyAdmission} from '../lib/sedeQaRuntimeGuard.js';
 import { pickPublicSedeWithPaymentStatus, redactSedePaymentValues } from '../utils/sedePublicSelect.js';
 import { buildSedeReleaseInsert } from '../lib/sedeReleaseContract.js';
 import { resolveStoredRoleForVerifiedUser } from '../lib/roleIdentity.js';
@@ -1805,10 +1806,16 @@ app.get('/api/admin/sedes-pendientes', async (req, res) => {
   }
 });
 
+// QA probe is available with mutation capability OFF. OFF never means safe
+// legacy admission: block approval until the guarded atomic path is enabled.
+mountSedeQaDiagnostic(app,{pool:pgPool,runtime,authUserFromBearer,assertSuperAdminReq});
+const approvalPool=createQaGuardedPool(pgPool,{runtime,env:process.env});
+mountQaLegacyAdmission(app,{runtime,env:process.env,pool:approvalPool,enabled:sedeApprovalRecoveryEnabled});
+
 // Mounted first: enabled recovery handles every approval, including failures.
 // No next() or legacy fallback is allowed after an atomic approval attempt.
 mountSedeApprovalRecoveryRoutes(app, {
-  enabled: sedeApprovalRecoveryEnabled, pool: pgPool, authUserFromBearer,
+  enabled: sedeApprovalRecoveryEnabled, pool: approvalPool, authUserFromBearer,
   assertSuperAdminReq, supabaseAdmin, runtime, frontendUrl: FRONTEND_URL,
   sendWhatsapp: sendTwilioWhatsAppBodyToRaw,
   lookupCreatorWhatsapp: email => fetchJugadorWhatsappPorEmail(email, { strict: true }),
