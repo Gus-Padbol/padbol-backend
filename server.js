@@ -2149,6 +2149,29 @@ if (vapidPublic && vapidPrivate && pgPool) {
   mountWebPushRoutes(app, { authUserFromBearer, webPush: webPushService, publicKey: vapidPublic });
 }
 
+// Barrido de alertas de seguimiento cada 5 minutos. Apagado por defecto: se
+// enciende solo cuando la tabla crm_lead_alerts existe y la bandera esta activa.
+if (process.env.CRM_LEAD_ALERTS_SWEEP_ENABLED === 'true' && pgPool) {
+  const { createCrmLeadAlerts } = await import('./lib/crmLeadAlerts.js');
+  const { createLeadAlertNotifier } = await import('./lib/crmLeadAlertNotifier.js');
+  const alertNotifier = createLeadAlertNotifier({
+    pool: pgPool,
+    alerts: createCrmLeadAlerts({ pool: pgPool }),
+    webPush: vapidPublic && vapidPrivate
+      ? createWebPushService({ pool: pgPool, send: createVapidSender({ publicKey: vapidPublic, privateKey: vapidPrivate,
+          subject: process.env.VAPID_SUBJECT || 'mailto:soporte@padbol.com' }) })
+      : { notify: async () => ({ sent: 0 }) },
+    managerId: process.env.CRM_COMMERCIAL_MANAGER_ID || null,
+  });
+  let running = false;
+  setInterval(async () => {
+    if (running) return;
+    running = true;
+    try { await alertNotifier(); } catch (error) { console.warn('barrido de alertas:', error?.message || error); }
+    finally { running = false; }
+  }, 5 * 60 * 1000);
+}
+
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
   list.sort((a, b) => Number(a.id) - Number(b.id));
