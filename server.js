@@ -54,6 +54,8 @@ import {createCommercialImapSenderReader} from './lib/crmCommercialImapScope.js'
 import {readCrmSupportImapConfig, createCrmSupportSender, routeCrmEmailSender, CRM_SUPPORT_OPERATORS} from './lib/crmSupportMailbox.js';
 import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
+import { mountWebPushRoutes } from './routes/webPush.js';
+import { createWebPushService, createVapidSender } from './lib/webPushNotifications.js';
 import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
 import http from 'http';
 import ws from 'ws';
@@ -2136,6 +2138,16 @@ mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole:
 mountTorneosFinalizadosRoutes(app, { pgPool });
 const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticatedUser, pgPool,
   serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY), runtime, cron, whatsappQaSandboxServiceFactory, crmFunnel, qaRelay, crmService });
+
+// Notificaciones web push del CRM: solo se montan si hay claves VAPID y pool SQL.
+const vapidPublic = String(process.env.VAPID_PUBLIC_KEY || '').trim();
+const vapidPrivate = String(process.env.VAPID_PRIVATE_KEY || '').trim();
+if (vapidPublic && vapidPrivate && pgPool) {
+  const webPushSender = createVapidSender({ publicKey: vapidPublic, privateKey: vapidPrivate,
+    subject: process.env.VAPID_SUBJECT || 'mailto:soporte@padbol.com' });
+  const webPushService = createWebPushService({ pool: pgPool, send: webPushSender });
+  mountWebPushRoutes(app, { authUserFromBearer, webPush: webPushService, publicKey: vapidPublic });
+}
 
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
