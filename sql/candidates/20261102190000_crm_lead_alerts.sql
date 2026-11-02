@@ -44,7 +44,7 @@ begin
       (a.case_type='whatsapp' and not exists (
         select 1 from public.crm_commercial_cases c where c.id=a.case_id and c.status in ('open','suspended') and c.assigned_user_id is not null))
       or (a.case_type='form' and not exists (
-        select 1 from public.crm_commercial_form_cases f where f.id=a.case_id and f.assigned_user_id is not null))
+        select 1 from public.crm_commercial_form_cases f where f.conversation_id=a.case_id and f.assigned_user_id is not null))
     ) returning 1)
   select count(*) into v_resolved from cerradas;
 
@@ -56,9 +56,9 @@ begin
     from public.crm_commercial_cases c
     where c.status in ('open','suspended') and c.assigned_user_id is not null
     union all
-    select 'form'::text, f.id, f.assigned_user_id,
+    select 'form'::text, f.conversation_id, f.assigned_user_id,
            coalesce((select max(t.created_at) from public.crm_commercial_team_activities t
-                     where t.case_id=f.id and t.case_type='form'), f.created_at)
+                     where t.case_id=f.conversation_id and t.case_type='form'), f.created_at)
     from public.crm_commercial_form_cases f
     where f.assigned_user_id is not null
   ), nuevos as (
@@ -97,6 +97,9 @@ begin
 end $$;
 
 revoke all on function public.crm_lead_alerts_sweep(timestamptz) from public,anon,authenticated;
-revoke all on table public.crm_lead_alerts from anon,authenticated;
+grant execute on function public.crm_lead_alerts_sweep(timestamptz) to service_role;
+alter table public.crm_lead_alerts enable row level security;
+revoke all on table public.crm_lead_alerts from public,anon,authenticated;
+grant all on table public.crm_lead_alerts to service_role;
 
 commit;
