@@ -48,14 +48,15 @@ function isSuperAdminRole(role) {
   return role.rol === 'super_admin';
 }
 
-function assertCanAdministerSede(role, sedeId) {
-  if (isSuperAdminRole(role)) return;
-  if (role.rol === 'admin_club' && role.sede_id != null && Number(role.sede_id) === Number(sedeId)) {
-    return;
-  }
-  const err = new Error('No tenés permiso para administrar esta sede');
-  err.status = 403;
-  throw err;
+function assertCanAdministerSede(role, sedeId, supabaseAdmin) {
+  return assertSedeAdminScope({
+    role,
+    sedeId,
+    fetchSede: async (id) => {
+      const { data } = await supabaseAdmin.from('sedes').select('id,pais').eq('id', id).maybeSingle();
+      return data || null;
+    },
+  });
 }
 
 export function mountSedeExtrasRoutes(app, {
@@ -117,7 +118,7 @@ export function mountSedeExtrasRoutes(app, {
       if (!sid) return res.status(400).json({ error: 'sede_id inválido' });
 
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanAdministerSede(role, sid);
+      await assertCanAdministerSede(role, sid, supabaseAdmin);
 
       const { data, error } = await supabaseAdmin
         .from('sede_extras')
@@ -145,7 +146,7 @@ export function mountSedeExtrasRoutes(app, {
       if (!sid) return res.status(400).json({ error: 'sede_id inválido' });
 
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanAdministerSede(role, sid);
+      await assertCanAdministerSede(role, sid, supabaseAdmin);
 
       const b = req.body || {};
       const nombre = String(b.nombre ?? '').trim();
@@ -218,7 +219,7 @@ export function mountSedeExtrasRoutes(app, {
       if (!sid || !extraId) return res.status(400).json({ error: 'Parámetros inválidos' });
 
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanAdministerSede(role, sid);
+      await assertCanAdministerSede(role, sid, supabaseAdmin);
 
       const { data: existing, error: exErr } = await supabaseAdmin
         .from('sede_extras')
@@ -314,7 +315,7 @@ export function mountSedeExtrasRoutes(app, {
       if (!sid || !extraId) return res.status(400).json({ error: 'Parámetros inválidos' });
 
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanAdministerSede(role, sid);
+      await assertCanAdministerSede(role, sid, supabaseAdmin);
 
       const { data: existing, error: exErr } = await supabaseAdmin
         .from('sede_extras')

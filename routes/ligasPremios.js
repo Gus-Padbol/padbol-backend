@@ -58,14 +58,15 @@ function isSuperAdminRole(role) {
   return role.rol === 'super_admin';
 }
 
-function assertCanAdministerSede(role, sedeId) {
-  if (isSuperAdminRole(role)) return;
-  if (role.rol === 'admin_club' && role.sede_id != null && Number(role.sede_id) === Number(sedeId)) {
-    return;
-  }
-  const err = new Error('No tenés permiso para administrar esta sede');
-  err.status = 403;
-  throw err;
+function assertCanAdministerSede(role, sedeId, supabaseAdmin) {
+  return assertSedeAdminScope({
+    role,
+    sedeId,
+    fetchSede: async (id) => {
+      const { data } = await supabaseAdmin.from('sedes').select('id,pais').eq('id', id).maybeSingle();
+      return data || null;
+    },
+  });
 }
 
 function resolveAdminSedeId(role, source = {}) {
@@ -170,7 +171,7 @@ export function mountLigasPremiosRoutes(app, {
 
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       const sedeId = resolveAdminSedeId(role, req.body ?? {});
-      assertCanAdministerSede(role, sedeId);
+      await assertCanAdministerSede(role, sedeId, supabaseAdmin);
 
       const liga = parseLiga(req.body?.liga);
       if (!liga) {
@@ -231,7 +232,7 @@ export function mountLigasPremiosRoutes(app, {
         sede_id: req.query?.sede_id,
         sedeId: req.query?.sedeId,
       });
-      assertCanAdministerSede(role, sedeId);
+      await assertCanAdministerSede(role, sedeId, supabaseAdmin);
 
       const { data, error } = await supabaseAdmin
         .from('ligas_premios')

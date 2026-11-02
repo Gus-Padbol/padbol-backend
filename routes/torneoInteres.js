@@ -1,4 +1,5 @@
 import { resolveAuthRoleForUser } from '../lib/authAccess.js';
+import { assertCanAdministerSede as assertSedeAdminScope } from '../lib/sedeAdministrationScope.js';
 import { readWaitlistForSede, readWaitlistProfiles } from './waitlistRead.js';
 
 function parseSedeId(raw) {
@@ -17,14 +18,15 @@ function isSuperAdminRole(role) {
   return role.rol === 'super_admin';
 }
 
-function assertCanAdministerSede(role, sedeId) {
-  if (isSuperAdminRole(role)) return;
-  if (role.rol === 'admin_club' && role.sede_id != null && Number(role.sede_id) === Number(sedeId)) {
-    return;
-  }
-  const err = new Error('No tenés permiso para administrar esta sede');
-  err.status = 403;
-  throw err;
+function assertCanAdministerSede(role, sedeId, supabaseAdmin) {
+  return assertSedeAdminScope({
+    role,
+    sedeId,
+    fetchSede: async (id) => {
+      const { data } = await supabaseAdmin.from('sedes').select('id,pais').eq('id', id).maybeSingle();
+      return data || null;
+    },
+  });
 }
 
 async function assertSedeExists(supabaseAdmin, sedeId) {
@@ -173,7 +175,7 @@ export function mountTorneoInteresRoutes(app, {
       if (!sid) return res.status(400).json({ error: 'sede_id inválido' });
 
       const role = await resolveAuthRoleForUser(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanAdministerSede(role, sid);
+      await assertCanAdministerSede(role, sid, supabaseAdmin);
 
       const list = await readWaitlistForSede(supabaseAdmin, 'torneo_interes', sid);
       const userIds = [...new Set(list.map((row) => row.user_id).filter(Boolean))];
