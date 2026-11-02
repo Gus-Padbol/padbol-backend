@@ -3,6 +3,9 @@ import { buildSedeReleaseInsert } from '../lib/sedeReleaseContract.js';
 import { resolveStoredRoleForVerifiedUser } from '../lib/roleIdentity.js';
 import { DateTime } from 'luxon';
 import { sendMakeEvent } from '../make/sendMakeEvent.js';
+import { createAcknowledgedMakeTransport } from '../lib/sedeMakeTransport.js';
+import { mountSedeApprovalRecoveryRoutes } from './sedeApprovalRecovery.js';
+import { rejectPendingSede } from '../lib/sedePendingRejection.js';
 
 import { createGenerateAdminInviteMagicLink } from '../lib/adminInviteMagicLink.js';
 import { notifyMakeAdminInviteWebhook } from '../make/sendMakeAdminInviteWebhook.js';
@@ -17,7 +20,7 @@ import { registerAdminOrganizationsRoutes } from '../lib/adminOrganizations.js';
 import { registerSedeIncentiveRoutes } from '../lib/sedeIncentivesV4.js';
 
 // Ported from the validated local release. Mounted into the existing server; no second runtime.
-export function mountCommercialReleaseRoutes(app, { supabaseAdmin, runtime, authUserFromBearer, assertSuperAdminReq, adminListScopeFromRequest, sedesPermitidasPorScope }) {
+export function mountCommercialReleaseRoutes(app, { supabaseAdmin, runtime, authUserFromBearer, assertSuperAdminReq, adminListScopeFromRequest, sedesPermitidasPorScope, pgPool = null, sedeApprovalRecoveryEnabled = false }) {
 const supabase = supabaseAdmin;
 const isSuperAdminApi = (_email, role) => role === "super_admin";
 
@@ -549,14 +552,19 @@ async function sendTwilioWhatsAppBodyToRaw(toRaw, body) {
     console.warn('⚠️ WhatsApp: destino no normalizable:', toRaw);
     return;
   }
-  await sendTwilioMessage({ from: TWILIO_WHATSAPP_FROM, to, body: String(body || '').trim() });
-  console.log(`✓ WhatsApp enviado → ${to}`);
+  const receipt = await sendTwilioMessage({ from: TWILIO_WHATSAPP_FROM, to, body: String(body || '').trim() });
+  return receipt;
 }
 
-async function fetchJugadorWhatsappPorEmail(email) {
+async function fetchJugadorWhatsappPorEmail(email, { strict = false } = {}) {
   const em = String(email || '').trim().toLowerCase();
   if (!em) return null;
-  const { data } = await supabase.from('jugadores_perfil').select('whatsapp').eq('email', em).maybeSingle();
+  const unavailable = () => Object.assign(new Error('CREATOR_PHONE_LOOKUP_UNAVAILABLE'), { safeToRetry: true });
+  let result;
+  try { result = await supabase.from('jugadores_perfil').select('whatsapp').eq('email', em).maybeSingle(); }
+  catch { if (strict) throw unavailable(); return null; }
+  if (!result || result.error || !('data' in result)) { if (strict) throw unavailable(); return null; }
+  const { data } = result;
   const w = data?.whatsapp != null ? String(data.whatsapp).trim() : '';
   return w || null;
 }
@@ -1797,6 +1805,18 @@ app.get('/api/admin/sedes-pendientes', async (req, res) => {
   }
 });
 
+// Mounted first: enabled recovery handles every approval, including failures.
+// No next() or legacy fallback is allowed after an atomic approval attempt.
+mountSedeApprovalRecoveryRoutes(app, {
+  enabled: sedeApprovalRecoveryEnabled, pool: pgPool, authUserFromBearer,
+  assertSuperAdminReq, supabaseAdmin, runtime, frontendUrl: FRONTEND_URL,
+  sendWhatsapp: sendTwilioWhatsAppBodyToRaw,
+  lookupCreatorWhatsapp: email => fetchJugadorWhatsappPorEmail(email, { strict: true }),
+  sendRegistrationEvent: createAcknowledgedMakeTransport({
+    runtime, webhookUrl: process.env.MAKE_WEBHOOK_URL,
+  }),
+});
+
 app.post('/api/admin/sedes-pendientes/:id/aprobar', async (req, res) => {
   try {
     const user = await authUserFromBearer(req);
@@ -1898,21 +1918,23 @@ app.post('/api/admin/sedes-pendientes/:id/rechazar', async (req, res) => {
     if (!pend) return res.status(404).json({ error: 'No encontrada' });
     if (pend.estado !== 'pendiente') return res.status(400).json({ error: 'La solicitud ya no está pendiente' });
 
-    await supabase
-      .from('sedes_pendientes')
-      .update({ estado: 'rechazada', motivo_rechazo: motivo })
-      .eq('id', id);
+    await rejectPendingSede({ db: supabase, requestId: id, reason: motivo });
 
-    const waNacional = await fetchJugadorWhatsappPorEmail(pend.created_by);
-    if (waNacional) {
-      const nombre = String(pend.nombre || '').trim();
-      await sendTwilioWhatsAppBodyToRaw(
-        waNacional,
-        `❌ Sede "${nombre}" rechazada.\nMotivo: ${motivo}`
-      );
-    }
-
-    res.json({ ok: true });
+    // The state transition is already confirmed. Notification failure must
+    // not turn it into a failed rejection or invite an unsafe repeat send.
+    let notificationStatus = 'skipped';
+    try {
+      const waNacional = await fetchJugadorWhatsappPorEmail(pend.created_by, { strict: true });
+      if (waNacional) {
+        const nombre = String(pend.nombre || '').trim();
+        const receipt = await sendTwilioWhatsAppBodyToRaw(
+          waNacional,
+          `❌ Sede "${nombre}" rechazada.\nMotivo: ${motivo}`
+        );
+        notificationStatus = receipt?.sid ? 'accepted' : 'needs_review';
+      }
+    } catch { notificationStatus = 'needs_review'; }
+    res.json({ ok: true, notifications_pending: notificationStatus === 'needs_review', notification_status: notificationStatus });
   } catch (err) {
     console.error('❌ POST rechazar sede pendiente:', err.message);
     res.status(err.status || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
