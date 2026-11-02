@@ -2142,35 +2142,13 @@ const releaseServices = mountReleaseRoutes(app, { supabaseAdmin, getAuthenticate
 // Notificaciones web push del CRM: solo se montan si hay claves VAPID y pool SQL.
 const vapidPublic = String(process.env.VAPID_PUBLIC_KEY || '').trim();
 const vapidPrivate = String(process.env.VAPID_PRIVATE_KEY || '').trim();
-if (vapidPublic && vapidPrivate && pgPool) {
-  const webPushSender = createVapidSender({ publicKey: vapidPublic, privateKey: vapidPrivate,
-    subject: process.env.VAPID_SUBJECT || 'mailto:soporte@padbol.com' });
-  const webPushService = createWebPushService({ pool: pgPool, send: webPushSender });
-  mountWebPushRoutes(app, { authUserFromBearer, webPush: webPushService, publicKey: vapidPublic });
-}
-
-// Barrido de alertas de seguimiento cada 5 minutos. Apagado por defecto: se
-// enciende solo cuando la tabla crm_lead_alerts existe y la bandera esta activa.
-if (process.env.CRM_LEAD_ALERTS_SWEEP_ENABLED === 'true' && pgPool) {
-  const { createCrmLeadAlerts } = await import('./lib/crmLeadAlerts.js');
-  const { createLeadAlertNotifier } = await import('./lib/crmLeadAlertNotifier.js');
-  const alertNotifier = createLeadAlertNotifier({
-    pool: pgPool,
-    alerts: createCrmLeadAlerts({ pool: pgPool }),
-    webPush: vapidPublic && vapidPrivate
-      ? createWebPushService({ pool: pgPool, send: createVapidSender({ publicKey: vapidPublic, privateKey: vapidPrivate,
-          subject: process.env.VAPID_SUBJECT || 'mailto:soporte@padbol.com' }) })
-      : { notify: async () => ({ sent: 0 }) },
-    managerId: process.env.CRM_COMMERCIAL_MANAGER_ID || null,
-  });
-  let running = false;
-  setInterval(async () => {
-    if (running) return;
-    running = true;
-    try { await alertNotifier(); } catch (error) { console.warn('barrido de alertas:', error?.message || error); }
-    finally { running = false; }
-  }, 5 * 60 * 1000);
-}
+// Se monta siempre: sin claves la configuracion responde "enabled: false" y el
+// navegador muestra la instruccion, en lugar de dar 404.
+const webPushService = (vapidPublic && vapidPrivate && pgPool)
+  ? createWebPushService({ pool: pgPool, send: createVapidSender({ publicKey: vapidPublic, privateKey: vapidPrivate,
+      subject: process.env.VAPID_SUBJECT || 'mailto:soporte@padbol.com' }) })
+  : null;
+mountWebPushRoutes(app, { authUserFromBearer, webPush: webPushService, publicKey: vapidPublic || null });
 
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
