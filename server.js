@@ -858,6 +858,7 @@ registerCrmInboundRoutes(app, {
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
   formInboundSecret: process.env.CRM_INBOUND_FORM_SECRET || '',
   onNewLead: event => leadNotifications?.notify(event),
+  onExperienceAction: event => leadNotifications?.notifyExisting(event.conversation?.id, 'form'),
 });
 const crmImapInboxSync = createCrmImapInboxSync({
   crmService,
