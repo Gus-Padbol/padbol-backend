@@ -57,6 +57,8 @@ import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
 import { mountWebPushRoutes } from './routes/webPush.js';
 import { createWebPushService, createVapidSender } from './lib/webPushNotifications.js';
+import { createLeadNotificationService } from './lib/crmLeadNotifications.js';
+import { registerCrmLeadNotificationRoutes } from './lib/crmLeadNotificationRoutes.js';
 import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
 import http from 'http';
 import ws from 'ws';
@@ -848,11 +850,13 @@ const crmFunnel = createCrmFunnel({
     && /^[1-9][0-9]{7,14}$/.test(process.env.WHATSAPP_CONTEXT_ALLOWED_SENDER || ''))
     ? process.env.WHATSAPP_CONTEXT_ALLOWED_SENDER : null,
 });
+let leadNotifications = null;
 registerCrmInboundRoutes(app, {
   crmService,
   leadAnalyzer: crmLeadAnalyzer,
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
   formInboundSecret: process.env.CRM_INBOUND_FORM_SECRET || '',
+  onNewLead: event => leadNotifications?.notify(event),
 });
 const crmImapInboxSync = createCrmImapInboxSync({
   crmService,
@@ -2151,6 +2155,8 @@ const webPushService = (vapidPublic && vapidPrivate && pgPool)
       subject: process.env.VAPID_SUBJECT || 'mailto:soporte@padbol.com' }) })
   : null;
 mountWebPushRoutes(app, { authUserFromBearer, webPush: webPushService, publicKey: vapidPublic || null });
+leadNotifications = createLeadNotificationService({ db: supabaseAdmin, webPush: webPushService });
+registerCrmLeadNotificationRoutes(app, { authUserFromBearer, notifications: leadNotifications });
 
 function clasesCanchasConNumeroReserva(rows) {
   const list = Array.isArray(rows) ? [...rows] : [];
