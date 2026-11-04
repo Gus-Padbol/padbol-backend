@@ -840,6 +840,7 @@ initializeCommercialRollout({
   manualWhatsappSender: crmWhatsappManualSenderFactory?.({ supabaseAdmin }) || null,
   emailSender: crmEmailSender,
   resolveTrustedSuperadmin: createCommercialSuperadminResolver(supabaseAdmin),
+  onNewLead: event => leadNotifications?.notifyExisting(event.conversationId, 'form'),
   legacyBootstrap: initializeCommercialCases,
 });
 
