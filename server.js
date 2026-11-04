@@ -44,6 +44,7 @@ import { createWhatsappAdminService, createSupabaseWhatsappAdminRepository, regi
 import {readCrmDeskOperators} from './lib/crmDeskScope.js';
 import { CRM_COMMERCIAL_OPERATORS, commercialSafeWhatsappPermissions } from './lib/crmCommercialScope.js';
 import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
+import { registerProspectRoutes } from './lib/crmProspectRoutes.js';
 import { registerWhatsappMediaAccessRoute } from './lib/whatsappMediaAccess.js';
 import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
 import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
@@ -828,6 +829,7 @@ registerCrmAdminRoutes(app, {
   fetchUserRoleRowForAuthUser,
 });
 registerWhatsappMediaAccessRoute(app, { crmAdminService, supabaseAdmin, authUserFromBearer, fetchUserRoleRow, fetchUserRoleRowForAuthUser });
+registerProspectRoutes(app, { db:supabaseAdmin, authUserFromBearer, resolveTrustedSuperadmin:createCommercialSuperadminResolver(supabaseAdmin) });
 // The team workspace is inert until all rollout gates and its database migration are verified.
 initializeCommercialRollout({
   app,
