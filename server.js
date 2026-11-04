@@ -831,7 +831,7 @@ registerCrmAdminRoutes(app, {
   fetchUserRoleRowForAuthUser,
 });
 registerWhatsappMediaAccessRoute(app, { crmAdminService, supabaseAdmin, authUserFromBearer, fetchUserRoleRow, fetchUserRoleRowForAuthUser });
-registerProspectRoutes(app, { db:supabaseAdmin, authUserFromBearer, resolveTrustedSuperadmin:createCommercialSuperadminResolver(supabaseAdmin) });
+registerProspectRoutes(app, { db:supabaseAdmin, pool:pgPool, authUserFromBearer, resolveTrustedSuperadmin:createCommercialSuperadminResolver(supabaseAdmin) });
 // The team workspace is inert until all rollout gates and its database migration are verified.
 initializeCommercialRollout({
   app,
