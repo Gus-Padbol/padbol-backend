@@ -47,6 +47,8 @@ import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js
 import { registerProspectRoutes } from './lib/crmProspectRoutes.js';
 import { registerCrmSpaceAdminRoutes } from './lib/crmSpaceAdminRoutes.js';
 import { registerCrmSpaceTicketRoutes } from './lib/crmSpaceTicketRoutes.js';
+import { registerAcademyStudentRoutes } from './lib/academyStudentRoutes.js';
+import { registerAcademyPaymentRoutes, claimAcademyPayments } from './lib/academyPaymentRoutes.js';
 import { registerWhatsappMediaAccessRoute } from './lib/whatsappMediaAccess.js';
 import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
 import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
@@ -840,6 +842,12 @@ registerWhatsappMediaAccessRoute(app, { crmAdminService, supabaseAdmin, authUser
 registerProspectRoutes(app, { db:supabaseAdmin, pool:pgPool, authUserFromBearer, resolveTrustedSuperadmin:createCommercialSuperadminResolver(supabaseAdmin) });
 registerCrmSpaceAdminRoutes(app, { db:supabaseAdmin, pool:pgPool, authUserFromBearer, resolveTrustedSuperadmin:createCommercialSuperadminResolver(supabaseAdmin) });
 registerCrmSpaceTicketRoutes(app, { db:supabaseAdmin, pool:pgPool, authUserFromBearer, resolveTrustedSuperadmin:createCommercialSuperadminResolver(supabaseAdmin) });
+registerAcademyPaymentRoutes(app,{db:supabaseAdmin,inboundSecret:process.env.CRM_INBOUND_FORM_SECRET || process.env.CRM_INBOUND_EMAIL_SECRET || '',authUserFromBearer});
+registerAcademyStudentRoutes(app,{db:supabaseAdmin,authUserFromBearer:async req=>{
+  const user=await authUserFromBearer(req);
+  if(user?.id && user.email_confirmed_at) await claimAcademyPayments(supabaseAdmin,user);
+  return user;
+}});
 // The team workspace is inert until all rollout gates and its database migration are verified.
 initializeCommercialRollout({
   app,
