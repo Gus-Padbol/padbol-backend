@@ -46,6 +46,7 @@ import { CRM_COMMERCIAL_OPERATORS, commercialSafeWhatsappPermissions } from './l
 import { createCrmAdminService, registerCrmAdminRoutes } from './lib/crmAdmin.js';
 import { registerProspectRoutes } from './lib/crmProspectRoutes.js';
 import { registerCrmSpaceAdminRoutes } from './lib/crmSpaceAdminRoutes.js';
+import { registerCrmSpaceTicketRoutes } from './lib/crmSpaceTicketRoutes.js';
 import { registerWhatsappMediaAccessRoute } from './lib/whatsappMediaAccess.js';
 import { createCrmService, createSupabaseCrmRepository } from './lib/crmService.js';
 import { createCrmFunnel, parseCrmFunnelPaths } from './lib/crmFunnel.js';
@@ -303,6 +304,8 @@ const io = new SocketIOServer(httpServer, {
   cors: {
     origin: [
       ...configuredOrigins,
+      'https://padbol.com',
+      'https://www.padbol.com',
       'https://padbolmatch.com',
       'https://www.padbolmatch.com',
       'http://localhost:3000',
@@ -325,6 +328,8 @@ const PORT = Number(process.env.PORT || 3001);
 app.use(cors({
   origin: [
     ...configuredOrigins,
+    'https://padbol.com',
+    'https://www.padbol.com',
     'https://padbolmatch.com',
     'https://www.padbolmatch.com',
     'http://localhost:3000',
@@ -833,7 +838,8 @@ registerCrmAdminRoutes(app, {
 });
 registerWhatsappMediaAccessRoute(app, { crmAdminService, supabaseAdmin, authUserFromBearer, fetchUserRoleRow, fetchUserRoleRowForAuthUser });
 registerProspectRoutes(app, { db:supabaseAdmin, pool:pgPool, authUserFromBearer, resolveTrustedSuperadmin:createCommercialSuperadminResolver(supabaseAdmin) });
-registerCrmSpaceAdminRoutes(app, { db:supabaseAdmin, pool:pgPool, authUserFromBearer });
+registerCrmSpaceAdminRoutes(app, { db:supabaseAdmin, pool:pgPool, authUserFromBearer, resolveTrustedSuperadmin:createCommercialSuperadminResolver(supabaseAdmin) });
+registerCrmSpaceTicketRoutes(app, { db:supabaseAdmin, pool:pgPool, authUserFromBearer, resolveTrustedSuperadmin:createCommercialSuperadminResolver(supabaseAdmin) });
 // The team workspace is inert until all rollout gates and its database migration are verified.
 initializeCommercialRollout({
   app,
@@ -856,6 +862,8 @@ const crmFunnel = createCrmFunnel({
 let leadNotifications = null;
 registerCrmInboundRoutes(app, {
   crmService,
+  db: supabaseAdmin,
+  pool: pgPool,
   leadAnalyzer: crmLeadAnalyzer,
   emailInboundSecret: process.env.CRM_INBOUND_EMAIL_SECRET || '',
   formInboundSecret: process.env.CRM_INBOUND_FORM_SECRET || '',
