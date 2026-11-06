@@ -43,9 +43,6 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE ALL ON FUNCTION public.reserva_sede_reservable() FROM authenticated';
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user') THEN
-    EXECUTE 'GRANT EXECUTE ON FUNCTION public.reserva_sede_reservable() TO app_user';
-  END IF;
 END $$;
 
 DROP TRIGGER IF EXISTS reservas_sede_reservable_trg ON public.reservas;
