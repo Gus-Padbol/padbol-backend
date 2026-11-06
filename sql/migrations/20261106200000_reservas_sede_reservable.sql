@@ -1,23 +1,28 @@
 -- Invariante de DB: no se puede crear ni mover una reserva a una sede de torneo.
--- Resolución de sede: si hay sede_id se usa ese; si no, se resuelve por nombre.
--- Nombre ambiguo (más de una sede con ese nombre) => se rechaza.
+-- La función de trigger es SECURITY DEFINER porque el rol que inserta reservas no tiene
+-- (ni debe tener) SELECT sobre public.sedes. Se acota al mínimo: sin SQL dinámico,
+-- search_path fijo, nombres calificados, sin retorno de datos y sin EXECUTE público.
 BEGIN;
 
 CREATE OR REPLACE FUNCTION public.reserva_sede_reservable()
-RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
 DECLARE
   v_tipo text;
   v_match int;
 BEGIN
+  -- Solo se rechaza cuando la sede se resuelve SIN ambigüedad a tipo torneo.
+  -- Nombre legacy, desconocido o ambiguo no bloquea una reserva histórica legítima.
   IF NEW.sede_id IS NOT NULL THEN
-    SELECT tipo_sede INTO v_tipo FROM public.sedes WHERE id = NEW.sede_id;
-    IF v_tipo IS NULL THEN
-      RAISE EXCEPTION 'SEDE_DESCONOCIDA' USING ERRCODE = '23514';
-    END IF;
+    SELECT s.tipo_sede INTO v_tipo FROM public.sedes s WHERE s.id = NEW.sede_id;
   ELSIF NEW.sede IS NOT NULL THEN
-    SELECT count(*), min(tipo_sede) INTO v_match, v_tipo FROM public.sedes WHERE nombre = NEW.sede;
+    SELECT count(*), min(s.tipo_sede) INTO v_match, v_tipo
+      FROM public.sedes s WHERE s.nombre = NEW.sede;
     IF v_match <> 1 THEN
-      RAISE EXCEPTION 'SEDE_AMBIGUA_O_DESCONOCIDA' USING ERRCODE = '23514';
+      RETURN NEW;
     END IF;
   ELSE
     RETURN NEW;
@@ -27,6 +32,20 @@ BEGIN
     RAISE EXCEPTION 'SEDE_NO_RESERVABLE' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
+END $$;
+
+REVOKE ALL ON FUNCTION public.reserva_sede_reservable() FROM PUBLIC;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.reserva_sede_reservable() FROM anon';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.reserva_sede_reservable() FROM authenticated';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user') THEN
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.reserva_sede_reservable() TO app_user';
+  END IF;
 END $$;
 
 DROP TRIGGER IF EXISTS reservas_sede_reservable_trg ON public.reservas;
