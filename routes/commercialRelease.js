@@ -314,8 +314,10 @@ app.post('/api/sedes', async (req, res) => {
     const skipAutogenCanchas = Boolean(b.skip_autogen_canchas);
     const emailContacto = String(b.email_contacto || '').trim();
     const telefonoBody = String(b.telefono || b.whatsapp || '').trim();
-    if (!emailContacto) return res.status(400).json({ error: 'Email de contacto obligatorio' });
-    if (!telefonoBody) return res.status(400).json({ error: 'Teléfono / WhatsApp obligatorio' });
+    const tipoSedeBody = String(b.tipo_sede || '').trim().toLowerCase();
+    const esSedeTorneoBody = tipoSedeBody === 'torneo';
+    if (!esSedeTorneoBody && !emailContacto) return res.status(400).json({ error: 'Email de contacto obligatorio' });
+    if (!esSedeTorneoBody && !telefonoBody) return res.status(400).json({ error: 'Teléfono / WhatsApp obligatorio' });
 
     const timezoneSede = normalizeSedeTimezone(
       b.timezone != null && String(b.timezone).trim()
@@ -344,7 +346,17 @@ app.post('/api/sedes', async (req, res) => {
       latitud: Number.isFinite(latitud) ? latitud : null,
       longitud: Number.isFinite(longitud) ? longitud : null,
       google_maps_url: String(b.google_maps_url || b.maps_url || '').trim() || null,
+      ...(tipoSedeBody ? { tipo_sede: tipoSedeBody } : {}),
     };
+    if (esSedeTorneoBody) {
+      // Sede de torneo: sin datos de alquiler; el contrato los deja en null.
+      payload.email_contacto = emailContacto || null;
+      payload.telefono = telefonoBody || null;
+      payload.horario_apertura = null;
+      payload.horario_cierre = null;
+      payload.precio_turno = null;
+      delete payload.cantidad_canchas;
+    }
     if (Number.isFinite(cantidadCanchasTotal) && cantidadCanchasTotal >= 0) {
       payload.cantidad_canchas = cantidadCanchasTotal;
     }
