@@ -56,7 +56,7 @@ test('registry legacy writes reject before RPC while unrelated detail remains fo
 test('registry Nations list preserves existing hidden audience and does not expose other roster references',async()=>{
  const hidden=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2099-11-20T00:00:00Z'}}}});assert.deepEqual((await hidden.call('get',base)).body.equipos,[]);
  const revealed=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2000-11-20T00:00:00Z'}}}});const e=(await revealed.call('get',base)).body.equipos[0];assert.equal(e.creador_id,null);assert.deepEqual(e.jugadores,[]);
- const publicNormal=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});const p=(await publicNormal.call('get',base)).body.equipos[0];assert.equal(p.jugadores.length,8);assert.equal(p.referencias_plantel_disponibles,false);assert.equal(p.can_add_profiles,false);assert.equal(p.can_confirm,false);assert.ok(p.jugadores.every(j=>!('participante_id'in j)&&!('user_id'in j)&&!('email'in j)));
+ const publicNormal=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});const p=(await publicNormal.call('get',base)).body.equipos[0];assert.equal(p.jugadores.length,0);assert.equal(p.referencias_plantel_disponibles,false);assert.equal(p.can_add_profiles,false);assert.equal(p.can_confirm,false);
 });
 
 test('expired tournament reports enrollment closed without claiming a save',async()=>{

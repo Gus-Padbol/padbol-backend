@@ -1,4 +1,5 @@
 import {isNationsPublicRevealed} from '../lib/torneos/nationsPublicAccess.js';
+import {autorizacionPlanteles} from '../lib/nationsRosterPrivacy.js';
 import { isNationalRoster, nationalError, rosterPlayers, lineupRosterPlayers, validateNationalLineup, validateNationalRoster, validateRevision, lineupDto } from '../lib/nationalTeamLineup.js';
 import { resolveTorneoAdminAccess } from '../lib/torneos/torneoAdminAccessService.js';
 import { isTorneoOpenForTeams } from '../lib/equiposInvitaciones.js';
@@ -14,8 +15,8 @@ export function registrySportingRoster(row,{references=true}={}){
   tipo_identidad:['cuenta','generico','plaza_pendiente'].includes(p.tipo_identidad)?p.tipo_identidad:null,
  }));
 }
-export function nationalTeamListDto(c,e){
- const registry=usesParticipantRegistry(e),references=Boolean(c.admin||e.creador_id===c.user.id),hidden=Boolean(c.torneo.plan_nations&&!references);
+export function nationalTeamListDto(c,e,{aprobado=false}={}){
+ const registry=usesParticipantRegistry(e),references=Boolean(c.admin||e.creador_id===c.user.id),hidden=!autorizacionPlanteles({torneo:c.torneo,aprobado,esAdmin:c.admin,esCreador:e.creador_id===c.user.id,esCapitan:Array.isArray(c.capitanEquipoIds)&&c.capitanEquipoIds.includes(Number(e.id))}).verPlantel;
  return {id:e.id,nombre:e.nombre,...(registry?{registro_participantes:true,referencias_plantel_disponibles:references,can_add_profiles:false,can_confirm:false}:{}),
   can_manage:references&&!registry,cupo_maximo:e.cupo_maximo,equipo_abierto:e.equipo_abierto===true,
   creador_id:hidden?null:e.creador_id,inscripcion_estado:e.inscripcion_estado,plantel_revision:e.plantel_revision,
@@ -64,7 +65,11 @@ export function mountNationalTeamRoutes(app,{db,getAuthenticatedUser,getRole}) {
  }catch(error){return sendError(res,error);}}
  app.post('/api/torneos/:id/selecciones',(req,res)=>changeTeam(req,res,'crear'));
  app.post('/api/torneos/:id/selecciones/:equipoId/confirmar',(req,res)=>changeTeam(req,res,'confirmar'));
- app.get('/api/torneos/:id/selecciones',async(req,res)=>{try{const c=await context(req);if(!isNationalRoster(c.torneo))throw nationalError('El torneo no usa selecciones.',409);const {data,error}=await db.from('equipos').select('id,nombre,cupo_maximo,equipo_abierto,creador_id,jugadores,inscripcion_estado,plantel_revision').eq('torneo_id',c.torneo.id).order('id');if(error)throw error;return res.json({ok:true,torneo_id:Number(c.torneo.id),equipos:(data??[]).filter(e=>!c.torneo.plan_nations||c.admin||e.creador_id===c.user.id||isNationsPublicRevealed(c.torneo)).map(e=>nationalTeamListDto(c,e))});}catch(e){return sendError(res,e);}});
+ app.get('/api/torneos/:id/selecciones',async(req,res)=>{try{const c=await context(req);
+  const ev=await db.from('nations_activation_events').select('roster_publication_approved').eq('torneo_id',c.torneo.id).maybeSingle();
+  c.aprobadoPublicacion=ev&&!ev.error?ev.data?.roster_publication_approved===true:false;
+  const cap=await db.from('equipos').select('id').eq('torneo_id',c.torneo.id).eq('creador_id',c.user.id);
+  c.capitanEquipoIds=(cap?.data??[]).map(r=>Number(r.id));if(!isNationalRoster(c.torneo))throw nationalError('El torneo no usa selecciones.',409);const {data,error}=await db.from('equipos').select('id,nombre,cupo_maximo,equipo_abierto,creador_id,jugadores,inscripcion_estado,plantel_revision').eq('torneo_id',c.torneo.id).order('id');if(error)throw error;return res.json({ok:true,torneo_id:Number(c.torneo.id),equipos:(data??[]).filter(e=>{const a=autorizacionPlanteles({torneo:c.torneo,aprobado:c.aprobadoPublicacion===true,esAdmin:c.admin,esCreador:e.creador_id===c.user.id,esCapitan:Array.isArray(c.capitanEquipoIds)&&c.capitanEquipoIds.includes(Number(e.id))});return a.verEquipo;}).map(e=>nationalTeamListDto(c,e,{aprobado:c.aprobadoPublicacion===true}))});}catch(e){return sendError(res,e);}});
  app.post('/api/torneos/:id/selecciones/:equipoId/solicitudes',(req,res)=>changeTeam(req,res,'solicitar'));
  app.put('/api/torneos/:id/selecciones/:equipoId/plantel',(req,res)=>changeTeam(req,res,'plantel'));
  app.get('/api/torneos/:id/selecciones/:equipoId',async(req,res)=>{try{const c=await context(req,{team:true});if(!c.captain&&!c.admin)throw nationalError('Sin permiso para consultar el plantel.',403);return res.json(teamDto(c,c.equipo));}catch(e){return sendError(res,e);}});

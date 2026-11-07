@@ -2863,7 +2863,9 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     // Fail-closed: un torneo de selecciones no expone planteles aunque plan_nations sea NULL.
     if(!audience){
       const flag=(await supabaseAdmin.from('nations_activation_events').select('roster_publication_approved').eq('torneo_id',tid).maybeSingle());
-      const gate=accesoPlantelesTorneo({torneo:eventRead.data,event:flag && !flag.error?flag.data:null,esAdmin:enrollmentAdmin,captainIds:[]});
+      const capRows=await supabaseAdmin.from('equipos').select('id').eq('torneo_id',tid).eq('creador_id',(await getAuthenticatedUser(req)).user?.id ?? null);
+      const capitanIds=(capRows?.data??[]).map(r=>Number(r.id));
+      const gate=accesoPlantelesTorneo({torneo:eventRead.data,event:flag && !flag.error?flag.data:null,esAdmin:enrollmentAdmin,captainIds:capitanIds});
       if(!gate.allowed)return res.status(403).json({error:'El plantel todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
     }
 
