@@ -27,7 +27,7 @@ run('pg_ctl', ['-D', PGDATA, '-o', `-k ${SOCK} -c listen_addresses=''`, '-l', '/
 
 const pool = new Pool({host: SOCK, user: 'postgres', database: 'postgres', max: 4});
 const sql = (t) => pool.query(t);
-let pass = 0; const total = 16;
+let pass = 0; const total = 17;
 
 try {
   await sql(`create extension if not exists pgcrypto;
@@ -263,6 +263,23 @@ try {
     assert.equal(ok, 1, 'exactamente una aprobacion debe tener exito');
     assert.equal(aprobadas, 1, 'exactamente una solicitud queda aprobada');
     assert.equal(dueños, 1, 'el participante queda con un unico dueño');
+  });
+
+  // GRUPO 10: edad canonica conocida distinta => AGE_MISMATCH (no sobreescribe)
+  await group('G10 AGE_MISMATCH: canon adulto vs declarado menor', async () => {
+    const P7 = '00000000-0000-4000-8000-0000000000fd';
+    const H = '00000000-0000-4000-8000-0000000000e2';
+    await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${H}','h2@test.invalid',now()) on conflict do nothing`);
+    await sql(`insert into public.torneo_participantes(id,torneo_id,sede_id,nombre,tipo_identidad,origen,estado_vinculacion,creado_por)
+      values ('${P7}',57,9,'Jugador Ficticio H','generico','club','sin_cuenta','${ADM}') on conflict (id) do nothing`);
+    await sql(`insert into public.nations_activation_participants(participante_id,torneo_id,country,row_key,minor,age_status)
+      values ('${P7}',57,'IT','rk-h',false,'adulto') on conflict (participante_id) do nothing`);
+    await sql(`insert into public.nations_profile_requests(torneo_id,actor_user_id,request_id,declared_name,declared_country,age_status,guardian_consent,profile_consent,payload_hash,status)
+      values (57,'${H}','g10-edad-01','Jugador Ficticio H','IT','menor',true,true,'hash-edad','pendiente')`);
+    const id = (await sql(`select id from public.nations_profile_requests where request_id='g10-edad-01'`)).rows[0].id;
+    await assert.rejects(svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, guardian_verified:true, note:'Revision central con edad contradictoria', matched_participante_id: P7}), /AGE_MISMATCH/);
+    const age = (await sql(`select age_status from public.nations_activation_participants where participante_id='${P7}'`)).rows[0].age_status;
+    assert.equal(age, 'adulto');
   });
 
   // GRUPO 9: BARRERA determinista de carrera (lock externo simula al primer actor)

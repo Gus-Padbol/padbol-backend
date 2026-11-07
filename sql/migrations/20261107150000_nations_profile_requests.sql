@@ -32,7 +32,7 @@ ALTER TABLE public.nations_profile_requests ENABLE ROW LEVEL SECURITY;
 -- matched_participante_id y metadata interna). La frontera es el pool del backend.
 DROP POLICY IF EXISTS nations_profile_requests_own_select ON public.nations_profile_requests;
 REVOKE ALL ON public.nations_profile_requests FROM anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.nations_profile_requests TO service_role;
+GRANT SELECT, INSERT, UPDATE ON public.nations_profile_requests TO service_role;
 
 COMMIT;
 
