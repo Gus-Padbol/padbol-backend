@@ -27,7 +27,7 @@ run('pg_ctl', ['-D', PGDATA, '-o', `-k ${SOCK} -c listen_addresses=''`, '-l', '/
 
 const pool = new Pool({host: SOCK, user: 'postgres', database: 'postgres', max: 4});
 const sql = (t) => pool.query(t);
-let pass = 0; const total = 21;
+let pass = 0; const total = 22;
 
 try {
   await sql(`create extension if not exists pgcrypto;
@@ -263,6 +263,23 @@ try {
     assert.equal(ok, 1, 'exactamente una aprobacion debe tener exito');
     assert.equal(aprobadas, 1, 'exactamente una solicitud queda aprobada');
     assert.equal(dueños, 1, 'el participante queda con un unico dueño');
+  });
+
+  // GRUPO 11: dos solicitantes con MISMO nombre y cuentas distintas (DTO admin las distingue)
+  await group('G11 dos solicitantes mismo nombre, cuentas distintas', async () => {
+    const X='00000000-0000-4000-8000-0000000000c8', Y='00000000-0000-4000-8000-0000000000d8';
+    await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${X}','cuenta.uno@test.invalid',now()),('${Y}','cuenta.dos@test.invalid',now()) on conflict do nothing`);
+    for (const [uid, rid] of [[X,'g11-cuenta-01'],[Y,'g11-cuenta-02']]) {
+      await sql(`insert into public.nations_profile_requests(torneo_id,actor_user_id,request_id,declared_name,declared_country,age_status,profile_consent,payload_hash,status)
+        values (57,'${uid}','${rid}','Jugador Ficticio Homónimo','IT','adulto',true,'h-${rid}','pendiente')`);
+    }
+    const cola = await svc.pending(S, admin);
+    const dos = cola.requests.filter((r) => r.declared_name === 'Jugador Ficticio Homónimo');
+    assert.equal(dos.length, 2);
+    const emails = new Set(dos.map((r) => r.actor_email));
+    assert.equal(emails.size, 2);
+    assert.ok(dos.every((r) => r.actor_user_id && r.actor_email_verified === true));
+    assert.ok(dos.every((r) => r.actor_email.endsWith('@test.invalid')));
   });
 
   // GRUPO 10: edad canonica conocida distinta => AGE_MISMATCH (no sobreescribe)
