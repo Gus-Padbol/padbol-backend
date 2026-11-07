@@ -19,15 +19,18 @@ export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,pro
  app.get(admin+'/profile-requests',run('profile_request_list',async r=>profileRequests.pending(r.params.slug,await user(r)),20));
  app.post(admin+'/profile-requests/:requestId/review',run('profile_request_review',async r=>profileRequests.review(r.params.slug,await user(r),r.params.requestId,r.body||{}),10));
  // Metadatos publicos minimos torneo -> evento (slug). No revela nomina ni identidades.
- app.get('/api/nations-activation/by-torneo/:torneoId',run('by_torneo',async r=>{
-   const id=Number(r.params.torneoId);
-   if(!Number.isSafeInteger(id)||id<=0)throw activationError('INVALID_TORNEO',400);
-   const {rows}=await pool.query(
-     `select e.slug from public.nations_activation_events e
-        join public.torneos t on t.id=e.torneo_id
-       where e.torneo_id=$1 and e.enabled=true and t.modalidad_plantel='selecciones' limit 1`,[id]);
-   return {ok:true, slug: rows[0]?.slug||null};
- },30));
+ app.get('/api/nations-activation/by-torneo/:torneoId', async (req,res)=>{
+   res.setHeader('Cache-Control','no-store');
+   try{
+     const id=Number(req.params.torneoId);
+     if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({error:'INVALID_TORNEO',code:'INVALID_TORNEO'});
+     const {rows}=await pool.query(
+       `select e.slug from public.nations_activation_events e
+          join public.torneos t on t.id=e.torneo_id
+         where e.torneo_id=$1 and e.enabled=true and t.modalidad_plantel='selecciones' limit 1`,[id]);
+     return res.json({ok:true, slug: rows[0]?.slug||null});
+   }catch(e){logger?.error?.('[nations-activation]',{code:'BY_TORNEO_FAILED'});return res.status(503).json({error:'UNAVAILABLE',code:'UNAVAILABLE'});}
+ });
  app.post(pub+'/claim',run('claim',async r=>service.claim(r.params.slug,await user(r),r.body||{}),10));
  app.get(admin,run('overview',async r=>service.overview(r.params.slug,await user(r)),60));
  app.post(admin+'/imports/preview',run('preview',async r=>service.preview(r.params.slug,await user(r),r.body?.rows),10));
