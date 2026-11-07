@@ -368,16 +368,20 @@ app.use(RELAY_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (re
   next();
 });
 app.use('/api/internal/whatsapp-context', express.raw({ type: 'application/json', limit: '16kb' }));
-// Foto de perfil: auth + rate-limit + parser propio (base64 de 5 MB) ANTES del parser global
-// de 100 KB. El resto de rutas conserva el default.
-app.use('/api/usuarios/foto-perfil', profilePhotoUploadRateLimit, async (req, res, next) => {
-  try {
-    const { user, status, error } = await getAuthenticatedUser(req);
-    if (!user) return res.status(status).json({ error });
-    req.profilePhotoUser = user;
-    next();
-  } catch (e) { next(e); }
-}, express.json({ limit: '8mb' }));
+// Foto de perfil: SOLO POST exacto a /api/usuarios/foto-perfil. Auth + rate-limit + parser 8mb
+// antes del parser global de 100 KB; ninguna otra ruta ni método pasa por este parser.
+app.use((req, res, next) => {
+  if (req.method !== 'POST') return next();
+  const path = String(req.path || '').replace(/\/+$/, '');
+  if (path !== '/api/usuarios/foto-perfil') return next();
+  return profilePhotoUploadRateLimit(req, res, () => {
+    getAuthenticatedUser(req).then(({ user, status, error }) => {
+      if (!user) return res.status(status).json({ error, code: 'UNAUTHORIZED' });
+      req.profilePhotoUser = user;
+      return express.json({ limit: '8mb' })(req, res, next);
+    }).catch(next);
+  });
+});
 app.use(express.json({
   verify: (req, _res, buf) => {
     if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe' || req.path === CRM_EMAIL_PROVIDER_PATH) {
@@ -1630,7 +1634,7 @@ app.post('/api/reservas/liberar-slot-pendiente', reservasWriteRateLimit, async (
 // GET /api/reservas/mis-reservas — authenticated user's reservations (JWT required)
 app.get('/api/reservas/mis-reservas', async (req, res) => {
   try {
-    const { user, status, error: authError } = req.profilePhotoUser ? { user: req.profilePhotoUser } : await getAuthenticatedUser(req);
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(status).json({ error: authError });
     }
@@ -2088,7 +2092,7 @@ app.get('/api/torneos', async (req, res) => {
 // GET /api/torneos/mis-inscripciones — authenticated user's tournament enrollments (JWT required)
 app.get('/api/torneos/mis-inscripciones', async (req, res) => {
   try {
-    const { user, status, error: authError } = req.profilePhotoUser ? { user: req.profilePhotoUser } : await getAuthenticatedUser(req);
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(status).json({ error: authError });
     }
@@ -4557,7 +4561,7 @@ const jugadorRouter = express.Router();
 
 async function handleGetAuthenticatedPerfil(req, res) {
   try {
-    const { user, status, error: authError } = req.profilePhotoUser ? { user: req.profilePhotoUser } : await getAuthenticatedUser(req);
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(status).json({ error: authError });
     }
@@ -4596,7 +4600,7 @@ async function handleGetAuthenticatedPerfil(req, res) {
 
 async function handlePutAuthenticatedPerfil(req, res) {
   try {
-    const { user, status, error: authError } = req.profilePhotoUser ? { user: req.profilePhotoUser } : await getAuthenticatedUser(req);
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(status).json({ error: authError });
     }
@@ -4868,7 +4872,7 @@ jugadorRouter.put('/nivel-externo', async (req, res) => {
 // GET /api/jugador/perfiles?user_ids=uuid1,uuid2 — Batch jugadores_perfil for partido slots
 jugadorRouter.get('/perfiles', async (req, res) => {
   try {
-    const { user, status, error: authError } = req.profilePhotoUser ? { user: req.profilePhotoUser } : await getAuthenticatedUser(req);
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(status).json({ error: authError });
     }
@@ -4906,7 +4910,7 @@ jugadorRouter.get('/perfiles', async (req, res) => {
 // GET /api/jugador/rankings — Authenticated player's earned ranking positions
 jugadorRouter.get('/rankings', async (req, res) => {
   try {
-    const { user, status, error: authError } = req.profilePhotoUser ? { user: req.profilePhotoUser } : await getAuthenticatedUser(req);
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(status).json({ error: authError });
     }
@@ -4948,7 +4952,7 @@ usuariosRouter.post('/push-token', pushTokensRateLimit, async (req, res) => {
 // GET /api/usuarios/check-username?username= — Username availability (case insensitive)
 usuariosRouter.get('/check-username', async (req, res) => {
   try {
-    const { user, status, error: authError } = req.profilePhotoUser ? { user: req.profilePhotoUser } : await getAuthenticatedUser(req);
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(status).json({ error: authError });
     }
@@ -5011,7 +5015,7 @@ usuariosRouter.get('/perfil', handleGetAuthenticatedPerfil);
 // POST /api/usuarios/perfil — Create or complete jugadores_perfil for authenticated user
 usuariosRouter.post('/perfil', async (req, res) => {
   try {
-    const { user, status, error: authError } = req.profilePhotoUser ? { user: req.profilePhotoUser } : await getAuthenticatedUser(req);
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(status).json({ error: authError });
     }
@@ -5232,7 +5236,7 @@ const checkinRouter = express.Router();
 // POST /api/checkin/verificar — Verify QR and mark reservation check-in
 checkinRouter.post('/verificar', async (req, res) => {
   try {
-    const { user, status, error: authError } = req.profilePhotoUser ? { user: req.profilePhotoUser } : await getAuthenticatedUser(req);
+    const { user, status, error: authError } = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(status).json({ error: authError });
     }
