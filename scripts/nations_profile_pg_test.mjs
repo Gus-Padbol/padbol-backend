@@ -27,7 +27,7 @@ run('pg_ctl', ['-D', PGDATA, '-o', `-k ${SOCK} -c listen_addresses=''`, '-l', '/
 
 const pool = new Pool({host: SOCK, user: 'postgres', database: 'postgres', max: 4});
 const sql = (t) => pool.query(t);
-let pass = 0; const total = 17;
+let pass = 0; const total = 21;
 
 try {
   await sql(`create extension if not exists pgcrypto;
@@ -374,6 +374,109 @@ try {
     assert.equal(JSON.stringify(own).includes('review_note'), false);
     assert.ok(Array.isArray(own.requests));
   });
+
+  // ---------- INTEGRAL HTTP real (router + servicio + PG) ----------
+  {
+    const app = express(); app.use(express.json());
+    registerNationsActivationRoutes(app, {pool, authUserFromBearer: async (req) => {
+      const who = String(req.headers['x-fixture-user'] || '');
+      if (who === 'a') return {id: A, email_confirmed_at: '2026-01-01'};
+      if (who === 'b') return {id: B, email_confirmed_at: '2026-01-01'};
+      if (who === 'adm') return {id: ADM, email_confirmed_at: '2026-01-01'};
+      if (who === 'c') return {id: '00000000-0000-4000-8000-0000000000c5', email_confirmed_at: '2026-01-01'};
+      if (who === 'c6') return {id: '00000000-0000-4000-8000-0000000000c6', email_confirmed_at: '2026-01-01'};
+      if (who === 'c7') return {id: '00000000-0000-4000-8000-0000000000c7', email_confirmed_at: '2026-01-01'};
+      return null;
+    }});
+    const server = http.createServer(app);
+    await new Promise(r => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const call = (path, opts = {}) => fetch(base + path, opts).then(async (res) => ({status: res.status, body: await res.json().catch(() => null)}));
+    try {
+      await group('I1 submit -> own -> cola ven (privacidad)', async () => {
+        const C5 = '00000000-0000-4000-8000-0000000000c5';
+        await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${C5}','c5@test.invalid',now()) on conflict do nothing`);
+        const post = await call('/api/nations-activation/events/nations-cup-napoli-2026/profile-request', {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'x-fixture-user': 'c'},
+          body: JSON.stringify({request_id: 'i1-http-0001', declared_name: 'Jugador Ficticio I', declared_country: 'IT', age_status: 'adulto', profile_consent: true}),
+        });
+        assert.equal(post.status, 200); assert.equal(post.body.status, 'pendiente');
+        const own = await call('/api/nations-activation/events/nations-cup-napoli-2026/profile-request', {headers: {'x-fixture-user': 'c'}});
+        assert.equal(own.body.requests.length, 1);
+        const otro = await call('/api/nations-activation/events/nations-cup-napoli-2026/profile-request', {headers: {'x-fixture-user': 'a'}});
+        assert.ok(otro.body.requests.every(r => r.request_id !== 'i1-http-0001'));
+        const cola = await call('/api/admin/nations-activation/events/nations-cup-napoli-2026/profile-requests', {headers: {'x-fixture-user': 'adm'}});
+        assert.equal(cola.status, 200);
+        assert.ok(cola.body.requests.some(r => r.request_id === 'i1-http-0001'));
+      });
+
+      await group('I2 approve HTTP y /me devuelve persona propia', async () => {
+        const C5 = '00000000-0000-4000-8000-0000000000c5';
+        const P8 = '00000000-0000-4000-8000-0000000000f8';
+        await sql(`insert into public.torneo_participantes(id,torneo_id,sede_id,nombre,tipo_identidad,origen,estado_vinculacion,creado_por)
+          values ('${P8}',57,9,'Jugador Ficticio I','generico','club','sin_cuenta','${ADM}') on conflict (id) do nothing`);
+        await sql(`insert into public.nations_activation_participants(participante_id,torneo_id,country,row_key,minor,age_status)
+          values ('${P8}',57,'IT','rk-i',false,'adulto') on conflict (participante_id) do nothing`);
+        await sql(`insert into public.torneo_participante_equipos(torneo_id,participante_id,equipo_id) values (57,'${P8}',280) on conflict do nothing`);
+        await sql(`update public.nations_profile_requests set declared_name='Jugador Ficticio I' where request_id='i1-http-0001'`);
+        const id = (await sql(`select id from public.nations_profile_requests where request_id='i1-http-0001'`)).rows[0].id;
+        const rev = await call(`/api/admin/nations-activation/events/nations-cup-napoli-2026/profile-requests/${id}/review`, {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'x-fixture-user': 'adm'},
+          body: JSON.stringify({decision: 'aprobar', note: 'Evidencia suficiente verificada centralmente', identity_verified: true, matched_participante_id: P8}),
+        });
+        assert.equal(rev.status, 200);
+        const me = await call('/api/nations-activation/events/nations-cup-napoli-2026/me', {headers: {'x-fixture-user': 'c'}});
+        assert.equal(me.status, 200);
+        assert.ok(me.body.profile, 'me debe devolver el perfil propio');
+        assert.equal(String(me.body.profile.participantId), P8);
+        const ajeno = await call('/api/nations-activation/events/nations-cup-napoli-2026/me', {headers: {'x-fixture-user': 'a'}});
+        assert.equal(ajeno.body.profile, null, 'otro actor no ve perfil ajeno');
+      });
+
+      await group('I3 rechazo HTTP y nueva solicitud con id nuevo', async () => {
+        const post = await call('/api/nations-activation/events/nations-cup-napoli-2026/profile-request', {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'x-fixture-user': 'c'},
+          body: JSON.stringify({request_id: 'i3-rechaz-01', declared_name: 'Jugador Ficticio I', declared_country: 'IT', age_status: 'adulto', profile_consent: true}),
+        });
+        assert.equal(post.status, 200);
+        const id = (await sql(`select id from public.nations_profile_requests where request_id='i3-rechaz-01'`)).rows[0].id;
+        const rev = await call(`/api/admin/nations-activation/events/nations-cup-napoli-2026/profile-requests/${id}/review`, {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'x-fixture-user': 'adm'},
+          body: JSON.stringify({decision: 'rechazar', note: 'Rechazo con evidencia insuficiente en nomina'}),
+        });
+        assert.equal(rev.status, 200);
+        const nueva = await call('/api/nations-activation/events/nations-cup-napoli-2026/profile-request', {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'x-fixture-user': 'c'},
+          body: JSON.stringify({request_id: 'i3-nueva-002', declared_name: 'Jugador Ficticio I', declared_country: 'IT', age_status: 'adulto', profile_consent: true}),
+        });
+        assert.equal(nueva.status, 200);
+        assert.equal(nueva.body.status, 'pendiente');
+      });
+
+      await group('I4 unknown y menor por HTTP', async () => {
+        const C6 = '00000000-0000-4000-8000-0000000000c6';
+        await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${C6}','c6@test.invalid',now()) on conflict do nothing`);
+        const unk = await call('/api/nations-activation/events/nations-cup-napoli-2026/profile-request', {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'x-fixture-user': 'c6'},
+          body: JSON.stringify({request_id: 'i4-unknown-1', declared_name: 'Jugador Ficticio U', declared_country: 'IT', age_status: 'desconocido', profile_consent: true}),
+        });
+        assert.equal(unk.status, 200);
+        const idU = (await sql(`select id from public.nations_profile_requests where request_id='i4-unknown-1'`)).rows[0].id;
+        const revU = await call(`/api/admin/nations-activation/events/nations-cup-napoli-2026/profile-requests/${idU}/review`, {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'x-fixture-user': 'adm'},
+          body: JSON.stringify({decision: 'aprobar', note: 'Intento de aprobar edad desconocida', identity_verified: true, matched_participante_id: PART2}),
+        });
+        assert.equal(revU.status, 409);
+        const C7 = '00000000-0000-4000-8000-0000000000c7';
+        await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${C7}','c7@test.invalid',now()) on conflict do nothing`);
+        const men = await call('/api/nations-activation/events/nations-cup-napoli-2026/profile-request', {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'x-fixture-user': 'c7'},
+          body: JSON.stringify({request_id: 'i4-menor-001', declared_name: 'Jugador Ficticio M', declared_country: 'IT', age_status: 'menor', guardian_consent: true, profile_consent: true}),
+        });
+        assert.equal(men.status, 200);
+      });
+    } finally { server.close(); }
+  }
 
 } catch (error) {
   console.error('FAIL |', error.code, error.message, '|', (error.where||'').slice(0,120));
