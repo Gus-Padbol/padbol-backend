@@ -27,7 +27,7 @@ run('pg_ctl', ['-D', PGDATA, '-o', `-k ${SOCK} -c listen_addresses=''`, '-l', '/
 
 const pool = new Pool({host: SOCK, user: 'postgres', database: 'postgres', max: 4});
 const sql = (t) => pool.query(t);
-let pass = 0; const total = 5;
+let pass = 0; const total = 13;
 
 try {
   await sql(`create extension if not exists pgcrypto;
@@ -46,6 +46,7 @@ try {
   const ADM = '00000000-0000-4000-8000-0000000000c3';
   const B = '00000000-0000-4000-8000-0000000000b2';
   const PART = '00000000-0000-4000-8000-0000000000d4';
+  const PART2 = '00000000-0000-4000-8000-0000000000e5';
   await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${A}','a@test.invalid',now()),('${ADM}','adm@test.invalid',now()),('${B}','b@test.invalid',now())`);
   await sql(`insert into public.user_roles(id,user_id,role) values (1,'${ADM}','super_admin')`);
   await sql(`insert into public.sedes(id,nombre,pais,ciudad,timezone,tipo_sede) values (9,'Sede Ficticia','Italia','Napoli','Europe/Rome','torneo')`);
@@ -54,9 +55,11 @@ try {
   await sql(`insert into public.nations_activation_events(torneo_id,slug,title,enabled,roster_publication_approved)
     values (57,'nations-cup-napoli-2026','V Padbol Nations Cup',true,false)`);
   await sql(`insert into public.torneo_participantes(id,torneo_id,sede_id,nombre,tipo_identidad,origen,estado_vinculacion,creado_por)
-    values ('${PART}',57,9,'Jugador Ficticio','generico','club','sin_cuenta','${ADM}')`);
+    values ('${PART}',57,9,'Jugador Ficticio','generico','club','sin_cuenta','${ADM}'),
+           ('${PART2}',57,9,'Jugador Ficticio Dos','generico','club','sin_cuenta','${ADM}')`);
   await sql(`insert into public.nations_activation_participants(participante_id,torneo_id,country,row_key,minor,age_status)
-    values ('${PART}',57,'IT','rk-a',false,'desconocido')`);
+    values ('${PART}',57,'IT','rk-a',false,'desconocido'),
+           ('${PART2}',57,'ES','rk-b',false,'desconocido')`);
   await sql(`insert into public.equipos(id,torneo_id,sede_id,nombre,jugadores,cupo_maximo,inscripcion_estado)
     values (280,57,9,'Italia','[]'::jsonb,8,'confirmado')`);
   await sql(`insert into public.torneo_participante_equipos(torneo_id,participante_id,equipo_id) values (57,'${PART}',280)`);
@@ -138,6 +141,141 @@ try {
       console.log('PASS | 5) no-admin 403 en cola central'); pass++;
     } finally { server.close(); }
   }
+
+  // ---------- Fase 1e: 8 grupos ----------
+  const E = '00000000-0000-4000-8000-0000000000e6';
+  const F = '00000000-0000-4000-8000-0000000000f7';
+  const H = '00000000-0000-4000-8000-0000000000a9';
+  const I = '00000000-0000-4000-8000-0000000000b9';
+  const J = '00000000-0000-4000-8000-0000000000c9';
+  const K = '00000000-0000-4000-8000-0000000000d9';
+  const L = '00000000-0000-4000-8000-0000000000ea';
+  await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${E}','e@test.invalid',now()),('${F}','f@test.invalid',now()),('${H}','h@test.invalid',now()),('${I}','i@test.invalid',now()),('${J}','j@test.invalid',now()),('${K}','k@test.invalid',now()),('${L}','l@test.invalid',now())`);
+  await sql(`insert into public.torneos(id,nombre,sede_id,deporte,modalidad_plantel,estado,fecha_inicio,fecha_fin,horas_revelar_equipos)
+    values (58,'Evento Deshabilitado',9,'padbol','selecciones','inscripcion','2026-11-20','2026-11-22',48)
+    on conflict (id) do nothing`);
+  await sql(`insert into public.nations_activation_events(torneo_id,slug,title,enabled,roster_publication_approved)
+    values (58,'evento-deshabilitado','Evento',false,false) on conflict (slug) do nothing`);
+
+  const actorE = {id: E, email_confirmed_at: '2026-01-01'};
+  const actorF = {id: F, email_confirmed_at: '2026-01-01'};
+  const actorH = {id: H, email_confirmed_at: '2026-01-01'};
+  const actorI = {id: I, email_confirmed_at: '2026-01-01'};
+  const actorJ = {id: J, email_confirmed_at: '2026-01-01'};
+  const S = 'nations-cup-napoli-2026';
+  const P3 = '00000000-0000-4000-8000-0000000000f9';
+  await sql(`insert into public.torneo_participantes(id,torneo_id,sede_id,nombre,tipo_identidad,origen,estado_vinculacion,creado_por)
+    values ('${P3}',57,9,'Jugador Ficticio C','generico','club','sin_cuenta','${ADM}') on conflict (id) do nothing`);
+  await sql(`insert into public.nations_activation_participants(participante_id,torneo_id,country,row_key,minor,age_status)
+    values ('${P3}',57,'IT','rk-c',false,'adulto') on conflict (participante_id) do nothing`);
+  const idOf = async (rid) => (await sql(`select id from public.nations_profile_requests where request_id='${rid}'`)).rows[0]?.id;
+  const countRows = async () => (await sql(`select count(*)::int n from public.nations_profile_requests`)).rows[0].n;
+
+  async function group(nombre, fn) {
+    try { await fn(); console.log(`PASS | ${nombre}`); pass++; }
+    catch (e) { console.log(`FAIL | ${nombre} | ${e.code || e.message} | ${(e.stack||'').split('\n')[1]?.trim()}`); }
+  }
+
+  // GRUPO 1: unknown approve => 409
+  await group('G1 unknown approve => 409', async () => {
+    const r = await svc.submit(S, actorE, {request_id:'g1-unknown1', declared_name:'Jugador Ficticio', declared_country:'IT', age_status:'desconocido', profile_consent:true});
+    assert.equal(r.status, 'pendiente');
+    const id = await idOf('g1-unknown1');
+    await assert.rejects(svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, note:'Revision central verificada del caso G1', matched_participante_id: PART}), /AGE_NOT_VERIFIED/);
+  });
+
+  // GRUPO 2: menor sin guardian central 409; con guardian+identidad+nota => exito
+  await group('G2 menor sin guardian_verified => 409 y con revision => exito', async () => {
+    await svc.submit(S, actorF, {request_id:'g2-menor01', declared_name:'Jugador Ficticio', declared_country:'ES', age_status:'menor', guardian_consent:true, profile_consent:true});
+    const id = await idOf('g2-menor01');
+    await assert.rejects(svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, note:'Revision central de menor sin guardian verificado', matched_participante_id: PART2}), /GUARDIAN_CONSENT_REQUIRED/);
+    const r = await svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, guardian_verified:true, note:'Revision central de menor con guardian verificado', matched_participante_id: PART2});
+    assert.equal(r.status, 'aprobada');
+  });
+
+  // GRUPO 3: mismo request mismo payload => receipt; payload cambiado => 409
+  await group('G3 retry identico receipt y payload cambiado 409', async () => {
+    const base3 = {request_id:'g3-stable01', declared_name:'Jugador Ficticio', declared_country:'IT', age_status:'adulto', profile_consent:true};
+    const r1 = await svc.submit(S, actorH, base3);
+    const r2 = await svc.submit(S, actorH, base3);
+    assert.deepEqual(r1, r2);
+    await assert.rejects(svc.submit(S, actorH, {...base3, declared_name:'Otro Nombre Ficticio'}), /REQUEST_CONFLICT/);
+  });
+
+  // GRUPO 4: UUID nuevo con solicitud activa => 409
+  await group('G4 UUID nuevo con solicitud activa => 409 sin duplicar', async () => {
+    const antes = await countRows();
+    await assert.rejects(svc.submit(S, actorH, {request_id:'g4-nuevo001', declared_name:'Jugador Ficticio', declared_country:'IT', age_status:'adulto', profile_consent:true}), /REQUEST_CONFLICT/);
+    assert.equal(await countRows(), antes);
+  });
+
+  // GRUPO 5: country ajeno y evento deshabilitado
+  await group('G5 country mismatch y evento deshabilitado rechazan', async () => {
+    await assert.rejects(svc.submit('evento-deshabilitado', actorI, {request_id:'g5-disabled1', declared_name:'Jugador Ficticio', declared_country:'IT', age_status:'adulto', profile_consent:true}), /EVENT_NOT_AVAILABLE/);
+    const r = await svc.submit(S, actorJ, {request_id:'g5-country01', declared_name:'Jugador Ficticio C', declared_country:'ES', age_status:'adulto', profile_consent:true});
+    assert.equal(r.status, 'pendiente');
+    const id = await idOf('g5-country01');
+    await assert.rejects(svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, note:'Revision central con pais declarado distinto', matched_participante_id: P3}), /COUNTRY_MISMATCH/);
+  });
+
+  // GRUPO 6: carrera 2 actores 2 requests 1 participante (PART2 ya aprobado en G2 => usar PART? ya vinculado)
+  await group('G6 carrera dos actores un participante: 1 exito y 1 conflicto', async () => {
+
+    await sql(`insert into public.nations_profile_requests(torneo_id,actor_user_id,request_id,declared_name,declared_country,age_status,profile_consent,payload_hash,status)
+      values (57,'${K}','g6-race-e1','Jugador Ficticio C','IT','adulto',true,'hash-e','pendiente'),
+             (57,'${L}','g6-race-f1','Jugador Ficticio C','IT','adulto',true,'hash-f','pendiente')`);
+    const idE = await idOf('g6-race-e1');
+    const idF = await idOf('g6-race-f1');
+    const res = await Promise.allSettled([
+      svc.review(S, admin, idE, {decision:'aprobar', identity_verified:true, note:'Revision central carrera actor E valida', matched_participante_id: P3}),
+      svc.review(S, admin, idF, {decision:'aprobar', identity_verified:true, note:'Revision central carrera actor F valida', matched_participante_id: P3}),
+    ]);
+    const ok = res.filter(x => x.status === 'fulfilled').length;
+    assert.equal(ok, 1, 'debe haber exactamente un exito');
+    const owner = (await sql(`select linked_user_id from public.torneo_participantes where id='${P3}'`)).rows[0].linked_user_id;
+    assert.ok(owner === K || owner === L);
+  });
+
+  // GRUPO 7: terminales no flipean (caso propio y determinista)
+  await group('G7 approved/rejected terminales no flipean', async () => {
+    const M = '00000000-0000-4000-8000-0000000000aa';
+    const P4 = '00000000-0000-4000-8000-0000000000ba';
+    await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${M}','m@test.invalid',now()) on conflict do nothing`);
+    await sql(`insert into public.torneo_participantes(id,torneo_id,sede_id,nombre,tipo_identidad,origen,estado_vinculacion,creado_por)
+      values ('${P4}',57,9,'Jugador Ficticio D','generico','club','sin_cuenta','${ADM}') on conflict (id) do nothing`);
+    await sql(`insert into public.nations_activation_participants(participante_id,torneo_id,country,row_key,minor,age_status)
+      values ('${P4}',57,'IT','rk-d',false,'adulto') on conflict (participante_id) do nothing`);
+    const actorM = {id: M, email_confirmed_at: '2026-01-01'};
+    await svc.submit(S, actorM, {request_id:'g7-terminal', declared_name:'Jugador Ficticio D', declared_country:'IT', age_status:'adulto', profile_consent:true});
+    const id = await idOf('g7-terminal');
+    await svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, note:'Revision central terminal del caso G7', matched_participante_id: P4});
+    await assert.rejects(svc.review(S, admin, id, {decision:'rechazar', note:'Intento de revertir aprobacion terminal'}), /REQUEST_ALREADY_REVIEWED/);
+    await assert.rejects(svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, note:'Intento de reaprobar terminal', matched_participante_id: P4}), /REQUEST_ALREADY_REVIEWED/);
+    // rechazada terminal
+    const M2 = '00000000-0000-4000-8000-0000000000ca';
+    await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${M2}','m2@test.invalid',now()) on conflict do nothing`);
+    const actorM2 = {id: M2, email_confirmed_at: '2026-01-01'};
+    await svc.submit(S, actorM2, {request_id:'g7-rechazo', declared_name:'Jugador Ficticio D', declared_country:'IT', age_status:'adulto', profile_consent:true});
+    const id2 = await idOf('g7-rechazo');
+    await svc.review(S, admin, id2, {decision:'rechazar', note:'Rechazo terminal por identidad no coincidente'});
+    await assert.rejects(svc.review(S, admin, id2, {decision:'aprobar', identity_verified:true, note:'Intento de aprobar rechazo terminal', matched_participante_id: P4}), /REQUEST_ALREADY_REVIEWED/);
+  });
+
+  // GRUPO 8: RLS directo denegado, API own funciona y DTO sin note
+  await group('G8 RLS anon/auth denegado y DTO sin review_note', async () => {
+    const deny = async (role) => {
+      const client = await pool.connect();
+      try { await client.query(`set role ${role}`); await client.query('select * from public.nations_profile_requests limit 1'); return false; }
+      catch (e) { return e.code === '42501' || /permission denied/i.test(e.message); }
+      finally { try { await client.query('reset role'); } catch {} client.release(); }
+    };
+    assert.equal(await deny('anon'), true, 'anon no debe leer la tabla');
+    assert.equal(await deny('authenticated'), true, 'authenticated no debe leer la tabla');
+    const own = await svc.ownStatus(S, actorE);
+    assert.equal(JSON.stringify(own).includes('review_note'), false);
+    assert.ok(Array.isArray(own.requests));
+  });
+
 } catch (error) {
   console.error('FAIL |', error.code, error.message, '|', (error.where||'').slice(0,120));
 } finally {
