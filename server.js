@@ -82,6 +82,7 @@ import { MercadoPagoConfig, Preference } from 'mercadopago';
 import Stripe from 'stripe';
 import cronLibrary from 'node-cron';
 import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
+import { accesoPlantelesTorneo } from './lib/tournamentTeamsPrivacy.js';
 import { createHubRouter } from './routes/hub.js';
 import { createContentAdminRouter } from './routes/contentAdmin.js';
 import { createContentWorkspaceRouter } from './routes/contentWorkspace.js';
@@ -2854,11 +2855,17 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
     const tid = parseInt(torneo_id, 10);
-    const eventRead = await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',tid).maybeSingle();
+    const eventRead = await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos,modalidad_plantel').eq('id',tid).maybeSingle();
     if(eventRead.error)throw eventRead.error;
     const audience=eventRead.data?.plan_nations?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
     const enrollmentAdmin=audience?audience.admin:mayReadTournamentEnrollment(await qaCatalogAudience(req),eventRead.data);
     if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
+    // Fail-closed: un torneo de selecciones no expone planteles aunque plan_nations sea NULL.
+    if(!audience){
+      const flag=(await supabaseAdmin.from('nations_activation_events').select('roster_publication_approved').eq('torneo_id',tid).maybeSingle());
+      const gate=accesoPlantelesTorneo({torneo:eventRead.data,event:flag && !flag.error?flag.data:null,esAdmin:enrollmentAdmin,captainIds:[]});
+      if(!gate.allowed)return res.status(403).json({error:'El plantel todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
+    }
 
     const [
       { data: equipos, error: errE },
