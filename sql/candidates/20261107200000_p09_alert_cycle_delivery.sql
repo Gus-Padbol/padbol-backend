@@ -136,6 +136,7 @@ create table if not exists public.crm_agenda_reminders (
   advisor_id uuid not null,
   scheduled_at timestamptz not null,
   anticipation_hours integer not null check (anticipation_hours > 0),
+  active boolean not null default true,
   created_at timestamptz not null default now(),
   unique (case_type, case_id, scheduled_at, anticipation_hours)
 );
@@ -159,23 +160,28 @@ begin
       from base b cross join lateral unnest(coalesce(b.reminder_hours, array[24,8])) h(anticipation)
      where h.anticipation > 0 and p_now >= b.scheduled_at - make_interval(hours => h.anticipation)
   ), inserted as (
-    insert into public.crm_agenda_reminders (case_type,case_id,advisor_id,scheduled_at,anticipation_hours)
-    select case_type,case_id,advisor_id,scheduled_at,anticipation from hours
-    on conflict do nothing returning 1)
+    insert into public.crm_agenda_reminders (case_type,case_id,advisor_id,scheduled_at,anticipation_hours,active)
+    select case_type,case_id,advisor_id,scheduled_at,anticipation,true from hours
+    on conflict (case_type,case_id,scheduled_at,anticipation_hours) do update
+      set active=true, advisor_id=excluded.advisor_id
+    returning 1)
   select count(*) into v_inserted from inserted;
   return jsonb_build_object('inserted', v_inserted, 'at', p_now);
 end $$;
 create or replace function public.crm_agenda_reminders_reconcile()
 returns void language sql security definer set search_path=pg_catalog,public as $$
-  delete from public.crm_agenda_reminders r
-   where not exists (
+  update public.crm_agenda_reminders r set active=false
+   where r.active and not exists (
      select 1 from public.crm_commercial_cases c
       where r.case_type='whatsapp' and c.id=r.case_id and c.status in ('open','suspended')
-        and c.assigned_user_id=r.advisor_id and c.next_contact_at=r.scheduled_at)
+        and c.assigned_user_id=r.advisor_id and c.next_contact_at=r.scheduled_at
+        and r.anticipation_hours = any(coalesce(c.reminder_hours,array[24,8])))
      and not exists (
      select 1 from public.crm_commercial_form_cases f
       where r.case_type='form' and f.conversation_id=r.case_id
-        and f.assigned_user_id=r.advisor_id and f.next_contact_at=r.scheduled_at);
+        and f.assigned_user_id=r.advisor_id and f.next_contact_at=r.scheduled_at
+        and coalesce(f.progress_state,'') not in ('cerrado','closed')
+        and r.anticipation_hours = any(coalesce(f.reminder_hours,array[24,8])));
 $$;
 alter table public.crm_agenda_reminders enable row level security;
 revoke all on public.crm_agenda_reminders from public, anon, authenticated;
