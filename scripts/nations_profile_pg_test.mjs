@@ -27,7 +27,7 @@ run('pg_ctl', ['-D', PGDATA, '-o', `-k ${SOCK} -c listen_addresses=''`, '-l', '/
 
 const pool = new Pool({host: SOCK, user: 'postgres', database: 'postgres', max: 4});
 const sql = (t) => pool.query(t);
-let pass = 0; const total = 13;
+let pass = 0; const total = 14;
 
 try {
   await sql(`create extension if not exists pgcrypto;
@@ -234,6 +234,35 @@ try {
     assert.equal(ok, 1, 'debe haber exactamente un exito');
     const owner = (await sql(`select linked_user_id from public.torneo_participantes where id='${P3}'`)).rows[0].linked_user_id;
     assert.ok(owner === K || owner === L);
+  });
+
+  // G6b: carrera con 5 actores sobre el MISMO participante (determinista en cuanto a invariante)
+  await group('G6b carrera 5 actores un participante: exactamente 1 vinculado', async () => {
+    const P5 = '00000000-0000-4000-8000-0000000000fb';
+    await sql(`insert into public.torneo_participantes(id,torneo_id,sede_id,nombre,tipo_identidad,origen,estado_vinculacion,creado_por)
+      values ('${P5}',57,9,'Jugador Ficticio E','generico','club','sin_cuenta','${ADM}') on conflict (id) do nothing`);
+    await sql(`insert into public.nations_activation_participants(participante_id,torneo_id,country,row_key,minor,age_status)
+      values ('${P5}',57,'IT','rk-e',false,'adulto') on conflict (participante_id) do nothing`);
+    const ids = [];
+    for (let i = 0; i < 5; i++) {
+      const uid = `00000000-0000-4000-8000-0000000000${i}1`;
+      await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${uid}','r${i}@test.invalid',now()) on conflict do nothing`);
+      const rid = `g6b-race-${i}`;
+      await sql(`insert into public.nations_profile_requests(torneo_id,actor_user_id,request_id,declared_name,declared_country,age_status,profile_consent,payload_hash,status)
+        values (57,'${uid}','${rid}','Jugador Ficticio E','IT','adulto',true,'hash-${i}','pendiente')`);
+      ids.push(rid);
+    }
+    const rowIds = [];
+    for (const rid of ids) rowIds.push((await sql(`select id from public.nations_profile_requests where request_id='${rid}'`)).rows[0].id);
+    const res = await Promise.allSettled(rowIds.map((rowId) => svc.review(S, admin, rowId, {
+      decision: 'aprobar', identity_verified: true, note: 'Revision central carrera multiple valida', matched_participante_id: P5,
+    })));
+    const ok = res.filter((x) => x.status === 'fulfilled').length;
+    const aprobadas = (await sql(`select count(*)::int n from public.nations_profile_requests where request_id like 'g6b-race-%' and status='aprobada'`)).rows[0].n;
+    const dueños = (await sql(`select count(distinct linked_user_id)::int n from public.torneo_participantes where id='${P5}'`)).rows[0].n;
+    assert.equal(ok, 1, 'exactamente una aprobacion debe tener exito');
+    assert.equal(aprobadas, 1, 'exactamente una solicitud queda aprobada');
+    assert.equal(dueños, 1, 'el participante queda con un unico dueño');
   });
 
   // GRUPO 7: terminales no flipean (caso propio y determinista)
