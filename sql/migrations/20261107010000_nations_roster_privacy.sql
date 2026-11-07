@@ -78,12 +78,33 @@ DECLARE def text; nuevo text;
 BEGIN
   SELECT pg_get_functiondef(oid) INTO def FROM pg_proc WHERE proname='gestionar_participantes_torneo';
   IF def IS NULL THEN RAISE EXCEPTION 'RPC gestionar_participantes_torneo ausente'; END IF;
-  nuevo := replace(def,'shared_visible boolean:=false','shared_visible boolean:=true');
-  nuevo := replace(nuevo,'shared_visible:=coalesce(reveal_at<=now(),false);',
-    'shared_visible:=CASE WHEN NOT (coalesce(t.modalidad_plantel,'''')=''selecciones'' OR t.plan_nations IS NOT NULL) THEN true ELSE coalesce(reveal_at<=now(),false) AND EXISTS(SELECT 1 FROM public.nations_activation_events ev WHERE ev.torneo_id=t.id AND ev.roster_publication_approved) END;');
-  nuevo := replace(nuevo,'shared_visible:=coalesce(reveal_at<=now(),false) AND EXISTS(SELECT 1 FROM public.nations_activation_events ev WHERE ev.torneo_id=t.id AND ev.roster_publication_approved);',
-    'shared_visible:=CASE WHEN NOT (coalesce(t.modalidad_plantel,'''')=''selecciones'' OR t.plan_nations IS NOT NULL) THEN true ELSE coalesce(reveal_at<=now(),false) AND EXISTS(SELECT 1 FROM public.nations_activation_events ev WHERE ev.torneo_id=t.id AND ev.roster_publication_approved) END;');
-  IF nuevo IS DISTINCT FROM def THEN EXECUTE nuevo; END IF;
+
+  -- 1) Fail-closed al entrar: selecciones o con plan => cerrado hasta aprobacion+reveal.
+  IF position('MESSAGE=''Tournament missing''' IN def)=0 THEN
+    RAISE EXCEPTION 'Patron Tournament missing no encontrado: forward NO aplicable';
+  END IF;
+  IF position('nations_privacy_fail_closed' IN def)=0 THEN
+    nuevo := replace(def,
+      'IF t.id IS NULL THEN RAISE EXCEPTION USING ERRCODE=''P0002'',MESSAGE=''Tournament missing'';END IF;',
+      'IF t.id IS NULL THEN RAISE EXCEPTION USING ERRCODE=''P0002'',MESSAGE=''Tournament missing'';END IF; /* nations_privacy_fail_closed */ ' ||
+      'shared_visible := NOT (coalesce(t.modalidad_plantel,'''')=''selecciones'' OR t.plan_nations IS NOT NULL);');
+  ELSE
+    nuevo := def;  -- ya inyectado: idempotente
+  END IF;
+
+  -- 2) Declaracion por defecto cerrada.
+  nuevo := replace(nuevo,'shared_visible boolean:=true','shared_visible boolean:=false');
+
+  -- 3) Al revelar: solo si aprobado Y fecha cumplida.
+  IF position('shared_visible:=coalesce(reveal_at<=now(),false);' IN nuevo)>0 THEN
+    nuevo := replace(nuevo,'shared_visible:=coalesce(reveal_at<=now(),false);',
+      'shared_visible:=CASE WHEN NOT (coalesce(t.modalidad_plantel,'''')=''selecciones'' OR t.plan_nations IS NOT NULL) THEN true ELSE coalesce(reveal_at<=now(),false) AND EXISTS(SELECT 1 FROM public.nations_activation_events ev WHERE ev.torneo_id=t.id AND ev.roster_publication_approved) END;');
+  END IF;
+
+  IF nuevo = def THEN
+    RAISE EXCEPTION 'Forward sin efecto: strings no coinciden con la RPC real';
+  END IF;
+  EXECUTE nuevo;
 END $patch$;
 
 COMMIT;

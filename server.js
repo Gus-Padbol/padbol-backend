@@ -83,6 +83,7 @@ import Stripe from 'stripe';
 import cronLibrary from 'node-cron';
 import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
 import { accesoPlantelesTorneo } from './lib/tournamentTeamsPrivacy.js';
+import { fetchNationsApprovalMap } from './lib/torneos/nationsApprovalMap.js';
 import { decidirPayloadEquipos } from './lib/torneoEquiposRead.js';
 import { createHubRouter } from './routes/hub.js';
 import { createContentAdminRouter } from './routes/contentAdmin.js';
@@ -2381,7 +2382,7 @@ function mapLegacyRankingPublicRow(entry) {
   };
 }
 
-app.get('/api/jugadores/:userId/torneos-puntos',async(req,res)=>{try{const items=await loadPublishedNationalPoints(supabaseAdmin,{userId:req.params.userId,isRevealed:isNationsPublicRevealed});res.json({ok:true,jugador_id:req.params.userId,items});}catch(error){sendHttpError(res,error);}});
+app.get('/api/jugadores/:userId/torneos-puntos',async(req,res)=>{try{const ap=await fetchNationsApprovalMap(supabaseAdmin,[]);const items=await loadPublishedNationalPoints(supabaseAdmin,{userId:req.params.userId,isRevealed:(t,now)=>isNationsPublicRevealed(t,now,ap.get(Number(t.id))===true)});res.json({ok:true,jugador_id:req.params.userId,items});}catch(error){sendHttpError(res,error);}});
 
 async function assertNationsLegacyEventRead(req,torneoId,{roster=false}={}) {
  const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneoId)).maybeSingle();if(event.error)throw event.error;if(!event.data?.plan_nations)return;
@@ -2417,7 +2418,8 @@ app.get('/api/rankings', async (req, res) => {
     if (errT) throw errT;
     if (!torneos?.length) return res.json([]);
 
-    const torneoIds = torneos.filter(t=>rankingTournamentEligible(t)&&isNationsPublicRevealed(t)).map(t => t.id);
+    const aprobaciones = await fetchNationsApprovalMap(supabaseAdmin, torneos.map(t=>t.id));
+    const torneoIds = torneos.filter(t=>rankingTournamentEligible(t)&&isNationsPublicRevealed(t,Date.now(),aprobaciones.get(Number(t.id))===true)).map(t => t.id);
     if(!torneoIds.length)return res.json([]);
 
     // 2. Load tabla_puntos for those torneos
