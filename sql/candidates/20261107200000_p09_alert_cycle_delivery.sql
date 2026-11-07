@@ -118,3 +118,56 @@ create table if not exists public.crm_lead_alert_deliveries (
   sent_at timestamptz,
   primary key (alert_id, stage, recipient_id)
 );
+
+-- Agenda: avisos ligados a la fecha programada (next_contact_at) y sus anticipaciones.
+create table if not exists public.crm_agenda_reminders (
+  id uuid primary key default gen_random_uuid(),
+  case_type text not null check (case_type in ('whatsapp','form')),
+  case_id uuid not null,
+  advisor_id uuid not null,
+  scheduled_at timestamptz not null,
+  anticipation_hours integer not null check (anticipation_hours > 0),
+  created_at timestamptz not null default now(),
+  unique (case_type, case_id, scheduled_at, anticipation_hours)
+);
+
+create or replace function public.crm_agenda_reminders_sweep(p_now timestamptz default now())
+returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
+declare v_inserted int := 0;
+begin
+  -- Solo casos con agenda explicita (next_contact_at). Sin created_at inferido: historicos no entran.
+  with base as (
+    select 'whatsapp'::text case_type, c.id case_id, c.assigned_user_id advisor_id,
+           c.next_contact_at scheduled_at, c.reminder_hours
+      from public.crm_commercial_cases c
+     where c.status in ('open','suspended') and c.assigned_user_id is not null
+       and c.next_contact_at is not null
+    union all
+    select 'form', f.conversation_id, f.assigned_user_id, f.next_contact_at, f.reminder_hours
+      from public.crm_commercial_form_cases f
+     where f.assigned_user_id is not null and f.next_contact_at is not null
+  ), hours as (
+    select b.*, h.anticipation
+      from base b cross join lateral unnest(coalesce(b.reminder_hours, array[24,8])) h(anticipation)
+     where h.anticipation > 0 and p_now >= b.scheduled_at - make_interval(hours => h.anticipation)
+  ), inserted as (
+    insert into public.crm_agenda_reminders (case_type,case_id,advisor_id,scheduled_at,anticipation_hours)
+    select case_type,case_id,advisor_id,scheduled_at,anticipation from hours
+    on conflict do nothing returning 1)
+  select count(*) into v_inserted from inserted;
+  return jsonb_build_object('inserted', v_inserted, 'at', p_now);
+end $$;
+
+-- Cancela recordatorios cuya agenda cambio, el caso se cerro o el asesor ya no coincide.
+create or replace function public.crm_agenda_reminders_reconcile()
+returns void language sql security definer set search_path=pg_catalog,public as $$
+  delete from public.crm_agenda_reminders r
+   where not exists (
+     select 1 from public.crm_commercial_cases c
+      where r.case_type='whatsapp' and c.id=r.case_id and c.status in ('open','suspended')
+        and c.assigned_user_id=r.advisor_id and c.next_contact_at=r.scheduled_at)
+     and not exists (
+     select 1 from public.crm_commercial_form_cases f
+      where r.case_type='form' and f.conversation_id=r.case_id
+        and f.assigned_user_id=r.advisor_id and f.next_contact_at=r.scheduled_at);
+$$;
