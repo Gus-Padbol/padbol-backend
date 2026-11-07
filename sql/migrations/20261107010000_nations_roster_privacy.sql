@@ -83,6 +83,9 @@ BEGIN
   IF position('MESSAGE=''Tournament missing''' IN def)=0 THEN
     RAISE EXCEPTION 'Patron Tournament missing no encontrado: forward NO aplicable';
   END IF;
+  IF position('nations_privacy_fail_closed' IN def)>0 THEN
+    RETURN;  -- ya aplicado: idempotente, no reinyecta ni falla
+  END IF;
   IF position('nations_privacy_fail_closed' IN def)=0 THEN
     nuevo := replace(def,
       'IF t.id IS NULL THEN RAISE EXCEPTION USING ERRCODE=''P0002'',MESSAGE=''Tournament missing'';END IF;',
