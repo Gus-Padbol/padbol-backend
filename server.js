@@ -83,6 +83,7 @@ import Stripe from 'stripe';
 import cronLibrary from 'node-cron';
 import { createEquiposUsuarioRouter, mountJugadorInvitacionesEquipoRoute } from './routes/equipos.js';
 import { accesoPlantelesTorneo } from './lib/tournamentTeamsPrivacy.js';
+import { decidirPayloadEquipos } from './lib/torneoEquiposRead.js';
 import { createHubRouter } from './routes/hub.js';
 import { createContentAdminRouter } from './routes/contentAdmin.js';
 import { createContentWorkspaceRouter } from './routes/contentWorkspace.js';
@@ -2910,12 +2911,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     const result = (equipos || []).map((eq) =>
       mapTournamentTeamReadRow(eq,{grupo:grupoMap[eq.id]||null,posicion:posicionMap[eq.id]??null,admin:enrollmentAdmin}),
     );
-    let payload;
-    if(audience&&!audience.admin) payload=result.map(eq=>audience.captainIds.includes(Number(eq.id))?eq:{id:eq.id,nombre:eq.nombre,grupo:eq.grupo,posicion:eq.posicion}).filter(eq=>audience.revealed||audience.captainIds.includes(Number(eq.id)));
-    else if(!audience&&gate&&gate.reason==='captain') payload=result.filter(eq=>capitanIds.includes(Number(eq.id)));
-    else if(!audience&&!enrollmentAdmin&&gate&&gate.reason==='sealed') payload=[];
-    else payload=result;
-    res.json(payload);
+    res.json(decidirPayloadEquipos({result,audience,enrollmentAdmin,gate,capitanIds}));
   } catch (err) {
     sendHttpError(res, err);
   }
