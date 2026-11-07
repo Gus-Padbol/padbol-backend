@@ -46,7 +46,8 @@ begin
           and c.assigned_user_id = a.advisor_id))
       or (a.case_type='form' and not exists (
         select 1 from public.crm_commercial_form_cases f where f.conversation_id=a.case_id
-          and f.assigned_user_id = a.advisor_id))
+          and f.assigned_user_id = a.advisor_id
+          and coalesce(f.progress_state,'') not in ('cerrado','closed')))
     ) returning 1)
   select count(*) into v_resolved from cerradas;
 
@@ -152,6 +153,7 @@ begin
     select 'form', f.conversation_id, f.assigned_user_id, f.next_contact_at, f.reminder_hours
       from public.crm_commercial_form_cases f
      where f.assigned_user_id is not null and f.next_contact_at is not null
+       and coalesce(f.progress_state,'') not in ('cerrado','closed')
   ), hours as (
     select b.*, h.anticipation
       from base b cross join lateral unnest(coalesce(b.reminder_hours, array[24,8])) h(anticipation)
