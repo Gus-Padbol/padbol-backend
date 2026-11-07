@@ -86,7 +86,8 @@ test('capitan real ve su equipo; ajeno no', async () => {
 test('la RPC queda parcheada de forma reproducible', async () => {
   const d = await db({torneo: ROME_LATE, approved: true});
   const {rows} = await d.query("select pg_get_functiondef(oid) def from pg_proc where proname='gestionar_participantes_torneo'");
-  assert.match(rows[0].def, /shared_visible boolean:=false/);
+  assert.match(rows[0].def, /CASE WHEN NOT \(coalesce\(t\.modalidad_plantel/);
   assert.match(rows[0].def, /roster_publication_approved/);
+  assert.match(rows[0].def, /THEN true ELSE/);
   await d.close();
 });

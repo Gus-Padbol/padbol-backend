@@ -78,11 +78,11 @@ DECLARE def text; nuevo text;
 BEGIN
   SELECT pg_get_functiondef(oid) INTO def FROM pg_proc WHERE proname='gestionar_participantes_torneo';
   IF def IS NULL THEN RAISE EXCEPTION 'RPC gestionar_participantes_torneo ausente'; END IF;
-  nuevo := replace(def,'shared_visible boolean:=true','shared_visible boolean:=false');
-  IF position('roster_publication_approved' IN nuevo)=0 THEN
-    nuevo := replace(nuevo,'shared_visible:=coalesce(reveal_at<=now(),false);',
-      'shared_visible:=coalesce(reveal_at<=now(),false) AND EXISTS(SELECT 1 FROM public.nations_activation_events ev WHERE ev.torneo_id=t.id AND ev.roster_publication_approved);');
-  END IF;
+  nuevo := replace(def,'shared_visible boolean:=false','shared_visible boolean:=true');
+  nuevo := replace(nuevo,'shared_visible:=coalesce(reveal_at<=now(),false);',
+    'shared_visible:=CASE WHEN NOT (coalesce(t.modalidad_plantel,'''')=''selecciones'' OR t.plan_nations IS NOT NULL) THEN true ELSE coalesce(reveal_at<=now(),false) AND EXISTS(SELECT 1 FROM public.nations_activation_events ev WHERE ev.torneo_id=t.id AND ev.roster_publication_approved) END;');
+  nuevo := replace(nuevo,'shared_visible:=coalesce(reveal_at<=now(),false) AND EXISTS(SELECT 1 FROM public.nations_activation_events ev WHERE ev.torneo_id=t.id AND ev.roster_publication_approved);',
+    'shared_visible:=CASE WHEN NOT (coalesce(t.modalidad_plantel,'''')=''selecciones'' OR t.plan_nations IS NOT NULL) THEN true ELSE coalesce(reveal_at<=now(),false) AND EXISTS(SELECT 1 FROM public.nations_activation_events ev WHERE ev.torneo_id=t.id AND ev.roster_publication_approved) END;');
   IF nuevo IS DISTINCT FROM def THEN EXECUTE nuevo; END IF;
 END $patch$;
 
