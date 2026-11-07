@@ -1961,7 +1961,9 @@ mountWebPushRoutes(app, { authUserFromBearer, webPush: webPushService, publicKey
 leadNotifications = createLeadNotificationService({ db: supabaseAdmin, webPush: webPushService });
 // Agenda programada: montaje con compuerta NUEVA, apagada por defecto. No arranca nada sin flag.
 let agendaBootstrap = null;
-if (String(process.env[AGENDA_FLAG] || '').toLowerCase() === 'true' && pgPool && webPushService) {
+if (String(process.env[AGENDA_FLAG] || '').toLowerCase() === 'true'
+    && String(process.env.P9_AGENDA_DEPLOY_ENABLED || '').toLowerCase() === 'true'
+    && pgPool && webPushService) {
   agendaBootstrap = createAgendaBootstrap({
     env: process.env,
     createNotifier: () => createAgendaReminderNotifier({ pool: pgPool, webPush: webPushService }),
