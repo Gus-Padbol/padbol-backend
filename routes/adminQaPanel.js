@@ -1,5 +1,5 @@
 import multer from 'multer';
-import { requireAdminUser, requireSuperAdminUser } from '../lib/authAccess.js';
+import { requireAdminUser, requireContentEditorUser, requireSuperAdminUser } from '../lib/authAccess.js';
 
 const ACTIVE_RESERVATION_STATES = new Set(['confirmada', 'completada', 'pagada', 'finalizada']);
 
@@ -223,7 +223,7 @@ const hubFotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSi
 app.post('/api/hub-deporte-config/foto', hubFotoUpload.single('foto'), async (req, res) => {
   try {
     let auth;
-    try { auth = await requireAdminUser(req, res, authDeps); }
+    try { auth = await requireContentEditorUser(req, res, authDeps); }
     catch { return res.status(401).json({ error: 'No autorizado' }); }
     if (!auth) return;
     const deporte = String(req.body?.deporte || req.query?.deporte || '').trim().toLowerCase();
@@ -261,7 +261,8 @@ app.use('/api/hub-deporte-config/foto', (err, req, res, next) => {
 
   app.patch('/api/hub-deporte-config', async (req, res) => {
     try {
-      const auth = await requireAdminUser(req, res, authDeps);
+      // Contenido editorial global del Hub: editor_contenido o super_admin, no admin de club.
+      const auth = await requireContentEditorUser(req, res, authDeps);
       if (!auth) return;
       const deporte = String(req.body?.deporte || '').trim().toLowerCase();
       const cardKey = String(req.body?.card_key || '').trim();
