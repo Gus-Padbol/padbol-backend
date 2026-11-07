@@ -18,6 +18,16 @@ export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,pro
  app.get(pub+'/profile-request',run('profile_request_status',async r=>profileRequests.ownStatus(r.params.slug,await user(r)),20));
  app.get(admin+'/profile-requests',run('profile_request_list',async r=>profileRequests.pending(r.params.slug,await user(r)),20));
  app.post(admin+'/profile-requests/:requestId/review',run('profile_request_review',async r=>profileRequests.review(r.params.slug,await user(r),r.params.requestId,r.body||{}),10));
+ // Metadatos publicos minimos torneo -> evento (slug). No revela nomina ni identidades.
+ app.get('/api/nations-activation/by-torneo/:torneoId',run('by_torneo',async r=>{
+   const id=Number(r.params.torneoId);
+   if(!Number.isSafeInteger(id)||id<=0)throw activationError('INVALID_TORNEO',400);
+   const {rows}=await pool.query(
+     `select e.slug from public.nations_activation_events e
+        join public.torneos t on t.id=e.torneo_id
+       where e.torneo_id=$1 and e.enabled=true and t.modalidad_plantel='selecciones' limit 1`,[id]);
+   return {ok:true, slug: rows[0]?.slug||null};
+ },30));
  app.post(pub+'/claim',run('claim',async r=>service.claim(r.params.slug,await user(r),r.body||{}),10));
  app.get(admin,run('overview',async r=>service.overview(r.params.slug,await user(r)),60));
  app.post(admin+'/imports/preview',run('preview',async r=>service.preview(r.params.slug,await user(r),r.body?.rows),10));
