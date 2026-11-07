@@ -27,14 +27,14 @@ run('pg_ctl', ['-D', PGDATA, '-o', `-k ${SOCK} -c listen_addresses=''`, '-l', '/
 
 const pool = new Pool({host: SOCK, user: 'postgres', database: 'postgres', max: 4});
 const sql = (t) => pool.query(t);
-let pass = 0; const total = 14;
+let pass = 0; const total = 16;
 
 try {
   await sql(`create extension if not exists pgcrypto;
     create schema if not exists auth;
     create table auth.users(id uuid primary key default gen_random_uuid(), email text, email_confirmed_at timestamptz);
     create or replace function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('test.actor', true),'')::uuid $$;
-    create role anon; create role authenticated; create role service_role;`);
+    create role anon; create role authenticated; create role service_role bypassrls;`);
   await sql(`create or replace function public.uuid_generate_v4() returns uuid language sql volatile as $$ select gen_random_uuid() $$;
     create or replace function public.participante_plantel_congelado(uuid) returns boolean language sql stable as $$ select false $$;
     create or replace function public.torneo_inscripcion_fecha_vigente(date,bigint,jsonb) returns boolean language sql stable as $$ select true $$;`);
@@ -263,6 +263,57 @@ try {
     assert.equal(ok, 1, 'exactamente una aprobacion debe tener exito');
     assert.equal(aprobadas, 1, 'exactamente una solicitud queda aprobada');
     assert.equal(dueños, 1, 'el participante queda con un unico dueño');
+  });
+
+  // GRUPO 9: BARRERA determinista de carrera (lock externo simula al primer actor)
+  await group('G9 barrera: segundo actor con lock externo => PARTICIPANT_ALREADY_LINKED', async () => {
+    const P6 = '00000000-0000-4000-8000-0000000000fc';
+    const C = '00000000-0000-4000-8000-0000000000c1';
+    const DD = '00000000-0000-4000-8000-0000000000d1';
+    await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${C}','c@test.invalid',now()),('${DD}','d@test.invalid',now()) on conflict do nothing`);
+    await sql(`insert into public.torneo_participantes(id,torneo_id,sede_id,nombre,tipo_identidad,origen,estado_vinculacion,creado_por)
+      values ('${P6}',57,9,'Jugador Ficticio F','generico','club','sin_cuenta','${ADM}') on conflict (id) do nothing`);
+    await sql(`insert into public.nations_activation_participants(participante_id,torneo_id,country,row_key,minor,age_status)
+      values ('${P6}',57,'IT','rk-f',false,'adulto') on conflict (participante_id) do nothing`);
+    await sql(`insert into public.nations_profile_requests(torneo_id,actor_user_id,request_id,declared_name,declared_country,age_status,profile_consent,payload_hash,status)
+      values (57,'${C}','g9-barrera','Jugador Ficticio F','IT','adulto',true,'hash-g9','pendiente')`);
+    const rowId = (await sql(`select id from public.nations_profile_requests where request_id='g9-barrera'`)).rows[0].id;
+    // Primer actor: mantiene el lock del participante y lo vincula a D antes de soltar.
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query(`select id from public.torneo_participantes where id='${P6}' for update`);
+    const actorC = {id: C, email_confirmed_at: '2026-01-01'};
+    const pendiente = svc.review(S, admin, rowId, {decision:'aprobar', identity_verified:true, note:'Revision central bajo barrera determinista', matched_participante_id: P6});
+    await holder.query(`update public.torneo_participantes set linked_user_id='${DD}', estado_vinculacion='vinculado' where id='${P6}'`);
+    await holder.query('COMMIT');
+    holder.release();
+    await assert.rejects(pendiente, /PARTICIPANT_ALREADY_LINKED/);
+    const aprobadas = (await sql(`select count(*)::int n from public.nations_profile_requests where request_id='g9-barrera' and status='aprobada'`)).rows[0].n;
+    const dueno = (await sql(`select linked_user_id from public.torneo_participantes where id='${P6}'`)).rows[0].linked_user_id;
+    assert.equal(aprobadas, 0);
+    assert.equal(dueno, DD);
+  });
+
+  // GRUPO 9b: GRANT service_role permite operar; anon/auth siguen sin acceso
+  await group('G9b service_role opera la tabla y anon/auth no', async () => {
+    await sql(`insert into auth.users(id,email,email_confirmed_at) values ('00000000-0000-4000-8000-0000000000f1','svc@test.invalid',now()) on conflict do nothing`);
+    const cliente = await pool.connect();
+    try {
+      await cliente.query('set role service_role');
+      await cliente.query("insert into public.nations_profile_requests(torneo_id,actor_user_id,request_id,declared_name,declared_country,age_status,profile_consent,payload_hash,status) values (57,'00000000-0000-4000-8000-0000000000f1','g9b-svc-01','Jugador Ficticio G','IT','adulto',true,'hash-svc','pendiente')");
+      const {rows} = await cliente.query("select count(*)::int n from public.nations_profile_requests where request_id='g9b-svc-01'");
+      assert.equal(rows[0].n, 1);
+    } finally { try { await cliente.query('reset role'); } catch {} cliente.release(); }
+    for (const rol of ['anon','authenticated']) {
+      const c2 = await pool.connect();
+      try {
+        await c2.query(`set role ${rol}`);
+        await c2.query('select 1 from public.nations_profile_requests limit 1');
+        assert.fail(`${rol} no deberia poder leer`);
+      } catch (e) {
+        assert.ok(e.code === '42501' || /permission denied/i.test(e.message));
+      } finally { try { await c2.query('reset role'); } catch {} c2.release(); }
+    }
   });
 
   // GRUPO 7: terminales no flipean (caso propio y determinista)
