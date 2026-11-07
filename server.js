@@ -63,6 +63,8 @@ import { mountReleaseRoutes } from './lib/releaseServices.js';
 import { mountWebPushRoutes } from './routes/webPush.js';
 import { createWebPushService, createVapidSender } from './lib/webPushNotifications.js';
 import { createAgendaBootstrap, AGENDA_FLAG } from './lib/crmAgendaBootstrap.js';
+import { createProfilePhotoGate } from './lib/profilePhotoGate.js';
+import { decodeProfilePhoto } from './lib/profilePhotoPayload.js';
 import { createAgendaReminderNotifier } from './lib/crmAgendaReminderNotifier.js';
 import { createLeadNotificationService } from './lib/crmLeadNotifications.js';
 import { registerCrmLeadNotificationRoutes } from './lib/crmLeadNotificationRoutes.js';
@@ -246,6 +248,7 @@ import {
   pushTokensRateLimit,
   reservasWriteRateLimit,
   profilePhotoUploadRateLimit,
+  profilePhotoIpRateLimit,
 } from './lib/rateLimit.js';
 import { toStripeMinorUnits, normalizeStripeCurrency } from './lib/stripe/stripeAmount.js';
 import { isSolicitudPendienteActiva } from './lib/solicitudesPartidoHorario.js';
@@ -370,18 +373,11 @@ app.use(RELAY_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (re
 app.use('/api/internal/whatsapp-context', express.raw({ type: 'application/json', limit: '16kb' }));
 // Foto de perfil: SOLO POST exacto a /api/usuarios/foto-perfil. Auth + rate-limit + parser 8mb
 // antes del parser global de 100 KB; ninguna otra ruta ni método pasa por este parser.
-app.use((req, res, next) => {
-  if (req.method !== 'POST') return next();
-  const path = String(req.path || '').replace(/\/+$/, '');
-  if (path !== '/api/usuarios/foto-perfil') return next();
-  return profilePhotoUploadRateLimit(req, res, () => {
-    getAuthenticatedUser(req).then(({ user, status, error }) => {
-      if (!user) return res.status(status).json({ error, code: 'UNAUTHORIZED' });
-      req.profilePhotoUser = user;
-      return express.json({ limit: '8mb' })(req, res, next);
-    }).catch(next);
-  });
-});
+app.use(createProfilePhotoGate({
+  authenticate: getAuthenticatedUser,
+  ipLimit: profilePhotoIpRateLimit,
+  userLimit: profilePhotoUploadRateLimit,
+}));
 app.use(express.json({
   verify: (req, _res, buf) => {
     if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe' || req.path === CRM_EMAIL_PROVIDER_PATH) {
@@ -5165,28 +5161,9 @@ usuariosRouter.post('/foto-perfil', async (req, res) => {
       return res.status(400).json({ error: 'Usuario sin email' });
     }
 
-    const { foto_base64, mime_type } = req.body;
-    if (!foto_base64) {
-      return res.status(400).json({ error: 'foto_base64 es requerido' });
-    }
-
-    const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    const normalizedMime = (mime_type || 'image/jpeg').toLowerCase();
-    if (!allowedMimeTypes.includes(normalizedMime)) {
-      return res.status(400).json({ error: 'mime_type de imagen no soportado' });
-    }
-
-    const base64Data = String(foto_base64).replace(/^data:image\/\w+;base64,/, '');
-    const buffer = Buffer.from(base64Data, 'base64');
-
-    if (!buffer.length) {
-      return res.status(400).json({ error: 'Imagen inválida' });
-    }
-
-    const maxBytes = 5 * 1024 * 1024;
-    if (buffer.length > maxBytes) {
-      return res.status(400).json({ error: 'La imagen supera el tamaño máximo permitido (5 MB)' });
-    }
+    const parsed = decodeProfilePhoto(req.body || {});
+    if (parsed.error) return res.status(parsed.error.status).json({ error: parsed.error.error, code: parsed.error.code });
+    const { mime: normalizedMime, buffer } = parsed;
 
     const filePath = `${user.id}.jpg`;
     const { error: uploadError } = await supabaseAdmin.storage
