@@ -28,12 +28,10 @@ CREATE INDEX IF NOT EXISTS nations_profile_requests_torneo_idx ON public.nations
 
 ALTER TABLE public.nations_profile_requests ENABLE ROW LEVEL SECURITY;
 
+-- El cliente SOLO usa la API: nada de SELECT directo por REST (evita exponer review_note,
+-- matched_participante_id y metadata interna). La frontera es el pool del backend.
 DROP POLICY IF EXISTS nations_profile_requests_own_select ON public.nations_profile_requests;
-CREATE POLICY nations_profile_requests_own_select ON public.nations_profile_requests
-  FOR SELECT TO authenticated USING (actor_user_id = auth.uid());
-
-REVOKE ALL ON public.nations_profile_requests FROM anon;
-GRANT SELECT ON public.nations_profile_requests TO authenticated;
+REVOKE ALL ON public.nations_profile_requests FROM anon, authenticated;
 
 COMMIT;
 
