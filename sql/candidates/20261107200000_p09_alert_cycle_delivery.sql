@@ -115,7 +115,7 @@ create table if not exists public.crm_lead_alert_deliveries (
   alert_id uuid not null,
   stage text not null check (stage ~ '^[a-z0-9_]{1,40}$'),
   recipient_id uuid not null,
-  state text not null default 'claimed' check (state in ('claimed','sent','failed','ambiguous','no_subscription')),
+  state text not null default 'claimed' check (state in ('claimed','sent','failed','ambiguous','unconfirmed')),
   claimed_at timestamptz not null default now(),
   sent_at timestamptz,
   attempts integer not null default 1 check (attempts > 0),
@@ -123,14 +123,11 @@ create table if not exists public.crm_lead_alert_deliveries (
   primary key (alert_id, stage, recipient_id)
 );
 create index if not exists crm_lead_alert_deliveries_retry
-  on public.crm_lead_alert_deliveries (state, claimed_at) where state in ('failed','claimed');
+  on public.crm_lead_alert_deliveries (state, claimed_at) where state='failed';
 alter table public.crm_lead_alert_deliveries enable row level security;
-revoke all on public.crm_lead_alert_deliveries from anon, authenticated;
+revoke all on public.crm_lead_alert_deliveries from public, anon, authenticated;
 grant select, insert, update, delete on public.crm_lead_alert_deliveries to service_role;
 
-commit;
-
--- Agenda: avisos ligados a la fecha programada (next_contact_at) y sus anticipaciones.
 create table if not exists public.crm_agenda_reminders (
   id uuid primary key default gen_random_uuid(),
   case_type text not null check (case_type in ('whatsapp','form')),
@@ -141,12 +138,10 @@ create table if not exists public.crm_agenda_reminders (
   created_at timestamptz not null default now(),
   unique (case_type, case_id, scheduled_at, anticipation_hours)
 );
-
 create or replace function public.crm_agenda_reminders_sweep(p_now timestamptz default now())
 returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
 declare v_inserted int := 0;
 begin
-  -- Solo casos con agenda explicita (next_contact_at). Sin created_at inferido: historicos no entran.
   with base as (
     select 'whatsapp'::text case_type, c.id case_id, c.assigned_user_id advisor_id,
            c.next_contact_at scheduled_at, c.reminder_hours
@@ -168,8 +163,6 @@ begin
   select count(*) into v_inserted from inserted;
   return jsonb_build_object('inserted', v_inserted, 'at', p_now);
 end $$;
-
--- Cancela recordatorios cuya agenda cambio, el caso se cerro o el asesor ya no coincide.
 create or replace function public.crm_agenda_reminders_reconcile()
 returns void language sql security definer set search_path=pg_catalog,public as $$
   delete from public.crm_agenda_reminders r
@@ -182,9 +175,11 @@ returns void language sql security definer set search_path=pg_catalog,public as 
       where r.case_type='form' and f.conversation_id=r.case_id
         and f.assigned_user_id=r.advisor_id and f.next_contact_at=r.scheduled_at);
 $$;
-
-begin;
 alter table public.crm_agenda_reminders enable row level security;
-revoke all on public.crm_agenda_reminders from anon, authenticated;
+revoke all on public.crm_agenda_reminders from public, anon, authenticated;
 grant select, insert, update, delete on public.crm_agenda_reminders to service_role;
+revoke all on function public.crm_agenda_reminders_sweep(timestamptz) from public, anon, authenticated;
+revoke all on function public.crm_agenda_reminders_reconcile() from public, anon, authenticated;
+grant execute on function public.crm_agenda_reminders_sweep(timestamptz) to service_role;
+grant execute on function public.crm_agenda_reminders_reconcile() to service_role;
 commit;
