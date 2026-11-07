@@ -110,14 +110,25 @@ commit;
 
 
 -- Recibo durable de notificaciones: una fila por alerta+etapa+destinatario.
+begin;
 create table if not exists public.crm_lead_alert_deliveries (
   alert_id uuid not null,
-  stage text not null,
+  stage text not null check (stage ~ '^[a-z0-9_]{1,40}$'),
   recipient_id uuid not null,
+  state text not null default 'claimed' check (state in ('claimed','sent','failed','ambiguous','no_subscription')),
   claimed_at timestamptz not null default now(),
   sent_at timestamptz,
+  attempts integer not null default 1 check (attempts > 0),
+  error_code text,
   primary key (alert_id, stage, recipient_id)
 );
+create index if not exists crm_lead_alert_deliveries_retry
+  on public.crm_lead_alert_deliveries (state, claimed_at) where state in ('failed','claimed');
+alter table public.crm_lead_alert_deliveries enable row level security;
+revoke all on public.crm_lead_alert_deliveries from anon, authenticated;
+grant select, insert, update, delete on public.crm_lead_alert_deliveries to service_role;
+
+commit;
 
 -- Agenda: avisos ligados a la fecha programada (next_contact_at) y sus anticipaciones.
 create table if not exists public.crm_agenda_reminders (
@@ -171,3 +182,9 @@ returns void language sql security definer set search_path=pg_catalog,public as 
       where r.case_type='form' and f.conversation_id=r.case_id
         and f.assigned_user_id=r.advisor_id and f.next_contact_at=r.scheduled_at);
 $$;
+
+begin;
+alter table public.crm_agenda_reminders enable row level security;
+revoke all on public.crm_agenda_reminders from anon, authenticated;
+grant select, insert, update, delete on public.crm_agenda_reminders to service_role;
+commit;
