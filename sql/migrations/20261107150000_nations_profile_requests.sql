@@ -36,3 +36,10 @@ REVOKE ALL ON public.nations_profile_requests FROM anon;
 GRANT SELECT ON public.nations_profile_requests TO authenticated;
 
 COMMIT;
+
+-- Fase 1b: una sola solicitud ACTIVA por actor y evento (pendiente/en_revision).
+BEGIN;
+CREATE UNIQUE INDEX IF NOT EXISTS nations_profile_requests_activa_por_actor
+  ON public.nations_profile_requests(actor_user_id, torneo_id)
+  WHERE status IN ('pendiente','en_revision');
+COMMIT;
