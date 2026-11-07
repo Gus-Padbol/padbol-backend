@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import {PGlite} from '@electric-sql/pglite';
+const d = new PGlite();
+await d.exec(`create schema auth; create table auth.users(id uuid primary key); create role anon; create role authenticated;
+ create table public.torneos(id bigint primary key);
+ create or replace function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;`);
+await d.exec(fs.readFileSync(process.argv[2], 'utf8'));
+const t = await d.query("select count(*)::int n from information_schema.tables where table_name='nations_profile_requests'");
+const p = await d.query("select count(*)::int n from pg_policies where tablename='nations_profile_requests'");
+console.log('tabla:', t.rows[0].n === 1, '| policies:', p.rows[0].n);
+await d.close();

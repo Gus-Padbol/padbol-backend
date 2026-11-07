@@ -12,6 +12,9 @@ export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,ser
  app.get(pub,run('event',r=>service.publicEvent(r.params.slug),60));
  app.get(pub+'/me',run('me',async r=>service.me(r.params.slug,await user(r)),60));
  app.get(pub+'/players',run('lookup',r=>service.players(r.params.slug,r.query),20));
+ app.post(pub+'/profile-request',run('profile_request',(r,user)=>profileRequests.submit(r.params.slug,user,r.body||{}),10));
+ app.get(pub+'/profile-request',run('profile_request_status',(r,user)=>profileRequests.ownStatus(r.params.slug,user),20));
+ app.post(admin+'/profile-requests/:requestId/review',run('profile_request_review',(r,user)=>profileRequests.review(r.params.slug,user,r.params.requestId,r.body||{}),10));
  app.post(pub+'/claim',run('claim',async r=>service.claim(r.params.slug,await user(r),r.body||{}),10));
  app.get(admin,run('overview',async r=>service.overview(r.params.slug,await user(r)),60));
  app.post(admin+'/imports/preview',run('preview',async r=>service.preview(r.params.slug,await user(r),r.body?.rows),10));
