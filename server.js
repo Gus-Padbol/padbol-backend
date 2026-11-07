@@ -62,6 +62,8 @@ import { formSubmissionToCrmIngest } from './lib/crmInboundForm.js';
 import { mountReleaseRoutes } from './lib/releaseServices.js';
 import { mountWebPushRoutes } from './routes/webPush.js';
 import { createWebPushService, createVapidSender } from './lib/webPushNotifications.js';
+import { createAgendaBootstrap, AGENDA_FLAG } from './lib/crmAgendaBootstrap.js';
+import { createAgendaReminderNotifier } from './lib/crmAgendaReminderNotifier.js';
 import { createLeadNotificationService } from './lib/crmLeadNotifications.js';
 import { registerCrmLeadNotificationRoutes } from './lib/crmLeadNotificationRoutes.js';
 import { prepareTournamentUpdate, getTournamentCompletionEvidence } from './lib/torneos/tournamentCompletionService.js';
@@ -1957,6 +1959,15 @@ const webPushService = (vapidPublic && vapidPrivate && pgPool)
   : null;
 mountWebPushRoutes(app, { authUserFromBearer, webPush: webPushService, publicKey: vapidPublic || null });
 leadNotifications = createLeadNotificationService({ db: supabaseAdmin, webPush: webPushService });
+// Agenda programada: montaje con compuerta NUEVA, apagada por defecto. No arranca nada sin flag.
+let agendaBootstrap = null;
+if (String(process.env[AGENDA_FLAG] || '').toLowerCase() === 'true' && pgPool && webPushService) {
+  agendaBootstrap = createAgendaBootstrap({
+    env: process.env,
+    createNotifier: () => createAgendaReminderNotifier({ pool: pgPool, webPush: webPushService }),
+  });
+  agendaBootstrap.start();
+}
 registerCrmLeadNotificationRoutes(app, { authUserFromBearer, notifications: leadNotifications });
 
 function clasesCanchasConNumeroReserva(rows) {
