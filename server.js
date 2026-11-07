@@ -2864,7 +2864,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     if(!audience){
       const flag=(await supabaseAdmin.from('nations_activation_events').select('roster_publication_approved').eq('torneo_id',tid).maybeSingle());
       const capRows=await supabaseAdmin.from('equipos').select('id').eq('torneo_id',tid).eq('creador_id',(await getAuthenticatedUser(req)).user?.id ?? null);
-      const capitanIds=(capRows?.data??[]).map(r=>Number(r.id));
+      var capitanIds=(capRows?.data??[]).map(r=>Number(r.id));
       const gate=accesoPlantelesTorneo({torneo:eventRead.data,event:flag && !flag.error?flag.data:null,esAdmin:enrollmentAdmin,captainIds:capitanIds});
       if(!gate.allowed)return res.status(403).json({error:'El plantel todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
     }
@@ -2909,7 +2909,11 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     const result = (equipos || []).map((eq) =>
       mapTournamentTeamReadRow(eq,{grupo:grupoMap[eq.id]||null,posicion:posicionMap[eq.id]??null,admin:enrollmentAdmin}),
     );
-    res.json(audience&&!audience.admin?result.map(eq=>audience.captainIds.includes(Number(eq.id))?eq:{id:eq.id,nombre:eq.nombre,grupo:eq.grupo,posicion:eq.posicion}).filter(eq=>audience.revealed||audience.captainIds.includes(Number(eq.id))):result);
+    let payload;
+    if(audience&&!audience.admin) payload=result.map(eq=>audience.captainIds.includes(Number(eq.id))?eq:{id:eq.id,nombre:eq.nombre,grupo:eq.grupo,posicion:eq.posicion}).filter(eq=>audience.revealed||audience.captainIds.includes(Number(eq.id)));
+    else if(!audience&&!enrollmentAdmin) payload=result.filter(eq=>capitanIds.includes(Number(eq.id)));
+    else payload=result;
+    res.json(payload);
   } catch (err) {
     sendHttpError(res, err);
   }

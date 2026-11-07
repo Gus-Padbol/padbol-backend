@@ -2,12 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mountNationalTeamRoutes} from './nationalTeams.js';
 const ids=Array.from({length:9},(_,i)=>`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`);
-function fixture({role={rol:'jugador'},user={id:ids[0]},tournament={},team={},match={},marker=[],stored=null,rpcError=null,rpcData=null,readError=null}={}){
+function fixture({role={rol:'jugador'},user={id:ids[0]},tournament={},team={},match={},marker=[],stored=null,rpcError=null,rpcData=null,readError=null,approved=false}={}){
  const t={id:10,sede_id:7,deporte:'padbol',modalidad_plantel:'selecciones',estado:'inscripcion',costo_inscripcion:0,inscripcion_monto:null,...tournament};
  const e={id:20,torneo_id:10,nombre:'QA National',creador_id:ids[0],cupo_maximo:8,equipo_abierto:true,plantel_revision:1,inscripcion_estado:'confirmado',jugadores:ids.slice(0,8).map((id)=>({id,user_id:id,nombre:'QA',email:'private@example.invalid',estado:'confirmado'})),solicitudes:[{user_id:ids[8],nombre:'Request',email:'private@example.invalid'}],...team};
  const m={id:30,torneo_id:10,equipo_a_id:20,equipo_b_id:21,estado:'pendiente',...match};
  const calls=[];const routes=new Map();const data={torneos:t,sedes:{id:7,timezone:'America/New_York'},equipos:e,partidos:m,scoreboard_partidos:marker,torneo_partido_alineaciones:stored};
- const db={from(table){calls.push(['read',table]);const q={select(){return q;},eq(){return q;},order(){return q;},limit(){return q;},maybeSingle:async()=>({data:data[table],error:readError}),then(resolve,reject){return Promise.resolve({data:table==='equipos'?[e]:data[table],error:readError}).then(resolve,reject);}};return q;},rpc:async(name,params)=>{calls.push(['rpc',name,params]);return {data:rpcData??(name==='guardar_plantel_seleccion'?{status:'saved',equipo:e}:{torneo_id:10,partido_id:30,equipo_id:20,iniciales:params.p_iniciales,suplentes:params.p_suplentes,revision:params.p_revision+1}),error:rpcError};}};
+ const db={from(table){calls.push(['read',table]);const f={};const q={select(){return q;},eq(k,v){f[k]=v;return q;},order(){return q;},limit(){return q;},
+   maybeSingle:async()=>{
+     if(table==='nations_activation_events')return {data:{roster_publication_approved:approved===true},error:readError};
+     if(table==='equipos')return {data:(f.id!==undefined&&Number(f.id)===e.id)?e:null,error:readError};
+     return {data:data[table],error:readError};
+   },
+   then(resolve,reject){let rows=data[table];if(table==='equipos'){rows=[e];if(f.torneo_id!==undefined)rows=rows.filter(x=>x.torneo_id===Number(f.torneo_id));if(f.creador_id!==undefined)rows=rows.filter(x=>x.creador_id===f.creador_id);}return Promise.resolve({data:rows,error:readError}).then(resolve,reject);}};return q;},rpc:async(name,params)=>{calls.push(['rpc',name,params]);return {data:rpcData??(name==='guardar_plantel_seleccion'?{status:'saved',equipo:e}:{torneo_id:10,partido_id:30,equipo_id:20,iniciales:params.p_iniciales,suplentes:params.p_suplentes,revision:params.p_revision+1}),error:rpcError};}};
  const app=Object.fromEntries(['get','post','put'].map(method=>[method,(path,handler)=>routes.set(method+' '+path,handler)]));mountNationalTeamRoutes(app,{db,getAuthenticatedUser:async()=>({user,status:user?null:401}),getRole:async()=>role});
  const call=async(method,path,body={})=>{const res={statusCode:200,status(n){this.statusCode=n;return this;},json(value){this.body=value;return this;}};await routes.get(method+' '+path)({params:{id:'10',equipoId:'20',partidoId:'30'},body},res);return res;};return {call,calls,t,e};
 }
@@ -26,7 +32,12 @@ test('legacy doubles has no declaration requirement and performs no lineup or sc
 test('failed list read is an error rather than a false empty list',async()=>{const f=fixture({readError:{code:'XX000'}});assert.equal((await f.call('get',base)).statusCode,503);});
 
 test('real opened inscription state aliases allow draft enrollment and editable declarations',async()=>{for(const estado of ['abierto','inscripcion_abierta','inscripcion']){const f=fixture({tournament:{estado}});assert.equal((await f.call('post',base,{nombre:'QA',cupo_maximo:8})).statusCode,201);assert.equal((await f.call('get',lineup)).body.can_edit,true);assert.equal((await f.call('get',base+'/:equipoId')).body.can_confirm,true);}});
-test('list management capability comes from actual captain or authorized tournament scope',async()=>{for(const [role,user,expected] of [[{rol:'admin_nacional',pais:'Argentina'},{id:ids[8]},false],[{rol:'admin_club',sede_id:8},{id:ids[8]},false],[{rol:'super_admin'},{id:ids[8]},true],[{rol:'jugador'},{id:ids[0]},true]]){const f=fixture({role,user});assert.equal((await f.call('get',base)).body.equipos[0].can_manage,expected);}});
+test('list management capability comes from actual captain or authorized tournament scope',async()=>{
+ // Outsiders (otra sede / administrador nacional ajeno): no listado, sin capabilities privadas.
+ for(const role of [{rol:'admin_nacional',pais:'Argentina'},{rol:'admin_club',sede_id:8}]){const f=fixture({role,user:{id:ids[8]}});assert.deepEqual((await f.call('get',base)).body.equipos,[]);}
+ // Admin del torneo y capitan real: ven y pueden gestionar.
+ for(const [role,user] of [[{rol:'super_admin'},{id:ids[8]}],[{rol:'jugador'},{id:ids[0]}]]){const f=fixture({role,user});assert.equal((await f.call('get',base)).body.equipos[0].can_manage,true);}
+});
 
 test('arbitrary-profile addition capability is real admin scope even when actor is also captain',async()=>{for(const [role,expected] of [[{rol:'jugador'},false],[{rol:'admin_nacional',pais:'Argentina'},false],[{rol:'admin_club',sede_id:8},false],[{rol:'admin_club',sede_id:7},true],[{rol:'super_admin'},true]]){const f=fixture({role,user:{id:ids[0]}});const r=await f.call('get',base+'/:equipoId');assert.equal(r.body.can_manage,true);assert.equal(r.body.can_add_profiles,expected);}});
 
@@ -53,13 +64,30 @@ test('registry legacy writes reject before RPC while unrelated detail remains fo
  }
  const outsider=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});assert.equal((await outsider.call('get',base+'/:equipoId')).statusCode,403);
 });
-test('registry Nations list preserves existing hidden audience and does not expose other roster references',async()=>{
- const hidden=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2099-11-20T00:00:00Z'}}}});const hEqs=(await hidden.call('get',base)).body.equipos;assert.equal(hEqs.length,1);assert.equal(hEqs[0].jugadores.length,8);
- const revealed=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2000-11-20T00:00:00Z'}}}});const eqs=(await revealed.call('get',base)).body.equipos;assert.equal(eqs.length,1);assert.equal(eqs[0].jugadores.length,8);
- // Torneo NORMAL (sin selecciones): conserva la audiencia existente y muestra los 8 sin referencias.
- const publicNormal=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});const p=(await publicNormal.call('get',base)).body.equipos[0];assert.equal(p.jugadores.length,8);assert.equal(p.referencias_plantel_disponibles,false);assert.equal(p.can_add_profiles,false);assert.equal(p.can_confirm,false);assert.ok(p.jugadores.every(j=>!('participante_id'in j)&&!('user_id'in j)&&!('email'in j)));
+test('selecciones: outsider no ve planteles y el capitan real ve solo el suyo',async()=>{
+ // plan_nations NULL explicito: la frontera aplica igual (fail-closed).
+ const outsider=fixture({user:{id:ids[8]},tournament:{plan_nations:null,modalidad_plantel:'selecciones'}});
+ assert.deepEqual((await outsider.call('get',base)).body.equipos,[]);
+ // Capitan real (creador del equipo): ve su equipo y sus 8 jugadores.
+ const capitan=fixture({user:{id:ids[0]},team:{creador_id:ids[0]}});
+ const capEqs=(await capitan.call('get',base)).body.equipos;
+ assert.equal(capEqs.length,1); assert.equal(capEqs[0].id,20); assert.equal(capEqs[0].jugadores.length,8);
+ // approval false: no revela aunque la fecha haya pasado.
+ const sinAprob=fixture({user:{id:ids[8]},approved:false,tournament:{plan_nations:{config:{reveal_at:'2000-01-01T00:00:00Z'}},fecha_inicio:'2000-01-01'}});
+ assert.deepEqual((await sinAprob.call('get',base)).body.equipos,[]);
 });
-
+test('la ruta de selecciones no aplica a un torneo comun (409 de contrato)',async()=>{
+ const normal=fixture({user:{id:ids[8]},tournament:{modalidad_plantel:'equipos',plan_nations:null}});
+ const r=await normal.call('get',base);
+ assert.equal(r.statusCode,409);
+ assert.equal(r.body.code,'NATIONAL_TEAM_INVALID');
+});
+test('registry Nations list preserves existing hidden audience and does not expose other roster references',async()=>{
+ for(const reveal_at of ['2099-11-20T00:00:00Z','2000-11-20T00:00:00Z']){
+  const f=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at}}}});
+  assert.deepEqual((await f.call('get',base)).body.equipos,[]);
+ }
+});
 test('expired tournament reports enrollment closed without claiming a save',async()=>{
  const f=fixture({rpcError:{code:'55000'}});
  const r=await f.call('post',base+'/:equipoId/confirmar',{expected_revision:1});
