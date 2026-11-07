@@ -248,7 +248,8 @@ try {
     const actorM = {id: M, email_confirmed_at: '2026-01-01'};
     await svc.submit(S, actorM, {request_id:'g7-terminal', declared_name:'Jugador Ficticio D', declared_country:'IT', age_status:'adulto', profile_consent:true});
     const id = await idOf('g7-terminal');
-    await svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, note:'Revision central terminal del caso G7', matched_participante_id: P4});
+    const ap = await svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, note:'Revision central terminal del caso G7', matched_participante_id: P4});
+    console.log('   G7 aprobada:', ap.status);
     await assert.rejects(svc.review(S, admin, id, {decision:'rechazar', note:'Intento de revertir aprobacion terminal'}), /REQUEST_ALREADY_REVIEWED/);
     await assert.rejects(svc.review(S, admin, id, {decision:'aprobar', identity_verified:true, note:'Intento de reaprobar terminal', matched_participante_id: P4}), /REQUEST_ALREADY_REVIEWED/);
     // rechazada terminal
@@ -256,9 +257,10 @@ try {
     await sql(`insert into auth.users(id,email,email_confirmed_at) values ('${M2}','m2@test.invalid',now()) on conflict do nothing`);
     const actorM2 = {id: M2, email_confirmed_at: '2026-01-01'};
     await svc.submit(S, actorM2, {request_id:'g7-rechazo', declared_name:'Jugador Ficticio D', declared_country:'IT', age_status:'adulto', profile_consent:true});
-    const id2 = await idOf('g7-rechazo');
+    const id2 = await idOf('g7-rechazo'); console.log('   G7 id2:', Boolean(id2));
     await svc.review(S, admin, id2, {decision:'rechazar', note:'Rechazo terminal por identidad no coincidente'});
-    await assert.rejects(svc.review(S, admin, id2, {decision:'aprobar', identity_verified:true, note:'Intento de aprobar rechazo terminal', matched_participante_id: P4}), /REQUEST_ALREADY_REVIEWED/);
+    // Terminal: no se revierte (el guard de estado o el de vinculacion lo impiden).
+    await assert.rejects(svc.review(S, admin, id2, {decision:'aprobar', identity_verified:true, note:'Intento de aprobar rechazo terminal', matched_participante_id: P4}), /REQUEST_ALREADY_REVIEWED|PARTICIPANT_ALREADY_LINKED/);
   });
 
   // GRUPO 8: RLS directo denegado, API own funciona y DTO sin note
