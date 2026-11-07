@@ -64,6 +64,7 @@ import { mountWebPushRoutes } from './routes/webPush.js';
 import { createWebPushService, createVapidSender } from './lib/webPushNotifications.js';
 import { createAgendaBootstrap, AGENDA_FLAG } from './lib/crmAgendaBootstrap.js';
 import { createProfilePhotoGate } from './lib/profilePhotoGate.js';
+import { isHandleTaken } from './lib/publicAliasNamespace.js';
 import { decodeProfilePhoto } from './lib/profilePhotoPayload.js';
 import { createAgendaReminderNotifier } from './lib/crmAgendaReminderNotifier.js';
 import { createLeadNotificationService } from './lib/crmLeadNotifications.js';
@@ -4958,39 +4959,9 @@ usuariosRouter.get('/check-username', async (req, res) => {
       return res.json({ available: false });
     }
 
-    const escaped = username.replace(/"/g, '\\"');
-    let rows = [];
-
-    const { data, error } = await supabaseAdmin
-      .from('jugadores_perfil')
-      .select('id, user_id, username, apodo')
-      .or(`username.ilike."${escaped}",apodo.ilike."${escaped}"`);
-
-    if (error) {
-      const { data: fallbackRows, error: fallbackErr } = await supabaseAdmin
-        .from('jugadores_perfil')
-        .select('id, user_id, apodo')
-        .ilike('apodo', username);
-
-      if (fallbackErr) throw fallbackErr;
-      rows = fallbackRows ?? [];
-    } else {
-      rows = data ?? [];
-    }
-
-    const taken = rows.some((row) => {
-      const rowHandle = String(row.username ?? row.apodo ?? '')
-        .replace(/^@+/, '')
-        .trim()
-        .toLowerCase();
-
-      if (rowHandle !== username) return false;
-
-      const rowUserId = row.user_id ?? null;
-      return rowUserId !== user.id;
-    });
-
-    res.json({ available: !taken });
+    const result = await isHandleTaken({ supabaseAdmin, handle: username, userId: user.id });
+    if (result.error) throw new Error('No se pudo comprobar el alias');
+    res.json({ available: !result.taken });
   } catch (err) {
     console.error('❌ Error GET /api/usuarios/check-username:', err.message);
     sendHttpError(res, err);
