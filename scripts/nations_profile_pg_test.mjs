@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {createNationsProfileRequestsService} from '../lib/nationsProfileRequests.js';
+import express from 'express';
+import http from 'node:http';
+import {registerNationsActivationRoutes} from '../routes/nationsActivation.js';
 
 const require = createRequire(import.meta.url);
 const {Pool} = require('pg');
@@ -24,7 +27,7 @@ run('pg_ctl', ['-D', PGDATA, '-o', `-k ${SOCK} -c listen_addresses=''`, '-l', '/
 
 const pool = new Pool({host: SOCK, user: 'postgres', database: 'postgres', max: 4});
 const sql = (t) => pool.query(t);
-let pass = 0; const total = 2;
+let pass = 0; const total = 5;
 
 try {
   await sql(`create extension if not exists pgcrypto;
@@ -94,6 +97,46 @@ try {
     assert.equal(age.age_status, 'adulto'); assert.equal(age.minor, false);
     assert.equal(req.status, 'aprobada'); assert.equal(req.matched_participante_id, PART);
     console.log('PASS | 2) review adulto => canon+equipo+age atomicos'); pass++;
+  }
+
+  {
+    const app = express(); app.use(express.json());
+    registerNationsActivationRoutes(app, {pool, authUserFromBearer: async (req) => {
+      const who = String(req.headers['x-fixture-user'] || '');
+      if (who === 'a') return {id: A, email_confirmed_at: '2026-01-01'};
+      if (who === 'b') return {id: B, email_confirmed_at: '2026-01-01'};
+      if (who === 'adm') return {id: ADM, email_confirmed_at: '2026-01-01'};
+      return null;
+    }});
+    const server = http.createServer(app);
+    await new Promise(r => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    try {
+      // actor proviene de auth, no del body (body intenta suplantar a B)
+      const r = await fetch(`${base}/api/nations-activation/events/nations-cup-napoli-2026/profile-request`, {
+        method: 'POST', headers: {'Content-Type': 'application/json', 'x-fixture-user': 'b'},
+        body: JSON.stringify({request_id: 'req-http0001', declared_name: 'Jugador Ficticio', declared_country: 'IT', age_status: 'desconocido', profile_consent: true, actor_user_id: A})
+      });
+      const body = await r.json();
+      const reqRow = (await sql(`select actor_user_id from public.nations_profile_requests where request_id='req-http0001'`)).rows[0];
+      assert.equal(r.status, 200);
+      assert.equal(reqRow.actor_user_id, B, 'el actor debe salir de auth, no del body');
+      assert.equal(JSON.stringify(body).includes('Jugador'), false);
+      console.log('PASS | 3) HTTP actor desde auth, body ignorado'); pass++;
+
+      // own-only: A no ve la solicitud de B
+      const own = await fetch(`${base}/api/nations-activation/events/nations-cup-napoli-2026/profile-request`, {headers: {'x-fixture-user': 'a'}});
+      const ownBody = await own.json();
+      const ids = ownBody.requests.map(x => x.request_id);
+      assert.equal(ids.includes('req-http0001'), false, 'A no debe ver la solicitud de B');
+      assert.equal(ids.every(id => id === 'req-unknown01'), true);
+      console.log('PASS | 4) own-only: A solo ve su solicitud'); pass++;
+
+      // no admin => 403 en la cola central
+      const deny = await fetch(`${base}/api/admin/nations-activation/events/nations-cup-napoli-2026/profile-requests`, {headers: {'x-fixture-user': 'a'}});
+      assert.equal(deny.status, 403);
+      console.log('PASS | 5) no-admin 403 en cola central'); pass++;
+    } finally { server.close(); }
   }
 } catch (error) {
   console.error('FAIL |', error.code, error.message, '|', (error.where||'').slice(0,120));
