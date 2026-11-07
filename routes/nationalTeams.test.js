@@ -54,9 +54,10 @@ test('registry legacy writes reject before RPC while unrelated detail remains fo
  const outsider=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});assert.equal((await outsider.call('get',base+'/:equipoId')).statusCode,403);
 });
 test('registry Nations list preserves existing hidden audience and does not expose other roster references',async()=>{
- const hidden=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2099-11-20T00:00:00Z'}}}});assert.deepEqual((await hidden.call('get',base)).body.equipos,[]);
- const revealed=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2000-11-20T00:00:00Z'}}}});const e=(await revealed.call('get',base)).body.equipos[0];assert.equal(e.creador_id,null);assert.deepEqual(e.jugadores,[]);
- const publicNormal=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});const p=(await publicNormal.call('get',base)).body.equipos[0];assert.equal(p.jugadores.length,0);assert.equal(p.referencias_plantel_disponibles,false);assert.equal(p.can_add_profiles,false);assert.equal(p.can_confirm,false);
+ const hidden=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2099-11-20T00:00:00Z'}}}});const hEqs=(await hidden.call('get',base)).body.equipos;assert.equal(hEqs.length,1);assert.equal(hEqs[0].jugadores.length,8);
+ const revealed=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers},tournament:{plan_nations:{enabled:true,config:{timezone:'Europe/Rome',reveal_at:'2000-11-20T00:00:00Z'}}}});const eqs=(await revealed.call('get',base)).body.equipos;assert.equal(eqs.length,1);assert.equal(eqs[0].jugadores.length,8);
+ // Torneo NORMAL (sin selecciones): conserva la audiencia existente y muestra los 8 sin referencias.
+ const publicNormal=fixture({user:{id:ids[8]},team:{jugadores:registryPlayers}});const p=(await publicNormal.call('get',base)).body.equipos[0];assert.equal(p.jugadores.length,8);assert.equal(p.referencias_plantel_disponibles,false);assert.equal(p.can_add_profiles,false);assert.equal(p.can_confirm,false);assert.ok(p.jugadores.every(j=>!('participante_id'in j)&&!('user_id'in j)&&!('email'in j)));
 });
 
 test('expired tournament reports enrollment closed without claiming a save',async()=>{
