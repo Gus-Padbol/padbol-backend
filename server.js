@@ -64,6 +64,7 @@ import { mountWebPushRoutes } from './routes/webPush.js';
 import { createWebPushService, createVapidSender } from './lib/webPushNotifications.js';
 import { createAgendaBootstrap, AGENDA_FLAG } from './lib/crmAgendaBootstrap.js';
 import { createProfilePhotoGate } from './lib/profilePhotoGate.js';
+import { normalizeHandle } from './lib/publicAliasNamespace.js';
 import { isHandleTaken } from './lib/publicAliasNamespace.js';
 import { decodeProfilePhoto } from './lib/profilePhotoPayload.js';
 import { createAgendaReminderNotifier } from './lib/crmAgendaReminderNotifier.js';
@@ -4954,8 +4955,8 @@ usuariosRouter.get('/check-username', async (req, res) => {
       return res.status(status).json({ error: authError });
     }
 
-    const username = String(req.query.username ?? '').replace(/^@+/, '').trim().toLowerCase();
-    if (!username || username.length < 2) {
+    const username = normalizeHandle(req.query.username);
+    if (!username) {
       return res.json({ available: false });
     }
 
