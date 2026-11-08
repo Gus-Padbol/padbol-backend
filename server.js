@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { readAuthenticatedPlayerProfile, updateAuthenticatedPlayerProfile } from './lib/authenticatedPlayerProfile.js';
 import {hasCheckoutQuote,checkoutQuoteParameters,assertOptionalCheckoutPriceQuote,checkoutQuoteRejection,createCheckoutPriceQuoteHandler} from './lib/checkoutPriceQuote.js';
 import { createWhatsappContextRepository, registerWhatsappContextRoute } from './lib/whatsappContextBinding.js';
 import { resolveWhatsappProductionMenuFlags } from './lib/whatsappProductionMenuFlagsCandidate.js';
@@ -4528,6 +4530,11 @@ async function buildAuthenticatedPerfilPayload(perfil, user, deportes, identidad
   const fichaIdentidad = identidadFicha ?? await fetchIdentidadForPerfil(supabaseAdmin, userId);
 
   return {
+    id: perfil.id,
+    user_id: perfil.user_id ?? null,
+    authenticated_user_id: user.id,
+    alias: perfil.alias ?? null,
+    whatsapp: perfil.whatsapp ?? null,
     nombre: perfil.nombre ?? '',
     nombre_saludo: perfil.nombre_saludo ?? null,
     apellido: perfil.apellido ?? '',
@@ -4564,25 +4571,7 @@ async function handleGetAuthenticatedPerfil(req, res) {
       return res.status(status).json({ error: authError });
     }
 
-    const filters = buildUserEmailOrIdFilters(user, {
-      emailField: 'email',
-      userIdFields: ['user_id'],
-    });
-
-    if (filters.length === 0) {
-      return res.status(400).json({ error: 'Usuario sin identificador válido' });
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('jugadores_perfil')
-      .select(`
-        user_id, nombre, nombre_saludo, apellido, telefono, nivel, lateralidad, posicion_cancha,
-        pais, ciudad, email, foto_url, username, apodo, companero_habitual_id, xp, liga
-      `)
-      .or(filters.join(','))
-      .maybeSingle();
-
-    if (error) throw error;
+    const data = await readAuthenticatedPlayerProfile(supabaseAdmin, user);
     if (!data) {
       return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
     }
@@ -4603,9 +4592,9 @@ async function handlePutAuthenticatedPerfil(req, res) {
       return res.status(status).json({ error: authError });
     }
 
-    const email = user.email;
-    if (!email) {
-      return res.status(400).json({ error: 'Usuario sin email' });
+    const currentPerfil = await readAuthenticatedPlayerProfile(supabaseAdmin, user);
+    if (!currentPerfil) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
     }
 
     const body = req.body ?? {};
@@ -4666,20 +4655,12 @@ async function handlePutAuthenticatedPerfil(req, res) {
 
     let identidadFicha = null;
     if (perfilBodyHasIdentidadFields(body)) {
-      const { data: existingPerfil, error: existingPerfilErr } = await supabaseAdmin
-        .from('jugadores_perfil')
-        .select('pais')
-        .eq('email', email)
-        .maybeSingle();
-
-      if (existingPerfilErr) throw existingPerfilErr;
-
       const identidadPayload = buildIdentidadUpsertPayloadFromPerfilBody(body);
       if (
         Object.prototype.hasOwnProperty.call(identidadPayload, 'numero_documento')
         && !Object.prototype.hasOwnProperty.call(identidadPayload, 'pais_documento')
       ) {
-        const paisDocumentoFallback = resolvePaisDocumentoFallback(body, existingPerfil?.pais ?? null);
+        const paisDocumentoFallback = resolvePaisDocumentoFallback(body, currentPerfil.pais ?? null);
         if (paisDocumentoFallback != null && paisDocumentoFallback !== '') {
           identidadPayload.pais_documento = paisDocumentoFallback;
         }
@@ -4700,39 +4681,9 @@ async function handlePutAuthenticatedPerfil(req, res) {
       identidadFicha = await fetchIdentidadForPerfil(supabaseAdmin, user.id);
     }
 
-    let perfil = null;
-
-    if (Object.keys(updatePayload).length > 0) {
-      const { data, error } = await supabaseAdmin
-        .from('jugadores_perfil')
-        .update(updatePayload)
-        .eq('email', email)
-        .select(`
-          user_id, nombre, nombre_saludo, apellido, telefono, nivel, lateralidad, posicion_cancha,
-          pais, ciudad, email, foto_url, username, apodo, companero_habitual_id, xp, liga
-        `);
-
-      if (error) throw error;
-      if (!data?.length) {
-        return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
-      }
-      perfil = data[0];
-    } else {
-      const { data, error } = await supabaseAdmin
-        .from('jugadores_perfil')
-        .select(`
-          user_id, nombre, nombre_saludo, apellido, telefono, nivel, lateralidad, posicion_cancha,
-          pais, ciudad, email, foto_url, username, apodo, companero_habitual_id, xp, liga
-        `)
-        .eq('email', email)
-        .maybeSingle();
-
-      if (error) throw error;
-      if (!data) {
-        return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
-      }
-      perfil = data;
-    }
+    const perfil = Object.keys(updatePayload).length > 0
+      ? await updateAuthenticatedPlayerProfile(supabaseAdmin, user, currentPerfil, updatePayload)
+      : currentPerfil;
 
     if (Array.isArray(deportes) && perfil.user_id) {
       await syncJugadorDeportesForUser(perfil.user_id, deportes);
@@ -5128,21 +5079,21 @@ usuariosRouter.post('/foto-perfil', async (req, res) => {
       return res.status(status).json({ error: authError });
     }
 
-    const email = user.email;
-    if (!email) {
-      return res.status(400).json({ error: 'Usuario sin email' });
+    const currentPerfil = await readAuthenticatedPlayerProfile(supabaseAdmin, user);
+    if (!currentPerfil) {
+      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
     }
 
     const parsed = decodeProfilePhoto(req.body || {});
     if (parsed.error) return res.status(parsed.error.status).json({ error: parsed.error.error, code: parsed.error.code });
     const { mime: normalizedMime, buffer } = parsed;
 
-    const filePath = `${user.id}.jpg`;
+    const filePath = `${user.id}/${randomUUID()}.jpg`;
     const { error: uploadError } = await supabaseAdmin.storage
       .from('fotos-perfil')
       .upload(filePath, buffer, {
         contentType: 'image/jpeg',
-        upsert: true,
+        upsert: false,
       });
 
     if (uploadError) throw uploadError;
@@ -5151,17 +5102,12 @@ usuariosRouter.post('/foto-perfil', async (req, res) => {
       .from('fotos-perfil')
       .getPublicUrl(filePath);
 
-    const foto_url = publicUrlData.publicUrl;
+    const foto_url = publicUrlData?.publicUrl;
+    if (!foto_url) throw Object.assign(new Error('PROFILE_PHOTO_URL_UNAVAILABLE'), { status: 502 });
 
-    const { data, error } = await supabaseAdmin
-      .from('jugadores_perfil')
-      .update({ foto_url })
-      .eq('email', email)
-      .select('foto_url');
-
-    if (error) throw error;
-    if (!data?.length) {
-      return res.status(404).json({ error: 'Perfil de jugador no encontrado' });
+    const updated = await updateAuthenticatedPlayerProfile(supabaseAdmin, user, currentPerfil, { foto_url });
+    if (updated.foto_url !== foto_url) {
+      throw Object.assign(new Error('PROFILE_PHOTO_WRITE_CONFLICT'), { status: 409 });
     }
 
     console.log(`✓ POST /api/usuarios/foto-perfil — user ${user.id}`);
