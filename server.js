@@ -1,3 +1,4 @@
+import { mountAdminHelpRoutes, readAdminHelpRole } from './routes/adminHelp.js';
 import { randomUUID } from 'node:crypto';
 import { readAuthenticatedPlayerProfile, updateAuthenticatedPlayerProfile } from './lib/authenticatedPlayerProfile.js';
 import {hasCheckoutQuote,checkoutQuoteParameters,assertOptionalCheckoutPriceQuote,checkoutQuoteRejection,createCheckoutPriceQuoteHandler} from './lib/checkoutPriceQuote.js';
@@ -2997,6 +2998,8 @@ mountAdminTorneosResumenStatsRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
+mountAdminHelpRoutes(app, { getAuthenticatedUser, fetchUserRoleRowForAuthUser: user => readAdminHelpRole(supabaseAdmin, user) });
+
 mountSupportTicketsRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
