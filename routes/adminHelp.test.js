@@ -35,6 +35,8 @@ for (const role of ['admin_club', 'admin_cadena', 'admin_nacional', 'super_admin
     const panel = await get('articles/administracion/panel-por-rol');
     assert.equal(panel.status, 200);
     assert.ok(panel.body.article.steps.length);
+    assert.equal(panel.body.article.url, '/ayuda/administracion/administracion/panel-por-rol');
+    for (const item of list.body.results) assert.equal(item.url, `/ayuda/administracion/${item.module}/${item.slug}`);
     assert.equal(panel.body.article.verification, 'source-reviewed');
     assert.equal((await get('articles/unknown/unknown')).status, 403);
     assert.equal((await get('articles/administracion/unknown')).status, 403);

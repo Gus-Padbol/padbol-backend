@@ -49,7 +49,7 @@ export function mountAdminHelpRoutes(app, { getAuthenticatedUser, fetchUserRoleR
       if (selected.some(a => !a.translations[lang])) return fail(res, 409, 'HELP_LOCALIZATION_UNAVAILABLE');
       let projected = selected.map(a => ({
         id: a.id, module: a.module, slug: a.slug, lang,
-        url: `/ayuda/${a.module}/${a.slug}`, status: a.status,
+        url: `/ayuda/administracion/${a.module}/${a.slug}`, status: a.status,
         verification: a.verification, sourceVersion: a.sourceVersion,
         ...a.translations[lang],
       }));

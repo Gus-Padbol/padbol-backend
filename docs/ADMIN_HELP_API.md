@@ -5,7 +5,7 @@ Server-only corpus: `lib/adminHelpArticles.js`. Never copy this corpus to fronte
 - `GET /api/admin/help/search?q=&lang=es` returns `{results,total,lang}`. Empty q lists all authorized articles. q is a string up to 120 characters. Search covers title, requirements and steps, with case/accent folding and all query terms required.
 - Each summary has `id,module,slug,title,snippet,url,lang,status,verification,sourceVersion`.
 - `GET /api/admin/help/articles/:module/:slug?lang=es` returns `{article}` with the summary fields except snippet, plus `requirements,steps,limit`.
-- `url` is `/ayuda/:module/:slug`. The center is `/ayuda/administracion`.
+- `url` is `/ayuda/administracion/:module/:slug`. The center is `/ayuda/administracion`.
 - `lang` accepts es/en/pt, defaults to es. Missing translations return 409 without fallback. Initial reviewed corpus contains ES/EN only; reviewed PT may be added without router changes.
 - All responses set `Cache-Control: private, no-store` and `Vary: Authorization`.
 - Error body: `{error: CODE, code: CODE}`. 401 HELP_UNAUTHENTICATED; 403 HELP_FORBIDDEN (including every inaccessible or nonexistent detail); 403 HELP_CONTEXT_CHANGED; 400 HELP_INVALID_LANGUAGE/HELP_INVALID_QUERY; 409 HELP_LOCALIZATION_UNAVAILABLE; 503 HELP_UNAVAILABLE.
