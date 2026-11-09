@@ -23,11 +23,13 @@ export function mountNationsCountryRankingRoutes(app, { db }) {
     try {
       const approvals = await fetchNationsApprovalMap(db, []);
       const items = await loadNationsCountryRanking(db, {
-        isRevealed: (torneo, now) => isNationsPublicRevealed(
-          torneo,
-          now,
-          approvals.get(Number(torneo.id)) === true,
-        ),
+        isRevealed: (torneo, now) => {
+          // Local fail-closed guard: only the activation-event map can publish
+          // this endpoint. A copied roster_publication_approved flag on the
+          // tournament or plan is never enough when the map is false or absent.
+          if (approvals.get(Number(torneo?.id)) !== true) return false;
+          return isNationsPublicRevealed(torneo, now, true);
+        },
       });
       return res.json({ ok: true, items });
     } catch (failure) {

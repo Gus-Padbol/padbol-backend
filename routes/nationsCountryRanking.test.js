@@ -81,6 +81,39 @@ test('route returns the accumulated country ranking without touching the player 
   assert.equal(res.body.items[0].torneos_count, 1);
   assert.equal(res.body.items[0].posicion, 1);
   assert(db.calls.every((entry) => !String(entry.fields).includes('jugadores')));
+  const serialized = JSON.stringify(res.body);
+  assert.equal(serialized.includes('jugadores'), false);
+  assert.equal(serialized.includes('user_id'), false);
+  assert.equal(serialized.includes('email'), false);
+});
+
+test('failed or absent authoritative approval cannot be replaced by copied flags', async () => {
+  const copied = {
+    ...event,
+    roster_publication_approved: true,
+    plan_nations: { ...event.plan_nations, roster_publication_approved: true },
+  };
+  for (const approvals of [[], [{ torneo_id: 1, roster_publication_approved: false }]]) {
+    const res = await call(fakeDb(tables({
+      torneos: { data: [copied] },
+      nations_activation_events: { data: approvals },
+    })));
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body.items, []);
+  }
+});
+
+test('drafts and invalid country plans never leak metadata or partial points', async () => {
+  const draft = await call(fakeDb(tables({ torneos: { data: [{ ...event, estado: 'abierto' }] } })));
+  assert.equal(draft.statusCode, 200);
+  assert.deepEqual(draft.body.items, []);
+
+  const invalid = await call(fakeDb(tables({
+    torneos: { data: [{ ...event, plan_nations: { config: { reveal_at: '2020-01-01T00:00:00Z', country_by_team: {} } } }] },
+  })));
+  assert.equal(invalid.statusCode, 503);
+  assert.equal(invalid.body.ok, false);
+  assert.equal(invalid.body.code, 'NATIONS_COUNTRY_RANKING_DATA_INVALID');
 });
 
 test('QA and embargoed events are hidden even when the request is public', async () => {
