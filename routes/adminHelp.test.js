@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { mountAdminHelpRoutes, readAdminHelpRole } from './adminHelp.js';
-import { ADMIN_HELP_ARTICLES } from '../lib/adminHelpArticles.js';
+import { ADMIN_HELP_ARTICLES } from '../lib/fixtures/adminHelpInitialCorpus.js';
 
 async function fixture(t, { role = 'super_admin', auth, fetchRole, articles } = {}) {
   const app = express();
   mountAdminHelpRoutes(app, {
     getAuthenticatedUser: auth || (async req => req.headers.authorization === 'Bearer fixture' ? { user: { id: 'synthetic', user_metadata: { role: 'super_admin' } } } : { user: null }),
     fetchUserRoleRowForAuthUser: fetchRole || (async () => ({ role, sede_id: 7 })),
-    ...(articles ? { articles } : {}),
+    articles: articles || ADMIN_HELP_ARTICLES,
   });
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));

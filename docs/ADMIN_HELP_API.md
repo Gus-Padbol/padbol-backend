@@ -6,7 +6,7 @@ Server-only corpus: `lib/adminHelpArticles.js`. Never copy this corpus to fronte
 - Each summary has `id,module,slug,title,snippet,url,lang,status,verification,sourceVersion`.
 - `GET /api/admin/help/articles/:module/:slug?lang=es` returns `{article}` with the summary fields except snippet, plus `requirements,steps,limit`.
 - `url` is `/ayuda/administracion/:module/:slug`. The center is `/ayuda/administracion`.
-- `lang` accepts es/en/pt, defaults to es. Missing translations return 409 without fallback. Initial reviewed corpus contains ES/EN only; reviewed PT may be added without router changes.
+- `lang` accepts es/en/pt, defaults to es. Missing translations return 409 without fallback. The reviewed corpus contains twenty articles in ES/EN/PT. Translation availability is still checked per authorized article.
 - All responses set `Cache-Control: private, no-store` and `Vary: Authorization`.
 - Error body: `{error: CODE, code: CODE}`. 401 HELP_UNAUTHENTICATED; 403 HELP_FORBIDDEN (including every inaccessible or nonexistent detail); 403 HELP_CONTEXT_CHANGED; 400 HELP_INVALID_LANGUAGE/HELP_INVALID_QUERY; 409 HELP_LOCALIZATION_UNAVAILABLE; 503 HELP_UNAVAILABLE.
 
@@ -18,7 +18,7 @@ Roles: super_admin, admin_club, admin_nacional and admin_cadena; club additional
 
 ## Corpus schema and review
 
-`{id,module,slug,allowedRoles,status,verification,sourceVersion,translations}`. Only status `reviewed` is eligible. verification must accurately distinguish source-reviewed instructions from runtime-verified procedures. translations contains language objects `{title,requirements:[],steps:[],limit}`. No persons, tenant records, credentials, private ticket text or promised response times. Initial two articles were checked against existing panel policy and support handlers, not an authenticated production walkthrough. Broader content requires a separate source review.
+`{id,module,slug,allowedRoles,status,verification,sourceVersion,translations}`. Only status `reviewed` is eligible. verification must accurately distinguish source-reviewed instructions from runtime-verified procedures. translations contains language objects `{title,requirements:[],steps:[],limit}`. No persons, tenant records, credentials, private ticket text or promised response times. The twenty integrated articles were source-reviewed against frontend 798c844e and backend 42f4a804, with final corrections for validation error handling, role-specific push segments and points copy. This is not an authenticated production walkthrough. Changes to this corpus require another source review.
 
 ## Release
 
