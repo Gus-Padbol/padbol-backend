@@ -117,3 +117,24 @@ test('denied and nonexistent details within a shared module are indistinguishabl
   const get = await fixture(t, { role: 'admin_club', articles: [...ADMIN_HELP_ARTICLES, secret] });
   assert.deepEqual(await get('articles/administracion/private'), await get('articles/administracion/nonexistent'));
 });
+
+test('everyday ES/EN/PT questions use useful terms only and never suggest restricted actions', async t => {
+  const make = (id, allowedRoles, translations) => ({id, module:id, slug:'guide', allowedRoles, status:'reviewed', verification:'source-reviewed', translations});
+  const copy = title => ({title,requirements:['Valid session'],steps:[title,'Do not delete courts'],limit:'Do not configure billing'});
+  const articles = [
+    make('tournaments',['super_admin'],{es:copy('Crear torneos'),en:copy('Create a tournament'),pt:copy('Criar torneios')}),
+    make('courts',['admin_club','super_admin'],{es:copy('Añadir canchas'),en:copy('Add courts'),pt:copy('Adicionar quadras')}),
+    make('hours',['admin_club','super_admin'],{es:copy('Cambiar horarios'),en:copy('Change schedules'),pt:copy('Alterar horário')}),
+  ];
+  const get = await fixture(t,{articles});
+  for (const [lang,q,id] of [['es','cómo crear un torneo','tournaments'],['en','how do I add a court','courts'],['pt','como alterar horários','hours'],['es','quiero añadir una cancha','courts']]) {
+    const result = await get(`search?lang=${lang}&q=${encodeURIComponent(q)}`);
+    assert.equal(result.status,200);
+    assert.deepEqual(result.body.results.map(a=>a.id),[id]);
+  }
+  for (const q of ['how do I','cómo puedo','como posso','billing','delete court']) assert.equal((await get(`search?q=${encodeURIComponent(q)}`)).body.total,0);
+  const club = await fixture(t,{articles,role:'admin_club'});
+  const denied = await club('search?lang=es&q='+encodeURIComponent('cómo crear un torneo'));
+  assert.equal(denied.body.total,0);
+  assert.doesNotMatch(JSON.stringify(denied),/tournaments|torneo/);
+});

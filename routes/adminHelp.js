@@ -2,6 +2,25 @@ import { ADMIN_HELP_ARTICLES } from '../lib/adminHelpArticles.js';
 
 const ADMIN_ROLES = new Set(['super_admin', 'admin_club', 'admin_nacional', 'admin_cadena']);
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const SEARCH_STOPWORDS = new Set([
+  'a', 'al', 'as', 'at', 'como', 'con', 'da', 'das', 'de', 'del', 'do', 'dos',
+  'el', 'em', 'en', 'for', 'how', 'i', 'in', 'is', 'la', 'las', 'lo', 'los',
+  'me', 'mi', 'my', 'na', 'nas', 'no', 'nos', 'o', 'of', 'on', 'os', 'para',
+  'por', 'que', 'the', 'to', 'um', 'uma', 'un', 'una', 'unas', 'unos', 'with',
+  'can', 'could', 'please', 'puedo', 'quiero', 'quero', 'posso', 'favor',
+]);
+const SEARCH_WORDS = new Map([
+  ...['crear', 'crea', 'create', 'creates', 'creating', 'criar', 'cria', 'add', 'adding', 'anadir', 'agregar', 'adicionar'].map(w => [w, 'create']),
+  ...['alterar', 'altera', 'cambiar', 'cambia', 'change', 'changing', 'edit', 'editar', 'modificar'].map(w => [w, 'edit']),
+  ...['torneo', 'torneos', 'tournament', 'tournaments', 'torneio', 'torneios'].map(w => [w, 'tournament']),
+  ...['cancha', 'canchas', 'court', 'courts', 'quadra', 'quadras'].map(w => [w, 'court']),
+  ...['horario', 'horarios', 'schedule', 'schedules', 'hours', 'hour'].map(w => [w, 'schedule']),
+]);
+export function adminHelpSearchTerms(value) {
+  return [...new Set((normalize(value).match(/[a-z0-9]+/g) || [])
+    .filter(word => !SEARCH_STOPWORDS.has(word))
+    .map(word => SEARCH_WORDS.get(word) || (word.length > 4 && word.endsWith('s') ? word.slice(0, -1) : word)))];
+}
 const fail = (res, status, code) => res.status(status).json({ error: code, code });
 
 // No tenant data is returned. Re-read the existing persisted assignment on each
@@ -54,10 +73,14 @@ export function mountAdminHelpRoutes(app, { getAuthenticatedUser, fetchUserRoleR
         ...a.translations[lang],
       }));
       if (!detail) {
-        const terms = normalize((req.query.q || '').trim()).split(/\s+/).filter(Boolean);
+        const query = (req.query.q || '').trim();
+        const terms = adminHelpSearchTerms(query);
         projected = projected.filter(a => {
-          const text = normalize([a.title, ...a.requirements, ...a.steps].join(' '));
-          return terms.every(term => text.includes(term));
+          const affirmative = [a.title, ...a.requirements, ...a.steps]
+            .flatMap(text => text.split(/[.!?;]\s*/))
+            .filter(text => !/\b(no|not|never|nunca|nao|sin|without|cannot|can't|don't|doesn't)\b/.test(normalize(text)));
+          const words = new Set(adminHelpSearchTerms(affirmative.join(' ')));
+          return (!query || terms.length > 0) && terms.every(term => words.has(term));
         }).map(({ requirements, steps, limit, ...summary }) => ({ ...summary, snippet: (steps[0] || requirements[0] || '').slice(0, 240) }));
       }
       const final = await context(req);

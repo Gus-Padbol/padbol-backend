@@ -2,7 +2,7 @@
 
 Server-only corpus: `lib/adminHelpArticles.js`. Never copy this corpus to frontend/public/PDF output.
 
-- `GET /api/admin/help/search?q=&lang=es` returns `{results,total,lang}`. Empty q lists all authorized articles. q is a string up to 120 characters. Search covers title, requirements and steps, with case/accent folding and all query terms required.
+- `GET /api/admin/help/search?q=&lang=es` returns `{results,total,lang}`. Empty q lists all authorized articles. q is a string up to 120 characters. Search covers title, requirements and steps, with case/accent folding, basic plural normalization, ES/EN/PT question stopwords and a small explicit action/domain synonym list. All useful query terms are required; a nonempty query containing only stopwords returns no results. No external AI or network search is used.
 - Each summary has `id,module,slug,title,snippet,url,lang,status,verification,sourceVersion`.
 - `GET /api/admin/help/articles/:module/:slug?lang=es` returns `{article}` with the summary fields except snippet, plus `requirements,steps,limit`.
 - `url` is `/ayuda/administracion/:module/:slug`. The center is `/ayuda/administracion`.
