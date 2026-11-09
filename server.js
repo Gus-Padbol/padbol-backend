@@ -23,6 +23,7 @@ import { isNationsPublicRevealed, resolveNationsReadAudience, projectNationsMatc
 import { mountPointsConfigRoutes } from './routes/pointsConfig.js';
 import { loadPointsPolicy, buildPointsRows } from './lib/torneos/pointsPolicyService.js';
 import { mountNationsCupRoutes } from './routes/nationsCup.js';
+import { mountNationsCountryRankingRoutes } from './routes/nationsCountryRanking.js';
 import { isNationalRoster, rankingPlayersForTeam, rankingPlayerKey, closeNationalTournament } from './lib/nationalTeamLineup.js';
 import { mountNationalTeamRoutes } from './routes/nationalTeams.js';
 import { createCrmEmailSender } from './lib/crmEmailSender.js';
@@ -1955,6 +1956,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
 }
 
 mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
+mountNationsCountryRankingRoutes(app, { db: supabaseAdmin });
 mountQaManualTeamsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
 mountTournamentParticipantsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
 registerNationsActivationRoutes(app, { pool: pgPool, authUserFromBearer });
