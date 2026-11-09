@@ -2,10 +2,14 @@ import { requireAdminUser } from '../lib/authAccess.js';
 import {
   ADMIN_JUGADORES_SEARCH_MIN,
   desvincularJugadorSede,
+  listAdminJugadoresGlobal,
   listAdminJugadoresSede,
   parseLimit,
+  parseOrden,
   parsePage,
   parseSedeIdParam,
+  parseSedeIdParamStrict,
+  parseVinculacionFilter,
   parseVinculadoFilter,
   resolveAdminJugadoresScope,
   searchAdminJugadoresGlobal,
@@ -21,6 +25,7 @@ function sendServiceError(res, err, fallback) {
 
 export function mountAdminJugadoresRoutes(app, {
   supabaseAdmin,
+  pgPool = null,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails = [],
@@ -65,40 +70,54 @@ export function mountAdminJugadoresRoutes(app, {
   });
 
   /**
-   * GET /api/admin/jugadores?sede_id=&q=&page=&limit=&vinculado=
-   * Roster: historial de reservas ∪ vínculos formales activos (MEJ-04).
-   * Admin club: forced to own sede. Super admin: sede_id required.
+   * GET /api/admin/jugadores?sede_id=&q=&page=&limit=&vinculado=&vinculacion=&orden=
+   * - super_admin without sede_id: all registered players (sede optional).
+   * - super_admin with sede_id: historial de reservas ∪ vínculos formales.
+   * - admin_club: forced to own sede (never global).
+   * A present-but-invalid sede_id is rejected (400), never treated as "todos".
    */
   app.get('/api/admin/jugadores', async (req, res) => {
     try {
       const auth = await requireAdminUser(req, res, adminDeps);
       if (!auth) return;
 
-      const requestedSedeId = parseSedeIdParam(req.query.sede_id);
+      const rawSedeId = req.query.sede_id;
+      const requestedSedeId = parseSedeIdParamStrict(rawSedeId);
+      const sedeIdProvided = rawSedeId != null && String(rawSedeId).trim() !== '';
+      if (sedeIdProvided && requestedSedeId == null) {
+        return res.status(400).json({ error: 'sede_id inválido', code: 'SEDE_INVALIDA' });
+      }
+
       const scope = resolveAdminJugadoresScope(auth.role, requestedSedeId);
       if (!scope.ok) {
         return res.status(scope.status).json({ error: scope.error });
-      }
-
-      if (scope.sedeId == null) {
-        return res.status(400).json({
-          error: 'Seleccioná una sede (sede_id) para listar jugadores',
-          code: 'SEDE_REQUIRED',
-        });
       }
 
       const page = parsePage(req.query.page);
       const limit = parseLimit(req.query.limit);
       const q = String(req.query.q ?? '');
       const vinculado = parseVinculadoFilter(req.query.vinculado);
+      const vinculacion = parseVinculacionFilter(req.query.vinculacion);
+      const orden = parseOrden(req.query.orden);
 
-      const result = await listAdminJugadoresSede(supabaseAdmin, {
-        sedeId: scope.sedeId,
-        q,
-        page,
-        limit,
-        vinculado,
-      });
+      const result = scope.sedeId == null
+        ? await listAdminJugadoresGlobal(pgPool, {
+          q,
+          page,
+          limit,
+          vinculado,
+          vinculacion,
+          orden,
+        })
+        : await listAdminJugadoresSede(supabaseAdmin, {
+          sedeId: scope.sedeId,
+          q,
+          page,
+          limit,
+          vinculado,
+          vinculacion,
+          orden,
+        });
       return res.json(result);
     } catch (err) {
       console.error('❌ GET /api/admin/jugadores:', err.message);

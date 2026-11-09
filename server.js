@@ -1260,6 +1260,7 @@ mountSedesDuracionesRoutes(app, {
 });
 mountAdminJugadoresRoutes(app, {
   supabaseAdmin,
+  pgPool,
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
