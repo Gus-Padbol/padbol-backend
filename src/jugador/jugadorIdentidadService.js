@@ -449,7 +449,7 @@ export async function upsertIdentidadPropia(supabaseAdmin, userId, payload = {})
     .single();
 
   if (error) {
-    if (error.code === '23505' && String(error.message ?? '').includes('numero_documento_hash')) {
+    if (error.code === '23505' && /numero_documento_hash|idx_jugadores_identidad_doc_hash_unique/.test(String(error.message ?? ''))) {
       const err = new Error('El documento ya está registrado en otra cuenta');
       err.code = 'DOCUMENTO_DUPLICADO';
       err.status = 409;
