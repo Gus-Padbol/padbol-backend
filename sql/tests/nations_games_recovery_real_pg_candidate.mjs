@@ -1,5 +1,7 @@
 // Isolated QA only: real national RPC, reverse-sync trigger and bracket services.
 import pg from 'pg';
+import {loadRecoveryStackFixture} from './nations_games_recovery_stack_fixture.mjs';
+const combined=process.env.OWN_GAMES_FULL_STACK==='1';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
@@ -25,7 +27,7 @@ await pool.query(registry.slice(0,beforeFinalize)+'  EXIT; END LOOP; END $qa$; C
 await pool.query(`ALTER TABLE scoreboard_partidos ADD COLUMN sede_id bigint DEFAULT 8,ADD COLUMN games_a int DEFAULT 0,ADD COLUMN games_b int DEFAULT 0,ADD COLUMN score_a int DEFAULT 0,ADD COLUMN score_b int DEFAULT 0;
 CREATE SCHEMA nations_marker_private;CREATE TABLE nations_marker_private.nations_marker_match(match_id text PRIMARY KEY,games_epoch int DEFAULT 0);`);
 const commands=await readFile('sql/candidates/nations_games_commands.sql','utf8');
-await pool.query(commands.slice(commands.indexOf('CREATE TABLE nations_marker_private.games_finalization_intents'),commands.indexOf('CREATE FUNCTION nations_marker_private.commit_games_command_candidate')));
+if(!combined)await pool.query(commands.slice(commands.indexOf('CREATE TABLE nations_marker_private.games_finalization_intents'),commands.indexOf('CREATE FUNCTION nations_marker_private.commit_games_command_candidate')));
 const source=(await pool.query("SELECT * FROM partidos WHERE torneo_id=90016 AND bracket_round=1 ORDER BY id LIMIT 1")).rows[0];
 const dest=(await pool.query('SELECT * FROM partidos WHERE id=$1',[source.partido_siguiente_id])).rows[0];
 let sb=(await pool.query('SELECT * FROM scoreboard_partidos WHERE partido_torneo_id=$1',[source.id])).rows[0];
@@ -34,13 +36,15 @@ await pool.query("UPDATE partidos SET equipo_b_id=$2 WHERE id=$1",[dest.id,sourc
 await pool.query("UPDATE scoreboard_partidos SET sync_torneo_status=NULL,synced_to_torneo_at=NULL WHERE id=$1",[sb.id]);
 await pool.query("UPDATE scoreboard_partidos SET estado='terminado',sets_a=2,sets_b=0,historial_sets='[{\"a\":6,\"b\":0},{\"a\":6,\"b\":0}]'::jsonb WHERE id=$1",[sb.id]);
 sb=(await pool.query('SELECT * FROM scoreboard_partidos WHERE id=$1',[sb.id])).rows[0];
+if(combined)await loadRecoveryStackFixture(pool);
 await pool.query('INSERT INTO nations_marker_private.nations_marker_match(match_id) VALUES($1)',[sb.id]);
+if(combined)await pool.query("UPDATE nations_marker_private.nations_marker_match SET games_ledger=jsonb_build_object('version',1,'total',12,'events','[]'::jsonb,'active',to_jsonb(ARRAY(SELECT 'fixture-'||n FROM generate_series(1,12)n))) WHERE match_id=$1",[sb.id]);
 const snap=Object.fromEntries(['partido_torneo_id','torneo_id','sede_id','estado','sets_a','sets_b','games_a','games_b','score_a','score_b','historial_sets'].map(k=>[k,sb[k]]));
 const occurred='2026-10-31T23:59:59.000Z';
 await pool.query('INSERT INTO nations_marker_private.games_finalization_intents(scoreboard_id,epoch,request_id,partido_torneo_id,final_snapshot,occurred_at) VALUES($1,0,$2,$3,$4,$5)',[sb.id,randomUUID(),source.id,JSON.stringify(snap),occurred]);
-let rpcCalls=0,failNextInsert=false;
+let rpcCalls=0,failNextInsert=false,onRpc=null;
 const ident=k=>{if(!/^[a-z_][a-z0-9_]*$/.test(k))throw Error('IDENTIFIER');return '"'+k+'"';};
-const db={async rpc(name,args){assert.equal(name,'finalizar_partido_seleccion');rpcCalls++;try{return {data:(await pool.query('SELECT finalizar_partido_seleccion($1,$2::jsonb,$3::uuid,$4) result',[args.p_partido_id,JSON.stringify(args.p_resultado),args.p_actor_id,args.p_fuente])).rows[0].result,error:null};}catch(error){return {data:null,error};}},from(table){
+const db={async rpc(name,args){assert.equal(name,'finalizar_partido_seleccion');rpcCalls++;onRpc?.();try{return {data:(await pool.query('SELECT finalizar_partido_seleccion($1,$2::jsonb,$3::uuid,$4) result',[args.p_partido_id,JSON.stringify(args.p_resultado),args.p_actor_id,args.p_fuente])).rows[0].result,error:null};}catch(error){return {data:null,error};}},from(table){
  let filters=[],patch=null,insertion=null,selection='*';
  const q={select(s){selection=s;return q;},update(v){patch=v;return q;},insert(v){insertion=v;return q;},limit(){return q;},eq(k,v){filters.push([k,v,'=']);return q;},in(k,v){filters.push([k,v,'ANY']);return q;},is(k,v){assert.equal(v,null);filters.push([k,v,'IS']);return q;},async maybeSingle(){const r=await run();return {...r,data:r.data?.[0]??null};},then(a,b){return run().then(a,b);}};
  async function run(){try{const values=[];if(insertion){if(failNextInsert){failNextInsert=false;throw Object.assign(Error('QA disconnected before insert'),{code:'08006'});}const entries=Object.entries(insertion);const rows=(await pool.query('INSERT INTO '+ident(table)+'('+entries.map(([k])=>ident(k)).join(',')+') VALUES('+entries.map((_,i)=>'$'+(i+1)).join(',')+') RETURNING *',entries.map(([,v])=>typeof v==='object'&&v!==null?JSON.stringify(v):v))).rows;return {data:rows,error:null};}let sql=patch?'UPDATE '+ident(table)+' SET '+Object.entries(patch).map(([k,v])=>{values.push(v);return ident(k)+'=$'+values.length;}).join(','):'SELECT * FROM '+ident(table);
@@ -82,5 +86,33 @@ await requeue();failNextInsert=true;const failedInsert=await recoverOneGamesFina
 await requeue();const completed=await recoverOneGamesFinalization({pool,db});assert.equal(completed.status,'completed',JSON.stringify(completed));
 await requeue();assert.equal((await recoverOneGamesFinalization({pool,db})).status,'completed');
 assert.equal((await pool.query('SELECT count(*)::int n FROM scoreboard_partidos WHERE partido_torneo_id=$1',[dest.id])).rows[0].n,1);
+// Expire the lease while the actual SQL RPC is blocked on a real tournament row.
+// Both workers execute the unchanged RPC after that lock is released.
+await requeue();const blocker=await pool.connect();let entered=0,signalTwo;
+const twoEntered=new Promise(r=>signalTwo=r);onRpc=()=>{entered++;if(entered===2)signalTwo();};
+await blocker.query('BEGIN');await blocker.query('SELECT id FROM torneos WHERE id=90016 FOR UPDATE');
+let workerOld,workerNew;
+try{
+ workerOld=recoverOneGamesFinalization({pool,db});
+ let waiting=false;
+ for(let n=0;n<100;n++){
+  waiting=(await pool.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'SELECT finalizar_partido_seleccion(%' AND wait_event_type='Lock') yes")).rows[0].yes;
+  if(waiting)break;await new Promise(r=>setTimeout(r,10));
+ }
+ assert.equal(waiting,true,'real RPC must be in-flight and lock-blocked');
+ await pool.query("UPDATE nations_marker_private.games_finalization_intents SET lease_until=clock_timestamp()-interval '1 second' WHERE scoreboard_id=$1",[sb.id]);
+ workerNew=recoverOneGamesFinalization({pool,db});
+ await Promise.race([twoEntered,new Promise((_,reject)=>setTimeout(()=>reject(Error('second RPC did not enter')),3000))]);
+ await blocker.query('COMMIT');
+ const [a,b]=await Promise.all([workerOld,workerNew]);assert.equal(a.status,'lease_lost');assert.equal(b.status,'completed',JSON.stringify(b));
+ assert.equal((await pool.query('SELECT count(*)::int n FROM torneo_partido_participacion WHERE partido_id=$1',[source.id])).rows[0].n,1);
+ assert.equal((await pool.query('SELECT count(*)::int n FROM scoreboard_partidos WHERE partido_torneo_id=$1',[dest.id])).rows[0].n,1);
+ console.log('PASS lease expiry DURING lock-blocked real SQL RPC: concurrent retries serialize, stale outcome fenced, one result and destination');
+}finally{onRpc=null;await blocker.query('ROLLBACK');blocker.release();await Promise.allSettled([workerOld,workerNew].filter(Boolean));}
+if(combined){
+ await assert.rejects(pool.query('UPDATE scoreboard_partidos SET score_a=15 WHERE id=$1',[sb.id]),/GAME_COMMAND_REQUIRED/);
+ await assert.rejects(pool.query('UPDATE scoreboard_partidos SET torneo_id=555 WHERE id=$1',[sb.id]),/GAME_TRACKING_SCOPE_FROZEN/);
+ console.log('PASS combined games guards, ledger invariant, occupancy triggers and finalization lock wrapper remain enforced');
+}
 console.log('PASS real lineup RPC + schedule RPC release pending recovery after failed insertion, create one destination scoreboard, and replay without duplicate');
 }finally{await pool.end();}
