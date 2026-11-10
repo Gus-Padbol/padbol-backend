@@ -48,7 +48,7 @@ export function createNationsMarkerDurableRouter({pool,authorize}) {
       }
       if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
       if(!body.idempotencyKey)return send(res,400,{code:'IDEMPOTENCY_KEY_REQUIRED'});
-      if(m[2]==='restart'){const r=await restartGamesTracking({pool,authorize,loadContext:loadNationsMarkerMatchContext,clockSnapshot,req,scoreboardId,requestId:body.requestId,epoch:body.epoch});return send(res,200,r);}
+      if(m[2]==='restart'){const r=await restartGamesTracking({pool,authorize,loadContext:(c,id)=>loadNationsMarkerMatchContext(c,id,{lock:true}),clockSnapshot,req,scoreboardId,requestId:body.requestId,epoch:body.epoch});return send(res,200,r);}
       if(m[2]==='start'){
         const r=await startNationsMarkerTracking({pool,authorize,req,scoreboardId,idempotencyKey:body.idempotencyKey,payload:body.payload||{}});
         return send(res,200,{startedAt:r.startedAt,revision:r.revision,receipt:r.receipt,deduplicated:r.deduplicated});
