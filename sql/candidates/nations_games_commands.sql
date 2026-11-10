@@ -78,7 +78,17 @@ BEGIN
  END IF;
  -- Tracked fallback undo has no authoritative snapshot: reject rather than invent.
  IF kind='undo' AND p_history_id IS NULL THEN RAISE EXCEPTION 'GAME_UNDO_HISTORY_REQUIRED'; END IF;
- result:=public.scoreboard_commit_mutation(p_id,p_expected,p_next,CASE WHEN kind='reset' THEN 'update' ELSE kind END,p_history,p_history_id);
+ -- Scope the internal legacy-writer guard to this command only. Restore even
+ -- when a caller catches a failed command inside an outer transaction.
+ DECLARE previous_context text:=current_setting('padbol.nations_games_command',true);
+ BEGIN
+   PERFORM set_config('padbol.nations_games_command',jsonb_build_object('scoreboardId',p_id,'requestId',p_request_id,'kind',kind)::text,true);
+   result:=public.scoreboard_commit_mutation(p_id,p_expected,p_next,CASE WHEN kind='reset' THEN 'update' ELSE kind END,p_history,p_history_id);
+   PERFORM set_config('padbol.nations_games_command',coalesce(previous_context,''),true);
+ EXCEPTION WHEN OTHERS THEN
+   PERFORM set_config('padbol.nations_games_command',coalesce(previous_context,''),true);
+   RAISE;
+ END;
  IF result IS NULL THEN RAISE EXCEPTION 'GAME_COMMAND_CONFLICT'; END IF;
  SELECT * INTO agg FROM nations_marker_private.nations_marker_match WHERE match_id=p_id::text;
  IF FOUND THEN result:=result||jsonb_build_object('gamesEpoch',agg.games_epoch,'trackingStatus',agg.tracking_status); END IF;
