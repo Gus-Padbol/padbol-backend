@@ -83,4 +83,15 @@ console.log('PASS restart establishes new clock baseline and states exactly once
 await command('10000000-0000-4000-8000-000000000005',{kind:'point',team:'A',epoch:1},{games_a:1,score_a:0},{equipo:'A',games_a_antes:0,games_b_antes:0,historial_sets_antes:[]});assert.equal((await ledger()).total,1);assert.deepEqual((await ledger()).events.at(-1).teams.A,['a','b']);
 await assert.rejects(command(resetKey,{kind:'reset',epoch:0},{games_a:99}),/GAME_EPOCH_CONFLICT/);
 console.log('PASS new epoch scores with fresh pair and rejects reset replay after restart');
+await d.exec('ALTER TABLE scoreboard_partidos ADD COLUMN partido_torneo_id bigint, ADD COLUMN torneo_id bigint, ADD COLUMN sede_id bigint; UPDATE scoreboard_partidos SET partido_torneo_id=77,torneo_id=9,sede_id=3;');
+await d.exec(`CREATE FUNCTION fail_intent_test() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RAISE EXCEPTION 'intent write failed'; END$$;CREATE TRIGGER fail_intent_test BEFORE INSERT ON nations_marker_private.games_finalization_intents FOR EACH ROW EXECUTE FUNCTION fail_intent_test();`);
+const finalKey='10000000-0000-4000-8000-000000000009',finalCmd={kind:'point',team:'A',epoch:1},finalNext={games_a:2,score_a:0,estado:'terminado'},finalHistory={equipo:'A',games_a_antes:1,games_b_antes:0,historial_sets_antes:[]};
+await assert.rejects(command(finalKey,finalCmd,finalNext,finalHistory),/intent write failed/);assert.equal((await row()).estado,'en_curso');assert.equal((await ledger()).total,1);
+assert.equal((await d.query('SELECT count(*)::int n FROM nations_marker_private.games_command_receipts WHERE request_id=$1',[finalKey])).rows[0].n,0);
+await d.exec('DROP TRIGGER fail_intent_test ON nations_marker_private.games_finalization_intents');
+await command(finalKey,finalCmd,finalNext,finalHistory);
+const intent=(await d.query('SELECT * FROM nations_marker_private.games_finalization_intents')).rows[0];assert.equal(intent.status,'pending');assert.equal(intent.partido_torneo_id,77);assert.equal(intent.epoch,1);assert.equal(intent.final_snapshot.control_token_hash,undefined);assert.equal(intent.final_snapshot.estado,'terminado');
+await command(finalKey,finalCmd,{games_a:99},finalHistory);assert.equal((await d.query('SELECT count(*)::int n FROM nations_marker_private.games_finalization_intents')).rows[0].n,1);
+assert.equal((await d.query("SELECT has_table_privilege('authenticated','nations_marker_private.games_finalization_intents','select') ok")).rows[0].ok,false);
+console.log('PASS final point and recovery intent commit atomically, rollback together and deduplicate without exposing tokens');
 await d.close();

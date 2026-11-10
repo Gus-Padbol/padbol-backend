@@ -8,6 +8,16 @@ CREATE TABLE nations_marker_private.games_command_receipts(
  scoreboard_id uuid NOT NULL, request_id uuid NOT NULL, command jsonb NOT NULL,
  result jsonb NOT NULL, PRIMARY KEY(scoreboard_id,request_id));
 REVOKE ALL ON nations_marker_private.games_command_receipts FROM PUBLIC;
+-- Recovery intent is committed with the final point. It is not a dispatcher.
+-- A verified reconciliation worker must complete it before enabling this candidate.
+CREATE TABLE nations_marker_private.games_finalization_intents(
+ scoreboard_id uuid NOT NULL, epoch integer NOT NULL, effect_kind text NOT NULL DEFAULT 'tournament_finalization',
+ request_id uuid NOT NULL, partido_torneo_id bigint NOT NULL, occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ final_snapshot jsonb NOT NULL, status text NOT NULL DEFAULT 'pending' CHECK(status IN('pending','completed','blocked')),
+ attempts integer NOT NULL DEFAULT 0, next_attempt_at timestamptz, last_error text,
+ lease_token uuid, lease_until timestamptz,
+ PRIMARY KEY(scoreboard_id,epoch,effect_kind));
+REVOKE ALL ON nations_marker_private.games_finalization_intents FROM PUBLIC;
 CREATE FUNCTION nations_marker_private.commit_games_command_candidate(
  p_id uuid,p_request_id uuid,p_command jsonb,p_expected timestamptz,
  p_next jsonb,p_history jsonb DEFAULT NULL,p_history_id uuid DEFAULT NULL)
@@ -72,6 +82,16 @@ BEGIN
  IF result IS NULL THEN RAISE EXCEPTION 'GAME_COMMAND_CONFLICT'; END IF;
  SELECT * INTO agg FROM nations_marker_private.nations_marker_match WHERE match_id=p_id::text;
  IF FOUND THEN result:=result||jsonb_build_object('gamesEpoch',agg.games_epoch,'trackingStatus',agg.tracking_status); END IF;
+ IF kind='point' AND coalesce(sb.estado,'') NOT IN('terminado','finalizado')
+    AND result->>'estado' IN('terminado','finalizado') AND to_jsonb(sb)->>'partido_torneo_id' IS NOT NULL THEN
+   INSERT INTO nations_marker_private.games_finalization_intents(scoreboard_id,epoch,request_id,partido_torneo_id,final_snapshot)
+   VALUES(p_id,(p_command->>'epoch')::int,p_request_id,(to_jsonb(sb)->>'partido_torneo_id')::bigint,
+     jsonb_build_object('scoreboard_id',p_id,'partido_torneo_id',to_jsonb(sb)->'partido_torneo_id',
+       'torneo_id',to_jsonb(sb)->'torneo_id','sede_id',to_jsonb(sb)->'sede_id',
+       'estado',result->'estado','sets_a',result->'sets_a','sets_b',result->'sets_b',
+       'games_a',result->'games_a','games_b',result->'games_b','score_a',result->'score_a','score_b',result->'score_b',
+       'historial_sets',result->'historial_sets'));
+ END IF;
  INSERT INTO nations_marker_private.games_command_receipts VALUES(p_id,p_request_id,p_command,result);
  RETURN result;
 END $$;
