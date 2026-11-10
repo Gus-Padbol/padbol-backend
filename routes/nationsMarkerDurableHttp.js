@@ -1,3 +1,5 @@
+import {withGamesLedgerRead,withGamesParticipation} from '../lib/torneos/nationsGamesReadCandidate.js';
+import {restartGamesTracking} from '../lib/torneos/nationsGamesRestartCandidate.js';
 import {loadNationsMarkerMatchContext} from '../lib/torneos/nationsMarkerMatchContext.js';
 import {NationsMarkerPostgresStore} from '../lib/torneos/nationsMarkerPostgresStore.js';
 import {startNationsMarkerTracking} from '../lib/torneos/nationsMarkerStartTracking.js';
@@ -8,7 +10,7 @@ const send=(res,code,obj)=>res.writeHead(code,{'content-type':'application/json'
 const hasAuthority=(b)=>['actor','actorId','clock','serverAt','serverNow','startedAt'].some(k=>Object.prototype.hasOwnProperty.call(b||{},k));
 /** Factory aislado; OFF por defecto: solo se monta si el instalador lo decide. */
 export function createNationsMarkerDurableRouter({pool,authorize}) {
-  const store=new NationsMarkerPostgresStore({pool});
+  const store=new (withGamesLedgerRead(NationsMarkerPostgresStore))({pool});
   return async function handler(req,res){
     try{
       const url=new URL(req.url,'http://local');
@@ -21,9 +23,9 @@ export function createNationsMarkerDurableRouter({pool,authorize}) {
         const row=sb.rows[0]||{};
         const canStart=!agg && Boolean(String(row.cancha||'').trim()) && row.cronometro_inicio==null && row.cronometro_pausado!==true && (Number(row.cronometro_segundos)||0)===0;
         const teams=Object.fromEntries(Object.entries(ctx.teams).map(([id,t])=>[id,{teamId:id,lineup:t.lineup,players:t.players||[]}]));
-        return send(res,200,{scoreboardId:cm[1],membership:ctx.membership,teamIds:Object.keys(teams),teams,hasBaseline:!!agg,canStart});
+        return send(res,200,{scoreboardId:cm[1],membership:ctx.membership,teamIds:Object.keys(teams),teams,hasBaseline:!!agg,canStart,canRestart:agg?.trackingStatus==='reset_pending',gamesEpoch:agg?.gamesEpoch,trackingStatus:agg?.trackingStatus});
       }
-      const m=url.pathname.match(/^\/api\/nations\/marker\/([^/]+)(?:\/(start|team\/([^/]+)\/commands|global\/commands))?$/);
+      const m=url.pathname.match(/^\/api\/nations\/marker\/([^/]+)(?:\/(start|restart|team\/([^/]+)\/commands|global\/commands))?$/);
       if(!m)return send(res,404,{code:'NOT_FOUND'});
       const scoreboardId=m[1]; let body={};
       if(req.method==='POST'){ if(req.body && typeof req.body==='object'){ body=req.body; } else { let raw='';for await(const c of req)raw+=c;try{body=JSON.parse(raw||'{}')}catch{return send(res,400,{code:'BODY_INVALID'})} } if(hasAuthority(body))return send(res,400,{code:'BODY_AUTHORITY_FORBIDDEN'});}
@@ -34,6 +36,7 @@ export function createNationsMarkerDurableRouter({pool,authorize}) {
         const ctx=await loadNationsMarkerMatchContext(pool,scoreboardId);
         if(!teamId)return send(res,400,{code:'TEAM_ID_REQUIRED'});
         if(!ctx.teams[teamId])return send(res,403,{code:'TEAM_NOT_IN_MATCH'});
+        if(agg.trackingStatus==='reset_pending')return send(res,200,withGamesParticipation({teamId,lineup:ctx.teams[teamId].lineup,matchRevision:agg.revision,teamIds:Object.keys(ctx.teams)},agg,teamId));
         const sb=await pool.query('SELECT cronometro_inicio,cronometro_pausado,cronometro_segundos,estado FROM scoreboard_partidos WHERE id=$1',[scoreboardId]);
         const trackingClosed=Object.values(agg.states).every(s=>['closed','corrected'].includes(s.status));
         const cr=await pool.query('SELECT revision FROM nations_marker_private.nations_marker_clock_revision WHERE scoreboard_id=$1',[scoreboardId]);
@@ -41,10 +44,11 @@ export function createNationsMarkerDurableRouter({pool,authorize}) {
         const participation=mismatch?{status:'unconfirmed',reason:'CLOCK_OUT_OF_SYNC',players:null,percentage:null,denominator:null,percentageStatus:'pending_definition'}:{...computeParticipation(agg.states[teamId],ctx.teams[teamId].lineup)};
         const body={teamId,lineup:ctx.teams[teamId].lineup,state:agg.states[teamId],participation,matchRevision:agg.revision,teamIds:Object.keys(ctx.teams)};
         if(mismatch) body.code='CLOCK_OUT_OF_SYNC';
-        return send(res,200,body);
+        return send(res,200,withGamesParticipation(body,agg,teamId));
       }
       if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
       if(!body.idempotencyKey)return send(res,400,{code:'IDEMPOTENCY_KEY_REQUIRED'});
+      if(m[2]==='restart'){const r=await restartGamesTracking({pool,authorize,loadContext:loadNationsMarkerMatchContext,clockSnapshot,req,scoreboardId,requestId:body.requestId,epoch:body.epoch});return send(res,200,r);}
       if(m[2]==='start'){
         const r=await startNationsMarkerTracking({pool,authorize,req,scoreboardId,idempotencyKey:body.idempotencyKey,payload:body.payload||{}});
         return send(res,200,{startedAt:r.startedAt,revision:r.revision,receipt:r.receipt,deduplicated:r.deduplicated});
