@@ -33,3 +33,7 @@ Reviewed against backend base `42f4a8046911db1e0d8fe0314176b4a5e2f118cf`. Refere
 ## Automated review
 
 `node scripts/check-admin-help-corpus.mjs /absolute/path/admin-help-articles.json` checks schema, translations, duplicate routes, reviewed status and module role ceilings. It is NOT semantic review or runtime authorization proof. It deliberately rejects runtimeEligible:false wrappers. Incentives and validation mixed-operation articles need human review as described above, regardless of an automated pass. Do not modify a corpus owned by another contributor to silence validation errors.
+
+## Revalidation against706f515a
+
+Players: routes/adminJugadores.js72-130 now allows the global roster only for super_admin; admin_club remains forced to its assigned venue. The shared help article only documents venue review. Bulk validation UI553ce658 uses the same per-profile authorization in routes/adminValidationAndChannels.js82-105; approval club/super, rejection super-only. Other reviewed module gates are unchanged from base42. Source refs on unchanged articles remain their original reviewed versions.

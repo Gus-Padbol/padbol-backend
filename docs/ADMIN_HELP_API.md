@@ -23,3 +23,7 @@ Roles: super_admin, admin_club, admin_nacional and admin_cadena; club additional
 ## Release
 
 No migrations, credentials or permission changes. Deploy code only from a clean canonical registered candidate at an identifiable commit, after the full suite and release preflight under Node >=22.23.4 (22.x). Validate production/QA separately, never infer target from branch. Roll back by restoring the preceding deployed code commit; no data rollback needed. Verify 401/no-store anonymously and authenticated role, localization, denied detail and search cases against the actual target before announcing availability.
+
+## Current production rebase (10 November 2026)
+
+Base backend706f515a, frontend e2a3493. Player guidance remains venue-scoped for club admins; the global roster is super_admin-only. Bulk approval/rejection copy follows frontend553ce658, with sequential requests, explicit confirmation, partial progress and refresh-before-retry. No roles, permission gates, database writes or Nations behavior were changed by this integration. P09 fixture fix is already upstream and was not reapplied.
