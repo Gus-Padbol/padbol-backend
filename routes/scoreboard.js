@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto';
+import {runGamesMutation} from '../lib/torneos/nationsGamesMutationTransaction.js';
 import {isScoreboardReadId} from '../lib/scoreboardReadId.js';
 import { installScoreboardWatchRoutes } from '../src/scoreboard/scoreboardWatchRoutes.js';
 import { validatePartialCorrection } from '../src/scoreboard/scoreboardPartialCorrection.js';
@@ -438,6 +440,8 @@ export function mountScoreboardRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails = [],
   io = null,
+  nationsGamesPool = null,
+  nationsGamesEnabled = false,
   scoreboardSuspensionCandidateEnabled = false,
   scoreboardSuspensionRecoveryEnabled = false,
 }) {
@@ -469,7 +473,32 @@ export function mountScoreboardRoutes(app, {
     return enrichPartidoWithVenue(supabaseAdmin, saved);
   }
 
-  async function handleRegistrarPunto(partido, equipo) {
+  const commandContext=(req,user,role)=>({authorizeLocked:async row=>{if(user)return assertCanControlScoreboard(role,row.sede_id);const hash=createHash('sha256').update(req.params.token).digest('hex');if(row.control_token_revoked_at!=null||row.control_token_hash!==hash)throw Object.assign(new Error('Token de control revocado'),{status:401});},requestId:req.body?.requestId,epoch:req.body?.epoch,actorId:user?.id|| (req.params?.token ? 'control-token:'+createHash('sha256').update(req.params.token).digest('hex'):null)});
+  async function tryGamesMutation(partido,kind,context,team){
+    if(!nationsGamesEnabled){if(context?.epoch!==undefined)throw Object.assign(new Error('GAME_STORE_UNAVAILABLE'),{code:'GAME_STORE_UNAVAILABLE',status:503});return null;}
+    if(!nationsGamesPool)throw Object.assign(new Error('GAME_STORE_UNAVAILABLE'),{code:'GAME_STORE_UNAVAILABLE',status:503});
+    const tracked=await nationsGamesPool.query('SELECT match_id FROM nations_marker_private.nations_marker_match WHERE match_id=$1',[partido.id]);
+    if(!tracked.rows.length){if(context?.epoch!==undefined)throw Object.assign(new Error('GAME_TRACKING_MISSING'),{code:'GAME_TRACKING_MISSING',status:409});return null;}
+    const out=await runGamesMutation({pool:nationsGamesPool,scoreboardId:partido.id,...context,kind,team,prepare:async locked=>{
+      if(kind==='reset')assertScoreboardMutable(locked);else assertScoreboardScoringActive(locked);
+      await assertScoreboardScoringSupported(supabaseAdmin,locked);
+      if(kind==='point'){const history=buildHistorialPuntoSnapshot(locked,team);registrarPunto(locked,team);return {next:locked,history};}
+      if(kind==='reset'){resetPartidoCompleto(locked);return {next:locked};}
+      const entry=await fetchUltimoHistorialPunto(supabaseAdmin,locked.id);
+      if(!entry)throw Object.assign(new Error('No hay puntos para deshacer'),{status:400});
+      assertLatestHistoryMatchesSnapshot(locked,entry);applyHistorialPuntoSnapshot(locked,entry);locked.historial_puntos=[];
+      return {next:locked,historyId:entry.id};
+    }});
+    const saved=Object.fromEntries(SCOREBOARD_PARTIDO_SELECT.split(', ').filter(key=>Object.hasOwn(out.row,key)).map(key=>[key,out.row[key]]));
+    if(!out.deduplicated&&kind==='point'){
+      await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin,saved,partido.estado);
+      await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin,saved,partido.estado);
+    }
+    await emitScoreboardUpdate(io,saved.id,saved,supabaseAdmin);
+    return {...await enrichPartidoWithVenue(supabaseAdmin,saved),gamesEpoch:out.gamesEpoch,trackingStatus:out.trackingStatus};
+  }
+  async function handleRegistrarPunto(partido, equipo, context) {
+    const tracked=await tryGamesMutation(partido,'point',context,equipo);if(tracked)return tracked;
     assertScoreboardScoringActive(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
     const expectedUpdatedAt = partido.updated_at;
@@ -483,7 +512,8 @@ export function mountScoreboardRoutes(app, {
     return enrichPartidoWithVenue(supabaseAdmin, saved);
   }
 
-  async function handleUndo(partido) {
+  async function handleUndo(partido, context) {
+    const tracked=await tryGamesMutation(partido,'undo',context);if(tracked)return tracked;
     assertScoreboardScoringActive(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
     if (!Array.isArray(partido.historial_puntos) || partido.historial_puntos.length === 0) {
@@ -502,7 +532,8 @@ export function mountScoreboardRoutes(app, {
     return saveAndEmit(partido, expectedUpdatedAt, { kind: 'undo', historyId: entry.id });
   }
 
-  async function handleDeshacer(partido) {
+  async function handleDeshacer(partido, context) {
+    const tracked=await tryGamesMutation(partido,'undo',context);if(tracked)return tracked;
     assertScoreboardScoringActive(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
     if (!Array.isArray(partido.historial_puntos) || partido.historial_puntos.length === 0) {
@@ -538,7 +569,8 @@ export function mountScoreboardRoutes(app, {
     return saveAndEmit(partido, expectedUpdatedAt);
   }
 
-  async function handleCronometro(partido, accion) {
+  async function handleCronometro(partido, accion, context) {
+    if(accion==='reset'){const tracked=await tryGamesMutation(partido,'reset',context);if(tracked)return tracked;}
     assertScoreboardMutable(partido);
     const expectedUpdatedAt = partido.updated_at;
     if (accion === 'start') {
@@ -634,7 +666,7 @@ export function mountScoreboardRoutes(app, {
         }
 
         const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
-        const enriched = await handleRegistrarPunto(partido, equipo);
+        const enriched = await handleRegistrarPunto(partido, equipo, commandContext(req,null));
         return res.json(enriched);
       } catch (err) {
         console.error(
@@ -653,7 +685,7 @@ export function mountScoreboardRoutes(app, {
     async (req, res) => {
       try {
         const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
-        const enriched = await handleUndo(partido);
+        const enriched = await handleUndo(partido, commandContext(req,null));
         return res.json(enriched);
       } catch (err) {
         console.error(
@@ -672,7 +704,7 @@ export function mountScoreboardRoutes(app, {
     async (req, res) => {
       try {
         const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
-        const enriched = await handleDeshacer(partido);
+        const enriched = await handleDeshacer(partido, commandContext(req,null));
         return res.json(enriched);
       } catch (err) {
         console.error(
@@ -734,7 +766,7 @@ export function mountScoreboardRoutes(app, {
         }
 
         const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
-        const enriched = await handleCronometro(partido, accion);
+        const enriched = await handleCronometro(partido, accion, commandContext(req,null));
         return res.json(enriched);
       } catch (err) {
         console.error(
@@ -1131,7 +1163,7 @@ export function mountScoreboardRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      const enriched = await handleRegistrarPunto(partido, equipo);
+      const enriched = await handleRegistrarPunto(partido, equipo, commandContext(req,user,role));
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -1165,7 +1197,7 @@ export function mountScoreboardRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      const enriched = await handleUndo(partido);
+      const enriched = await handleUndo(partido, commandContext(req,user,role));
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -1183,7 +1215,7 @@ export function mountScoreboardRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      const enriched = await handleDeshacer(partido);
+      const enriched = await handleDeshacer(partido, commandContext(req,user,role));
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -1242,7 +1274,7 @@ export function mountScoreboardRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      const enriched = await handleCronometro(partido, accion);
+      const enriched = await handleCronometro(partido, accion, commandContext(req,user,role));
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
