@@ -60,12 +60,12 @@ if(combined){
  const snap=Object.fromEntries(['partido_torneo_id','torneo_id','sede_id','estado','sets_a','sets_b','games_a','games_b','score_a','score_b','historial_sets'].map(k=>[k,sb[k]]));
  await pool.query('INSERT INTO nations_marker_private.games_finalization_intents(scoreboard_id,epoch,request_id,partido_torneo_id,final_snapshot,occurred_at) VALUES($1,0,$2,$3,$4,$5)',[sb.id,randomUUID(),source.id,JSON.stringify(snap),occurred]);
 }
-let rpcCalls=0,failNextInsert=false,onRpc=null;
+let rpcCalls=0,failNextInsert=false,onRpc=null,onInsert=null;
 const ident=k=>{if(!/^[a-z_][a-z0-9_]*$/.test(k))throw Error('IDENTIFIER');return '"'+k+'"';};
 const db={async rpc(name,args){assert.equal(name,'finalizar_partido_seleccion');rpcCalls++;onRpc?.();try{return {data:(await pool.query('SELECT finalizar_partido_seleccion($1,$2::jsonb,$3::uuid,$4) result',[args.p_partido_id,JSON.stringify(args.p_resultado),args.p_actor_id,args.p_fuente])).rows[0].result,error:null};}catch(error){return {data:null,error};}},from(table){
  let filters=[],patch=null,insertion=null,selection='*';
  const q={select(s){selection=s;return q;},update(v){patch=v;return q;},insert(v){insertion=v;return q;},limit(){return q;},eq(k,v){filters.push([k,v,'=']);return q;},in(k,v){filters.push([k,v,'ANY']);return q;},is(k,v){assert.equal(v,null);filters.push([k,v,'IS']);return q;},async maybeSingle(){const r=await run();return {...r,data:r.data?.[0]??null};},then(a,b){return run().then(a,b);}};
- async function run(){try{const values=[];if(insertion){if(failNextInsert){failNextInsert=false;throw Object.assign(Error('QA disconnected before insert'),{code:'08006'});}const entries=Object.entries(insertion);const rows=(await pool.query('INSERT INTO '+ident(table)+'('+entries.map(([k])=>ident(k)).join(',')+') VALUES('+entries.map((_,i)=>'$'+(i+1)).join(',')+') RETURNING *',entries.map(([,v])=>typeof v==='object'&&v!==null?JSON.stringify(v):v))).rows;return {data:rows,error:null};}let sql=patch?'UPDATE '+ident(table)+' SET '+Object.entries(patch).map(([k,v])=>{values.push(v);return ident(k)+'=$'+values.length;}).join(','):'SELECT * FROM '+ident(table);
+ async function run(){try{const values=[];if(insertion){if(failNextInsert){failNextInsert=false;throw Object.assign(Error('QA disconnected before insert'),{code:'08006'});}if(onInsert)await onInsert();const entries=Object.entries(insertion);const rows=(await pool.query('INSERT INTO '+ident(table)+'('+entries.map(([k])=>ident(k)).join(',')+') VALUES('+entries.map((_,i)=>'$'+(i+1)).join(',')+') RETURNING *',entries.map(([,v])=>typeof v==='object'&&v!==null?JSON.stringify(v):v))).rows;return {data:rows,error:null};}let sql=patch?'UPDATE '+ident(table)+' SET '+Object.entries(patch).map(([k,v])=>{values.push(v);return ident(k)+'=$'+values.length;}).join(','):'SELECT * FROM '+ident(table);
  if(filters.length)sql+=' WHERE '+filters.map(([k,v,op])=>{if(op==='IS')return ident(k)+' IS NULL';values.push(v);return op==='ANY'?ident(k)+'=ANY($'+values.length+')':ident(k)+'=$'+values.length;}).join(' AND ');
  if(patch)sql+=' RETURNING *';const rows=(await pool.query(sql,values)).rows;
  if(selection.includes('torneo:torneos'))for(const row of rows)row.torneo=(await pool.query('SELECT * FROM torneos WHERE id=$1',[row.torneo_id])).rows[0];
@@ -126,7 +126,22 @@ await pool.query("SELECT guardar_plan_nations(90016,$1::uuid,'programacion',$2,$
 for(const [name,type] of Object.entries({torneo_nombre:'text',equipo_a_nombre:'text',equipo_b_nombre:'text',saque_actual:'text',color_a:'text',color_b:'text',control_token_hash:'text',control_token_created_at:'timestamptz',control_token_revoked_at:'timestamptz',updated_at:'timestamptz',...Object.fromEntries(['a','b'].flatMap(side=>[1,2,3,4].map(n=>['jersey_'+side+n,'int'])))}))await pool.query('ALTER TABLE scoreboard_partidos ADD COLUMN IF NOT EXISTS '+ident(name)+' '+type);
 await pool.query("CREATE UNIQUE INDEX qa_one_active_marker ON scoreboard_partidos(partido_torneo_id) WHERE partido_torneo_id IS NOT NULL AND lower(trim(coalesce(estado,''))) NOT IN ('terminado','finalizado')");
 await requeue();failNextInsert=true;const failedInsert=await recoverOneGamesFinalization({pool,db});assert.equal(failedInsert.status,'pending');assert.equal((await pool.query('SELECT count(*)::int n FROM scoreboard_partidos WHERE partido_torneo_id=$1',[dest.id])).rows[0].n,0);
-await requeue();const completed=await recoverOneGamesFinalization({pool,db});assert.equal(completed.status,'completed',JSON.stringify(completed));
+// Competing workers both pass destination lookup before either inserts.
+await requeue();let inserts=0,insertOne,insertTwo,releaseInserts;
+const oneInsert=new Promise(r=>insertOne=r),twoInserts=new Promise(r=>insertTwo=r),insertBarrier=new Promise(r=>releaseInserts=r);
+onInsert=async()=>{inserts++;if(inserts===1)insertOne();if(inserts===2)insertTwo();await insertBarrier;};
+let creatorOld,creatorNew;
+try{
+ creatorOld=recoverOneGamesFinalization({pool,db});await Promise.race([oneInsert,new Promise((_,r)=>setTimeout(()=>r(Error('first insert timeout')),3000))]);
+ await pool.query("UPDATE nations_marker_private.games_finalization_intents SET lease_until=clock_timestamp()-interval '1 second' WHERE scoreboard_id=$1",[sb.id]);
+ creatorNew=recoverOneGamesFinalization({pool,db});await Promise.race([twoInserts,new Promise((_,r)=>setTimeout(()=>r(Error('second insert timeout')),3000))]);
+ releaseInserts();const [oldResult,newResult]=await Promise.all([creatorOld,creatorNew]);assert.equal(oldResult.status,'lease_lost');assert.equal(newResult.status,'completed',JSON.stringify(newResult));
+ assert.equal((await pool.query('SELECT count(*)::int n FROM scoreboard_partidos WHERE partido_torneo_id=$1',[dest.id])).rows[0].n,1);
+ console.log('PASS simultaneous destination inserts after lease loss: unique index and 23505 recovery retain one marker');
+}finally{onInsert=null;releaseInserts();await Promise.allSettled([creatorOld,creatorNew].filter(Boolean));}
+const destinationToken=(await pool.query('SELECT control_token_hash FROM scoreboard_partidos WHERE partido_torneo_id=$1',[dest.id])).rows[0].control_token_hash;
+assert.ok(destinationToken);
+
 await requeue();assert.equal((await recoverOneGamesFinalization({pool,db})).status,'completed');
 assert.equal((await pool.query('SELECT count(*)::int n FROM scoreboard_partidos WHERE partido_torneo_id=$1',[dest.id])).rows[0].n,1);
 if(combined){
@@ -137,5 +152,6 @@ if(combined){
  assert.equal((await pool.query("SELECT games_ledger->>'total' n FROM nations_marker_private.nations_marker_match WHERE match_id=$1",[sb.id])).rows[0].n,'12');
  console.log('PASS combined games guards, ledger invariant, occupancy triggers and finalization lock wrapper remain enforced');
 }
+assert.equal((await pool.query('SELECT control_token_hash FROM scoreboard_partidos WHERE partido_torneo_id=$1',[dest.id])).rows[0].control_token_hash,destinationToken);
 console.log('PASS real lineup RPC + schedule RPC release pending recovery after failed insertion, create one destination scoreboard, and replay without duplicate');
 }finally{await pool.end();}
