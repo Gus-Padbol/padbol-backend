@@ -15,3 +15,33 @@ test('profile-request mantiene el límite existente de 10 por minuto por IP',asy
  assert.equal((await f.call('POST',path,{request_id:'req-10'})).statusCode,429);
  assert.equal(calls.length,10);
 });
+
+test('selector y reporte exigen cuenta verificada y no exponen datos de cuenta', async () => {
+  const routes = new Map();
+  const seen = [];
+  const selectorDep = {
+    async list(slug, actor) { seen.push({kind: 'list', slug, actor}); return {ok: true, participants: [{selectionId: 'a'.repeat(32), name: 'Adult Player', country: 'IT'}]}; },
+    async report(slug, actor, selectionId) { seen.push({kind: 'report', slug, actor, selectionId}); return {ok: true, reported: true}; },
+  };
+  registerNationsActivationRoutes({get: (p, f) => routes.set(`GET ${p}`, f), post: (p, f) => routes.set(`POST ${p}`, f)}, {
+    service: new Proxy({}, {get: () => async () => ({ok: true})}),
+    selectorDep,
+    authUserFromBearer: async (req) => String(req.headers?.authorization || '') === 'Bearer verified'
+      ? {id: 'verified', email_confirmed_at: 'yes'} : null,
+    logger: {error() {}},
+  });
+  const call = async (route, body = {}, token = 'verified') => {
+    const res = {statusCode: 200, setHeader() {}, status(n) { this.statusCode = n; return this; }, json(v) { this.body = v; return this; }};
+    await routes.get(route)({params: {slug: 'nations-cup-napoli-2026'}, body, headers: token ? {authorization: `Bearer ${token}`} : {}, ip: 'fixture'}, res);
+    return res;
+  };
+  const list = await call('GET /api/nations-activation/events/:slug/selector');
+  assert.equal(list.statusCode, 200);
+  assert.deepEqual(list.body.participants, [{selectionId: 'a'.repeat(32), name: 'Adult Player', country: 'IT'}]);
+  assert.equal(JSON.stringify(list.body).includes('email'), false);
+  assert.equal((await call('GET /api/nations-activation/events/:slug/selector', {}, '')).statusCode, 200);
+  const report = await call('POST /api/nations-activation/events/:slug/selector/report', {selection_id: 'a'.repeat(32)});
+  assert.equal(report.statusCode, 200);
+  assert.deepEqual(report.body, {ok: true, reported: true});
+  assert.equal(seen.length, 3);
+});
