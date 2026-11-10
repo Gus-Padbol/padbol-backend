@@ -1,3 +1,5 @@
+import {registerNationsMarkerDurableRoutes} from './lib/torneos/nationsMarkerDurableRuntime.js';
+import {recoverOneGamesFinalization,startGamesFinalizationRecovery} from './lib/torneos/nationsGamesFinalizationRecovery.js';
 import { mountAdminHelpRoutes, readAdminHelpRole } from './routes/adminHelp.js';
 import { randomUUID } from 'node:crypto';
 import { readAuthenticatedPlayerProfile, updateAuthenticatedPlayerProfile } from './lib/authenticatedPlayerProfile.js';
@@ -1311,8 +1313,19 @@ mountLicenseRequestRoutes(app, {
   crmService,
   leadAnalyzer: crmLeadAnalyzer,
 });
+// Candidate is OFF until schema, recovery and end-to-end gates are verified.
+const nationsGamesEnabled = process.env.NATIONS_GAMES_ENABLED === 'true';
+if (nationsGamesEnabled && !pgPool) throw new Error('NATIONS_GAMES_REQUIRES_POSTGRES');
+registerNationsMarkerDurableRoutes(app,{pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser,enabled:nationsGamesEnabled});
+const stopNationsGamesRecovery = startGamesFinalizationRecovery({pool:pgPool,db:supabaseAdmin,enabled:nationsGamesEnabled,onResult:result=>{
+  if(['blocked','pending'].includes(result.status))console.warn('[nations-games-recovery]',{status:result.status,reason:result.reason,scoreboardId:result.scoreboardId});
+}});
+httpServer.once('close',stopNationsGamesRecovery);
 mountScoreboardRoutes(app, {
   supabaseAdmin,
+  nationsGamesEnabled,
+  nationsGamesPool: pgPool,
+  recoverNationsFinalization: scoreboardId=>recoverOneGamesFinalization({pool:pgPool,db:supabaseAdmin,scoreboardId}),
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,

@@ -28,7 +28,7 @@ BEGIN
  IF p_request_id IS NULL OR jsonb_typeof(p_command) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'GAME_COMMAND_INVALID'; END IF;
  kind:=p_command->>'kind';
  IF jsonb_typeof(p_command->'actorId') IS DISTINCT FROM 'string' OR length(trim(p_command->>'actorId'))=0 THEN RAISE EXCEPTION 'GAME_ACTOR_REQUIRED'; END IF;
- IF kind IS NULL OR kind NOT IN('point','undo','reset') THEN RAISE EXCEPTION 'GAME_COMMAND_INVALID'; END IF;
+ IF kind IS NULL OR kind NOT IN('point','undo','reset','tiebreak') THEN RAISE EXCEPTION 'GAME_COMMAND_INVALID'; END IF;
  -- Match existing occupancy wrapper ordering; never acquire this after row locks.
  PERFORM pg_advisory_xact_lock(hashtextextended('manual-booking-cross-occupancy-v1',0));
  SELECT * INTO sb FROM public.scoreboard_partidos WHERE id=p_id FOR UPDATE;
@@ -83,7 +83,7 @@ BEGIN
  DECLARE previous_context text:=current_setting('padbol.nations_games_command',true);
  BEGIN
    PERFORM set_config('padbol.nations_games_command',jsonb_build_object('scoreboardId',p_id,'requestId',p_request_id,'kind',kind)::text,true);
-   result:=public.scoreboard_commit_mutation(p_id,p_expected,p_next,CASE WHEN kind='reset' THEN 'update' ELSE kind END,p_history,p_history_id);
+   result:=public.scoreboard_commit_mutation(p_id,p_expected,p_next,CASE WHEN kind IN('reset','tiebreak') THEN 'update' ELSE kind END,p_history,p_history_id);
    PERFORM set_config('padbol.nations_games_command',coalesce(previous_context,''),true);
  EXCEPTION WHEN OTHERS THEN
    PERFORM set_config('padbol.nations_games_command',coalesce(previous_context,''),true);

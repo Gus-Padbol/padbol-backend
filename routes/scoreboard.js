@@ -441,6 +441,7 @@ export function mountScoreboardRoutes(app, {
   legacySuperAdminEmails = [],
   io = null,
   nationsGamesPool = null,
+  recoverNationsFinalization = null,
   nationsGamesEnabled = false,
   scoreboardSuspensionCandidateEnabled = false,
   scoreboardSuspensionRecoveryEnabled = false,
@@ -480,20 +481,20 @@ export function mountScoreboardRoutes(app, {
     const tracked=await nationsGamesPool.query('SELECT match_id FROM nations_marker_private.nations_marker_match WHERE match_id=$1',[partido.id]);
     if(!tracked.rows.length){if(context?.epoch!==undefined)throw Object.assign(new Error('GAME_TRACKING_MISSING'),{code:'GAME_TRACKING_MISSING',status:409});return null;}
     const out=await runGamesMutation({pool:nationsGamesPool,scoreboardId:partido.id,...context,kind,team,prepare:async locked=>{
-      if(kind==='reset')assertScoreboardMutable(locked);else assertScoreboardScoringActive(locked);
+      if(['reset','tiebreak'].includes(kind))assertScoreboardMutable(locked);else assertScoreboardScoringActive(locked);
       await assertScoreboardScoringSupported(supabaseAdmin,locked);
       if(kind==='point'){const history=buildHistorialPuntoSnapshot(locked,team);registrarPunto(locked,team);return {next:locked,history};}
       if(kind==='reset'){resetPartidoCompleto(locked);return {next:locked};}
+      if(kind==='tiebreak'){iniciarTiebreak(locked);return {next:locked};}
       const entry=await fetchUltimoHistorialPunto(supabaseAdmin,locked.id);
       if(!entry)throw Object.assign(new Error('No hay puntos para deshacer'),{status:400});
       assertLatestHistoryMatchesSnapshot(locked,entry);applyHistorialPuntoSnapshot(locked,entry);locked.historial_puntos=[];
       return {next:locked,historyId:entry.id};
     }});
     const saved=Object.fromEntries(SCOREBOARD_PARTIDO_SELECT.split(', ').filter(key=>Object.hasOwn(out.row,key)).map(key=>[key,out.row[key]]));
-    if(!out.deduplicated&&kind==='point'){
-      await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin,saved,partido.estado);
-      await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin,saved,partido.estado);
-    }
+    // The final-point transaction owns a durable intent. Reconcile on both new
+    // response and replay; periodic runtime recovery also covers no-client-retry.
+    if(kind==='point'&&recoverNationsFinalization){try{await recoverNationsFinalization(saved.id);}catch{/* durable pending intent remains */}}
     await emitScoreboardUpdate(io,saved.id,saved,supabaseAdmin);
     return {...await enrichPartidoWithVenue(supabaseAdmin,saved),gamesEpoch:out.gamesEpoch,trackingStatus:out.trackingStatus};
   }
@@ -561,7 +562,8 @@ export function mountScoreboardRoutes(app, {
     return saveAndEmit(partido, expectedUpdatedAt);
   }
 
-  async function handleTiebreak(partido) {
+  async function handleTiebreak(partido, context) {
+    const tracked=await tryGamesMutation(partido,'tiebreak',context);if(tracked)return tracked;
     assertScoreboardMutable(partido);
     await assertScoreboardScoringSupported(supabaseAdmin, partido);
     const expectedUpdatedAt = partido.updated_at;
@@ -742,7 +744,7 @@ export function mountScoreboardRoutes(app, {
     async (req, res) => {
       try {
         const partido = await resolveScoreboardByControlToken(supabaseAdmin, req.params.token);
-        const enriched = await handleTiebreak(partido);
+        const enriched = await handleTiebreak(partido, commandContext(req,null));
         return res.json(enriched);
       } catch (err) {
         console.error(
@@ -1251,7 +1253,7 @@ export function mountScoreboardRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      const enriched = await handleTiebreak(partido);
+      const enriched = await handleTiebreak(partido, commandContext(req,user,role));
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
