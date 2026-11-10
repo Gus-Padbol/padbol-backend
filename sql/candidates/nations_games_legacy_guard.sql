@@ -15,6 +15,16 @@ BEGIN
  ELSE
    board_id:=NEW.id;
    old_row:=to_jsonb(OLD); new_row:=to_jsonb(NEW);
+   -- Tracking pins sporting identity. Even an internal scoring command must
+   -- not detach or move the scoreboard while its committed work is recovered.
+   IF (OLD.torneo_id IS DISTINCT FROM NEW.torneo_id
+       OR OLD.partido_torneo_id IS DISTINCT FROM NEW.partido_torneo_id
+       OR OLD.sede_id IS DISTINCT FROM NEW.sede_id)
+      AND (EXISTS(SELECT 1 FROM nations_marker_private.nations_marker_match WHERE match_id=OLD.id::text)
+           OR EXISTS(SELECT 1 FROM nations_marker_private.games_finalization_intents
+                     WHERE scoreboard_id=OLD.id AND status='pending')) THEN
+     RAISE EXCEPTION 'GAME_TRACKING_SCOPE_FROZEN' USING ERRCODE='55000';
+   END IF;
    SELECT EXISTS(SELECT 1 FROM unnest(ARRAY['score_a','score_b','games_a','games_b',
       'sets_a','sets_b','historial_sets','historial_puntos','es_tiebreak','ultimo_punto']) k
       WHERE old_row->k IS DISTINCT FROM new_row->k) INTO needs_command;
@@ -31,7 +41,7 @@ BEGIN
    context:=nullif(current_setting('padbol.nations_games_command',true),'')::jsonb;
    IF (context->>'scoreboardId'=board_id::text
        AND nullif(context->>'requestId','') IS NOT NULL
-       AND context->>'kind' IN('point','undo','reset')
+       AND context->>'kind' IN('point','undo','reset','tiebreak')
        AND (TG_TABLE_NAME<>'scoreboard_historial_puntos'
             OR TG_OP='INSERT' AND context->>'kind'='point'
             OR TG_OP='DELETE' AND context->>'kind'='undo')) IS DISTINCT FROM true THEN

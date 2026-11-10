@@ -53,6 +53,7 @@ try {
  const oldHistory=(await db.query('SELECT id FROM scoreboard_historial_puntos')).rows[0].id;
  await legacy({score_a:0},'undo',null,oldHistory);
  await legacy(reset);
+ await db.query('UPDATE scoreboard_partidos SET torneo_id=9,partido_torneo_id=77,sede_id=3 WHERE id=$1',[id]);
  console.log('PASS untracked legacy point, undo and reset remain available');
 
  // Request A observed no tracking. Request B then performs START's lock/insert
@@ -64,6 +65,19 @@ try {
  await db.query("INSERT INTO nations_marker_private.nations_marker_match(match_id,revision,states,receipts,updated_at) VALUES($1,0,'{}','{}',now())",[id]);
  await legacy({estado:'en_curso',cronometro_inicio:'2026-11-10T00:00:00Z'});
  await db.exec('COMMIT');
+ for(const field of ['torneo_id','partido_torneo_id','sede_id']){
+  for(const value of [null,999])await assert.rejects(
+   db.query(`UPDATE scoreboard_partidos SET ${field}=$2 WHERE id=$1`,[id,value]),/GAME_TRACKING_SCOPE_FROZEN/);
+ }
+ await db.query('UPDATE scoreboard_partidos SET torneo_id=9,partido_torneo_id=77,sede_id=3 WHERE id=$1',[id]);
+ // Scope guard runs before the command context, and cannot be bypassed by it.
+ await db.exec('BEGIN');
+ await db.query("SELECT set_config('padbol.nations_games_command',$1,true)",[JSON.stringify({scoreboardId:id,requestId:'internal',kind:'reset'})]);
+ await db.exec('SAVEPOINT changed_scope');
+ await assert.rejects(db.query('UPDATE scoreboard_partidos SET torneo_id=NULL WHERE id=$1',[id]),/GAME_TRACKING_SCOPE_FROZEN/);
+ await db.exec('ROLLBACK TO SAVEPOINT changed_scope');
+ await db.exec('ROLLBACK');
+ console.log('PASS tracked scope rejects reassignment/null and command context bypass; identical links remain valid');
  await assert.rejects(legacy({score_a:15},'point',history()),/GAME_COMMAND_REQUIRED/);
  await assert.rejects(legacy(reset),/GAME_COMMAND_REQUIRED/);
  assert.equal((await row()).score_a,0);
@@ -87,6 +101,18 @@ try {
  assert.equal((await row()).score_a,15);
  assert.ok(!await context());
  const hid=(await db.query('SELECT id FROM scoreboard_historial_puntos')).rows[0].id;
+ await db.exec('BEGIN');
+ await db.query("SELECT set_config('padbol.nations_games_command',$1,true)",[JSON.stringify({scoreboardId:id,requestId:'tiebreak-test',kind:'tiebreak'})]);
+ await db.query('UPDATE scoreboard_partidos SET es_tiebreak=true,score_a=0,score_b=0 WHERE id=$1',[id]);
+ assert.equal((await row()).es_tiebreak,true);
+ await db.exec('SAVEPOINT tiebreak_no_history');
+ await assert.rejects(db.query('INSERT INTO scoreboard_historial_puntos(partido_id) VALUES($1)',[id]),/GAME_COMMAND_REQUIRED/);
+ await db.exec('ROLLBACK TO SAVEPOINT tiebreak_no_history');
+ await assert.rejects(db.query('DELETE FROM scoreboard_historial_puntos WHERE id=$1',[hid]),/GAME_COMMAND_REQUIRED/);
+ await db.exec('ROLLBACK TO SAVEPOINT tiebreak_no_history');
+ await db.exec('ROLLBACK');
+ assert.equal((await row()).score_a,15);
+ console.log('PASS scoped tiebreak context permits scoreboard update but rejects history INSERT/DELETE');
  await assert.rejects(legacy({score_a:0},'undo',null,hid),/GAME_COMMAND_REQUIRED/);
  assert.equal((await db.query('SELECT count(*)::int n FROM scoreboard_historial_puntos')).rows[0].n,1);
  await command('undo',{score_a:0},null,hid);
@@ -128,4 +154,21 @@ try {
  assert.ok(!await context());
  assert.equal((await db.query("SELECT has_function_privilege('authenticated','nations_marker_private.guard_games_legacy_mutation_candidate()','execute') ok")).rows[0].ok,false);
  console.log('PASS real Nations reset succeeds atomically and guard has no public execute grant');
+
+ // A pending durable intent pins identity even if its aggregate is absent.
+ const orphan='00000000-0000-4000-8000-000000000002';
+ await db.query('INSERT INTO scoreboard_partidos(id,torneo_id,partido_torneo_id,sede_id) VALUES($1,9,78,3)',[orphan]);
+ await db.query(`INSERT INTO nations_marker_private.games_finalization_intents
+  (scoreboard_id,epoch,request_id,partido_torneo_id,final_snapshot) VALUES($1,0,gen_random_uuid(),78,'{}')`,[orphan]);
+ for(const field of ['torneo_id','partido_torneo_id','sede_id']){
+  await assert.rejects(db.query(`UPDATE scoreboard_partidos SET ${field}=NULL WHERE id=$1`,[orphan]),/GAME_TRACKING_SCOPE_FROZEN/);
+ }
+ await db.query("UPDATE scoreboard_partidos SET control_token_hash='new',sync_torneo_status='synced' WHERE id=$1",[orphan]);
+ await db.query("UPDATE nations_marker_private.games_finalization_intents SET status='completed' WHERE scoreboard_id=$1",[orphan]);
+ await db.query('UPDATE scoreboard_partidos SET torneo_id=NULL,partido_torneo_id=NULL,sede_id=NULL WHERE id=$1',[orphan]);
+ await db.query("INSERT INTO nations_marker_private.nations_marker_match(match_id,revision,states,receipts) VALUES($1,0,'{}','{}')",[orphan]);
+ for(const field of ['torneo_id','partido_torneo_id','sede_id']){
+  await assert.rejects(db.query(`UPDATE scoreboard_partidos SET ${field}=999 WHERE id=$1`,[orphan]),/GAME_TRACKING_SCOPE_FROZEN/);
+ }
+ console.log('PASS pending intent alone pins scope; tracked null-to-value changes reject; metadata and untracked completed intent remain unchanged');
 } finally {await db.close();}
