@@ -2359,30 +2359,13 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
 // POST /api/torneos/:id/generar-scoreboards
 // Bulk preparation is opt-in; default keeps the legacy Supabase path.
 const SCOREBOARD_BULK_PREPARATION_ENABLED = String(process.env.NATIONS_BULK_PREPARATION_ENABLED || '').trim().toLowerCase() === 'true';
-
-app.post('/api/torneos/:id/generar-scoreboards', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const auth = await requireTorneoAdminByTorneoId(req, res, id);
-    if (!auth) return;
-
-    let result;
-    if (SCOREBOARD_BULK_PREPARATION_ENABLED !== true) {
-      result = await generarScoreboardsForTorneo(supabaseAdmin, id, req.body ?? {});
-    } else {
-      if (!pgPool?.connect) {
-        return res.status(503).json({ error: 'Preparación temporalmente no disponible' });
-      }
-      result = await generarScoreboardsForTorneo(pgPool, id, req.body ?? {}, auth);
-    }
-    console.log(
-      `✅ Scoreboards torneo ${id}: created=${result.created}, skipped=${result.skipped}, total=${result.items.length}`,
-    );
-    res.json(result);
-  } catch (err) {
-    console.error('❌ Error generar-scoreboards:', err.message);
-    sendHttpError(res, err);
-  }
+registerNationsScoreboardGenerationRoute(app, {
+  pool: pgPool,
+  supabaseAdmin,
+  enabled: SCOREBOARD_BULK_PREPARATION_ENABLED,
+  requireTorneoAdmin: requireTorneoAdminByTorneoId,
+  generate: generarScoreboardsForTorneo,
+  sendError: sendHttpError,
 });
 
 // POST /api/torneos/:id/generar-knockout-desde-grupos
