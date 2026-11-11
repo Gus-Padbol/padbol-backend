@@ -251,8 +251,12 @@ export async function generarScoreboardsForTorneoBulk(pool, torneoId, body = {},
         if (!equipoA || !equipoB || Number(equipoA.id) === Number(equipoB.id)) skipReason = 'missing_teams';
         else if (!isPartidoEstadoJugable(partido.estado)) skipReason = 'estado_no_jugable';
         else if (String(torneo.modalidad_plantel).toLowerCase() === 'selecciones') {
-          try { equipoA = declaredRosterTeam(equipoA); equipoB = declaredRosterTeam(equipoB); }
-          catch (error) { if (error.status && error.status < 500) skipReason = error.code || 'national_roster_incomplete'; else throw error; }
+          try {
+            equipoA = declaredRosterTeam(equipoA); equipoB = declaredRosterTeam(equipoB);
+            const idOf = p => String(p?.user_id || p?.id || p?.participante_id || '').toLowerCase();
+            const idsA = new Set(equipoA.jugadores.map(idOf).filter(Boolean));
+            if (equipoB.jugadores.map(idOf).filter(Boolean).some(id => idsA.has(id))) skipReason = 'cross_team_player';
+          } catch (error) { if (error.status && error.status < 500) skipReason = error.code || 'national_roster_incomplete'; else throw error; }
         }
         if (skipReason) {
           const visibleScoreboard = skipReason === 'missing_teams' ? null : scoreboard;
