@@ -216,9 +216,8 @@ export async function generarScoreboardsForTorneoBulk(pool, torneoId, body = {},
     // Fail closed if deployment has not installed the preparation/activation
     // contract. In particular, the old dobles guard allowed Start without court.
     const readiness = (await client.query(`SELECT
-      position('cronometro_inicio' in pg_get_functiondef(to_regprocedure('public.proteger_cancha_marcador_activo()'))) > 0
-      AND position('cancha' in pg_get_functiondef(to_regprocedure('public.proteger_cancha_marcador_activo()'))) > 0
-      AND position('cronometro_inicio' in pg_get_functiondef(to_regprocedure('public.proteger_marcador_nations()'))) > 0
+      md5(pg_get_functiondef(to_regprocedure('public.proteger_cancha_marcador_activo()'))) = 'a7876e19d03e809147ae81128c9217ed'
+      AND md5(pg_get_functiondef(to_regprocedure('public.proteger_marcador_nations()'))) = '339cc0e97b9154d8fc206280178f4c5a'
       AND EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.scoreboard_partidos'::regclass AND tgname='proteger_cancha_marcador_activo' AND NOT tgisinternal AND tgenabled='O')
       AND EXISTS(SELECT 1 FROM pg_index WHERE indexrelid=to_regclass('public.idx_scoreboard_bulk_active_match_v2') AND indisvalid AND indisunique)
       AS ready`)).rows[0];

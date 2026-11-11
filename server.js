@@ -1952,22 +1952,12 @@ async function requireTorneoAdminForSede(req, res, torneoSedeId) {
  * 2) torneo inexistente → 404;
  * 3) scope contra la sede persistida del torneo (403).
  */
-async function requireTorneoAdminByTorneoId(req, res, torneoId) {
-  const auth = await requireAdminUser(req, res, LEGACY_TORNEO_ADMIN_DEPS);
-  if (!auth) return null;
-
-  const { exists, sedeId } = await fetchTorneoScopeById(torneoId);
-  if (!exists) {
-    res.status(404).json({ error: 'Torneo no encontrado' });
-    return null;
-  }
-
-  const { allowed, reason } = resolveTorneoAdminAccess(auth, sedeId);
-  if (allowed) return auth;
-
-  sendTorneoAdminForbidden(res, auth, reason);
-  return null;
-}
+const requireTorneoAdminByTorneoId = createRequireTorneoAdminByTorneoId({
+  adminDeps: LEGACY_TORNEO_ADMIN_DEPS,
+  fetchTorneoScopeById,
+  resolveAccess: resolveTorneoAdminAccess,
+  sendForbidden: sendTorneoAdminForbidden,
+});
 
 mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountNationsCountryRankingRoutes(app, { db: supabaseAdmin });
