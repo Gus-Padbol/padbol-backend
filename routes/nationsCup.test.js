@@ -19,7 +19,7 @@ test('CSV exports saved internal ledger only with official FIPA column blank',as
 test('private administration GET cannot bypass public reveal for any authenticated unrelated user',async()=>{const f=fixture({role:{rol:'jugador'}});assert.equal((await f.call('get',base)).statusCode,403);});
 
 function completedEvent(thirdPlace){
- const teams=Array.from({length:15},(_,i)=>({id:i+1,nombre:`QA${i+1}`,inscripcion_estado:'confirmado',jugadores:[{},{},{},{}]})),draw=validateDraw([[1,2,3,4,5],[6,7,8,9,10],[11,12,13,14,15]],teams,1,7);
+ const teams=Array.from({length:15},(_,i)=>({id:i+1,nombre:`QA${i+1}`,inscripcion_estado:'confirmado',jugadores:Array.from({length:4},(_,j)=>({user_id:`00000000-0000-4000-8000-${String(i*4+j).padStart(12,'0')}`}))})),draw=validateDraw([[1,2,3,4,5],[6,7,8,9,10],[11,12,13,14,15]],teams,1,7);
  const groups=draw.matches.map((m,i)=>({...m,id:i+1,estado:'finalizado',ganador_equipo_id:m.equipo_a_id,resultado:{goles_a:2,goles_b:0,historial_sets:[{a:6,b:m.grupo==='B'&&m.equipo_b_id===8?4:m.grupo==='C'&&m.equipo_b_id===13?1:0},{a:6,b:m.grupo==='B'&&m.equipo_b_id===8?4:m.grupo==='C'&&m.equipo_b_id===13?1:0}]}}));
  let classification=buildNationsClassification({groups:draw.groups,teams,matches:groups}),resolutions=[];
  while(classification.ties.length){resolutions.push(...classification.ties.map(t=>({...t,ordered_team_ids:t.team_ids,reason:'Explicit QA sporting tie order'})));classification=buildNationsClassification({groups:draw.groups,teams,matches:groups,resolutions});}
