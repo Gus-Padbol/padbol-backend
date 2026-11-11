@@ -5,7 +5,7 @@ BEGIN;
 ALTER TABLE public.nations_profile_requests
   ADD COLUMN IF NOT EXISTS selected_participante_id uuid NULL REFERENCES public.torneo_participantes(id),
   ADD COLUMN IF NOT EXISTS selection_status text NOT NULL DEFAULT 'declarada'
-    CHECK (selection_status IN ('sin_seleccion','declarada','en_conflicto','reportada'));
+    CHECK (selection_status IN ('sin_seleccion','declarada','verificacion_pendiente','en_conflicto','reportada'));
 
 CREATE INDEX IF NOT EXISTS nations_profile_requests_selected_idx
   ON public.nations_profile_requests(torneo_id, selected_participante_id)
