@@ -1,3 +1,4 @@
+-- CANDIDATE — NO AUTOAPLICABLE. Requiere revisión/ventana y precheck del esquema real.
 -- Selección declarativa de un participante adulto de Nations, sin vincular cuenta.
 -- El cliente recibe un id opaco; el id canónico queda sólo en backend/admin.
 BEGIN;
