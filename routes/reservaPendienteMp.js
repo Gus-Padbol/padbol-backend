@@ -222,6 +222,26 @@ export async function persistMercadoPagoPreferencePg(pgPool, reservaId, preferen
  * Inserta reserva en estado pendiente antes del checkout MP.
  * Si ya viene reserva_id (p. ej. prereserva de partido), la reutiliza.
  */
+// Una sede de torneo no admite reservas por hora; se valida como invariante del
+// servicio, no solo en la ruta POST /api/reservas.
+async function assertSedeReservablePg(pgPool, {sede_id, sede}) {
+  const id = Number(sede_id);
+  let tipo = null;
+  if (Number.isSafeInteger(id) && id > 0) {
+    const { rows } = await pgPool.query('SELECT tipo_sede FROM sedes WHERE id = $1 LIMIT 1', [id]);
+    tipo = rows[0]?.tipo_sede ?? null;
+  } else if (sede) {
+    const { rows } = await pgPool.query('SELECT tipo_sede FROM sedes WHERE nombre = $1 LIMIT 1', [String(sede)]);
+    tipo = rows[0]?.tipo_sede ?? null;
+  }
+  if (String(tipo || '').trim().toLowerCase() === 'torneo') {
+    const err = new Error('Esta sede es de torneo y no admite reservas por hora.');
+    err.status = 409;
+    err.code = 'SEDE_NO_RESERVABLE';
+    throw err;
+  }
+}
+
 export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options = {}) {
   if (!pgPool) {
     const err = new Error('DATABASE_URL no configurada — pgPool no disponible');
@@ -335,6 +355,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
   // Reusing/paying a manual or historical reservation above never grants provenance.
   const creationOrigin = authUserId && quote && sedeId ? 'checkout_jugador_v1' : null;
   let reservaId;
+  await assertSedeReservablePg(pgPool, input);
   try {
     const insertWithPricing = paymentProvider
       ? `INSERT INTO reservas (

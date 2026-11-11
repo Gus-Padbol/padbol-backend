@@ -1,0 +1,10 @@
+begin;
+drop table if exists public.crm_prospect_events;
+drop table if exists public.crm_prospect_messages;
+drop table if exists public.crm_prospect_campaign_steps;
+drop table if exists public.crm_prospect_campaigns;
+drop table if exists public.crm_prospect_suppressions;
+drop table if exists public.crm_prospect_runs;
+drop table if exists public.crm_prospects;
+drop table if exists public.crm_prospect_settings;
+commit;

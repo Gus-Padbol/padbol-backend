@@ -1,4 +1,5 @@
-import { requireAdminUser, requireSuperAdminUser } from '../lib/authAccess.js';
+import multer from 'multer';
+import { requireAdminUser, requireContentEditorUser, requireSuperAdminUser } from '../lib/authAccess.js';
 
 const ACTIVE_RESERVATION_STATES = new Set(['confirmada', 'completada', 'pagada', 'finalizada']);
 
@@ -195,9 +196,73 @@ export function mountAdminQaPanelRoutes(app, {
     }
   });
 
+
+
+// El MIME que declara el cliente se puede falsificar: se valida la firma real del archivo.
+function firmaImagen(buffer) {
+  if (!buffer || buffer.length < 12) return null;
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png';
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  if (buffer.slice(0, 4).toString('ascii') === 'RIFF' && buffer.slice(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  if (buffer.slice(0, 4).toString('ascii') === 'GIF8') return 'image/gif';
+  return null;
+}
+
+
+// Claves de ruta: sin separadores ni traversal, largo acotado. No se valida contra
+// catálogo porque el endpoint no tiene uno.
+const CLAVE_MAX = 64;
+function claveValida(v) {
+  return typeof v === 'string' && v.length > 0 && v.length <= CLAVE_MAX
+    && !v.includes('/') && !v.includes('\\') && !v.includes('..')
+    && !/^[.]/.test(v) && !/[\s]/.test(v);
+}
+
+const hubFotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1 } });
+
+app.post('/api/hub-deporte-config/foto', hubFotoUpload.single('foto'), async (req, res) => {
+  try {
+    let auth;
+    try { auth = await requireContentEditorUser(req, res, authDeps); }
+    catch { return res.status(401).json({ error: 'No autorizado' }); }
+    if (!auth) return;
+    const deporte = String(req.body?.deporte || req.query?.deporte || '').trim().toLowerCase();
+    const cardKey = String(req.body?.card_key || req.query?.card_key || '').trim();
+    if (!deporte || !cardKey) return res.status(400).json({ error: 'Deporte y tarjeta son obligatorios' });
+    if (!claveValida(deporte) || !claveValida(cardKey)) return res.status(400).json({ error: 'Deporte o tarjeta con formato inválido' });
+    const file = req.file;
+    const real = firmaImagen(file?.buffer);
+    if (!file || !real || !/^image\//i.test(String(file.mimetype || ''))) return res.status(400).json({ error: 'El archivo no es una imagen válida' });
+    if (file.buffer.length > 2 * 1024 * 1024) return res.status(400).json({ error: 'La imagen supera 2 MB' });
+    const ext = (file.originalname.split('.').pop() || 'jpg').replace(/[^a-z0-9]/gi, '').toLowerCase();
+    const objectPath = `deporte/${deporte}/${cardKey}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { error: uploadError } = await supabaseAdmin.storage.from('hub-images').upload(objectPath, file.buffer, { contentType: real, upsert: false });
+    if (uploadError) throw uploadError;
+    const { data: urlData } = supabaseAdmin.storage.from('hub-images').getPublicUrl(objectPath);
+    if (!urlData?.publicUrl) throw new Error('No se obtuvo URL pública');
+    const { data, error } = await supabaseAdmin.from('hub_deporte_config')
+      .upsert({ deporte, card_key: cardKey, imagen_url: urlData.publicUrl }, { onConflict: 'deporte,card_key' })
+      .select('*').single();
+    if (error) { await supabaseAdmin.storage.from('hub-images').remove([objectPath]).catch(() => {}); throw error; }
+    return res.status(201).json(data);
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No se pudo guardar la foto del deporte' });
+  }
+});
+// Multer lanza antes del handler: sin esto un archivo grande corta la peticion
+// sin respuesta clara para el modal.
+app.use('/api/hub-deporte-config/foto', (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'La imagen supera 2 MB' : 'No se pudo leer la imagen' });
+  }
+  return next(err);
+});
+
+
   app.patch('/api/hub-deporte-config', async (req, res) => {
     try {
-      const auth = await requireAdminUser(req, res, authDeps);
+      // Contenido editorial global del Hub: editor_contenido o super_admin, no admin de club.
+      const auth = await requireContentEditorUser(req, res, authDeps);
       if (!auth) return;
       const deporte = String(req.body?.deporte || '').trim().toLowerCase();
       const cardKey = String(req.body?.card_key || '').trim();

@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import {randomUUID} from 'node:crypto';
 import {createContentMetaRouter} from './contentMetaResults.js';
+import {createContentAnalyticsRouter} from './contentAnalytics.js';
 const bucket='content-workspace-private';
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:50*1024*1024,files:1}});
 import {requireAuthenticatedUser,resolveAuthRoleForUser} from '../lib/authAccess.js';
@@ -37,6 +38,7 @@ export function createContentWorkspaceRouter(deps){
  const router=express.Router();
  router.use(async(req,res,next)=>{try{const user=await requireAuthenticatedUser(req,res,deps.getAuthenticatedUser);if(!user)return;const role=await resolveAuthRoleForUser(user,deps);let canApprove=role.rol==='super_admin';let coordinator=false;{const r=await deps.supabaseAdmin.rpc('content_workspace_coordinator_access',{p_actor:user.id});if(r.error)throw r.error;if(r.data!==true&&role.rol!=='editor_contenido'&&role.rol!=='super_admin')return res.status(403).json({error:'No tenés permiso para gestionar contenido'});coordinator=r.data===true;canApprove=canApprove||coordinator;}let canManageCoordinators=false;if(role.rol==='super_admin'&&user.id==='8beebdbe-e1d7-4607-9bb0-9a7d64701408'){const owner=await deps.supabaseAdmin.rpc('crm_commercial_owner',{p_actor:user.id,p_superadmin:true});if(owner.error)throw owner.error;canManageCoordinators=owner.data===true;}req.workspaceAuth={user,role,canApprove,canManageCoordinators,canDecidePromotion:canManageCoordinators||coordinator};next();}catch{res.status(503).json({error:'No se pudo comprobar el acceso'});}});
  router.use('/meta',createContentMetaRouter(deps));
+ router.use('/analytics',createContentAnalyticsRouter(deps));
  async function invoke(req,res,op){
   try{
    const a=req.workspaceAuth,create=op==='create';let patch={};

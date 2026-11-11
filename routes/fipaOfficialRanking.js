@@ -184,12 +184,15 @@ async function loadSource(fetchImpl) {
   }
 }
 
-export function mountFipaOfficialRankingRoutes(app, { fetchImpl = globalThis.fetch } = {}) {
+export const loadOfficialFipaSource = () => loadSource(globalThis.fetch);
+
+export function mountFipaOfficialRankingRoutes(app, { fetchImpl = globalThis.fetch, readLinks = async () => [] } = {}) {
   app.get('/api/fipa/rankings/oficial', async (req, res) => {
     try {
       const source = await loadSource(fetchImpl);
       const filtered = filterOfficialFipaRanking(source.players, req.query.continente);
       if (filtered === null) return res.status(400).json({ error: 'Continente de ranking inválido' });
+      const links = new Map((await readLinks()).map(row => [row.source_key,row.user_id]));
       return res.json({
         fuente: 'fipa_oficial',
         fuente_url: FIPA_OFFICIAL_RANKING_SOURCE_URL,
@@ -198,7 +201,7 @@ export function mountFipaOfficialRankingRoutes(app, { fetchImpl = globalThis.fet
         hash_fuente: source.hash,
         total_mundial: source.players.length,
         continente: req.query.continente ? normalizeFipaContinent(req.query.continente) : null,
-        rankings: filtered.map(toDto),
+        rankings: filtered.map(player => ({...toDto(player),user_id:links.get(player.source_key)||null,estado_vinculacion:links.has(player.source_key)?'vinculado':'no_reclamado',puede_reclamar:!links.has(player.source_key)})),
       });
     } catch (error) {
       console.error('❌ GET /api/fipa/rankings/oficial:', error.message);

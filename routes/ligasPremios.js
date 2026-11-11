@@ -1,3 +1,4 @@
+import { assertCanAdministerSede as assertSedeAdminScope } from '../lib/sedeAdministrationScope.js';
 function parseSedeId(raw) {
   const sid = parseInt(String(raw ?? '').trim(), 10);
   return Number.isFinite(sid) && sid > 0 ? sid : null;
@@ -49,8 +50,10 @@ async function resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperA
   const sedeIdRaw = row?.sede_id;
   const sedeIdNum = sedeIdRaw != null && sedeIdRaw !== '' ? Number(sedeIdRaw) : null;
   return {
-    rol: String(row?.role || '').trim().toLowerCase() || null,
+    rol: String(row?.role || row?.rol || '').trim().toLowerCase() || null,
     sede_id: Number.isFinite(sedeIdNum) ? sedeIdNum : null,
+    alcance: row?.alcance != null ? String(row.alcance).trim().toLowerCase() : null,
+    pais: row?.pais != null ? String(row.pais).trim() : null,
   };
 }
 
@@ -77,6 +80,16 @@ function resolveAdminSedeId(role, source = {}) {
       throw err;
     }
     return role.sede_id;
+  }
+
+  if (role.rol === 'admin_nacional') {
+    const sid = parseSedeId(source.sede_id ?? source.sedeId);
+    if (!sid) {
+      const err = new Error('sede_id requerido');
+      err.status = 400;
+      throw err;
+    }
+    return sid;
   }
 
   if (isSuperAdminRole(role)) {

@@ -1,0 +1,8 @@
+import test from 'node:test';import assert from 'node:assert/strict';import express from 'express';import {PGlite} from '@electric-sql/pglite';import {readFile} from 'node:fs/promises';import {createContentMetaRouter} from './contentMetaResults.js';
+test('monitor route rejects a forged coordinator capability with the persisted permission check',async()=>{
+ const db=new PGlite();let server;try{await db.exec(await readFile('sql/tests/contentMetaFixture.sql','utf8'));await db.exec(await readFile('sql/migrations/20261026110000_content_meta_results.sql','utf8'));await db.exec(await readFile('sql/migrations/20261028150000_content_meta_monitor.sql','utf8'));
+ const pool={async connect(){return {query:(...args)=>db.query(...args),release(){}}}};const app=express();app.use((q,s,n)=>{q.workspaceAuth={user:{id:q.headers['x-test-actor']},canDecidePromotion:true};n();});app.use('/meta',createContentMetaRouter({pgPool:pool,env:{}}));server=app.listen(0);await new Promise(resolve=>server.once('listening',resolve));const url=`http://127.0.0.1:${server.address().port}/meta/monitor`;
+ assert.equal((await fetch(url,{headers:{'x-test-actor':'cccccccc-cccc-4ccc-8ccc-cccccccccccc'}})).status,403);
+ const response=await fetch(url,{headers:{'x-test-actor':'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}});assert.equal(response.status,200);const body=await response.json();assert.equal(body.state,'disabled');assert.equal(body.latest,null);assert.deepEqual(body.alerts,[]);assert.equal('actor' in body,false);assert.equal('token' in body,false);
+ }finally{await new Promise(resolve=>server?server.close(resolve):resolve());await db.close();}
+});

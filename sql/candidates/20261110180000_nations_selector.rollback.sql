@@ -1,0 +1,5 @@
+-- Rollback de release NO destructivo.
+-- Las columnas/tabla nuevas son aditivas y pueden contener selecciones/reportes
+-- necesarios para conciliación. No ejecutar DROP en producción.
+-- Para retirar la feature: deshabilitar rutas/selector en el backend.
+-- Cualquier limpieza destructiva requiere backup, gate y aprobación específica.

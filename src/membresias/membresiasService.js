@@ -764,7 +764,7 @@ export function createMembresiasSedeService({ supabaseAdmin }) {
     /**
      * Resuelve membresía activa aplicable a sede (lazy expiry).
      */
-    async resolveActivaForReserva({ userId, email, sedeId }) {
+    async resolveActivaForReserva({ userId, email, sedeId, readOnly = false }) {
       if (!sedeId) return null;
       let q = supabaseAdmin
         .from('membresias_sede')
@@ -783,7 +783,7 @@ export function createMembresiasSedeService({ supabaseAdmin }) {
         throw schemaErr(error);
       }
       for (const row of data || []) {
-        const current = await expireIfNeeded(row);
+        const current = readOnly ? (shouldMarkExpired(row) ? {...row, estado:'vencida'} : row) : await expireIfNeeded(row);
         if (isMembershipActive(current)) {
           const plan = await loadPlan(current.plan_id);
           const usadas = await countUsosPeriodo(current);

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { validateBirthDate } from '../../lib/birthDate.js';
 import {
   GENEROS,
   IDENTIDAD_ESTADOS,
@@ -161,29 +162,15 @@ function validateOptionalText(value, maxLen, fieldName) {
 
 export function validateFechaNacimiento(raw) {
   if (raw == null || raw === '') return null;
-
-  const dateStr = String(raw).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-    validationError('fecha_nacimiento debe ser YYYY-MM-DD', 'FECHA_NACIMIENTO_INVALIDA');
+  const result = validateBirthDate(String(raw).trim(), new Date());
+  if (!result.ok) {
+    const message = result.code === 'INVALID_DATE' ? 'fecha_nacimiento debe ser YYYY-MM-DD'
+      : result.code === 'FUTURE_DATE' ? 'fecha_nacimiento no puede ser futura'
+      : result.code === 'AGE_OUT_OF_RANGE' ? 'fecha_nacimiento fuera de rango permitido'
+      : 'fecha_nacimiento inválida';
+    validationError(message, 'FECHA_NACIMIENTO_INVALIDA');
   }
-
-  const date = new Date(`${dateStr}T12:00:00.000Z`);
-  if (Number.isNaN(date.getTime())) {
-    validationError('fecha_nacimiento inválida', 'FECHA_NACIMIENTO_INVALIDA');
-  }
-
-  const now = new Date();
-  if (date > now) {
-    validationError('fecha_nacimiento no puede ser futura', 'FECHA_NACIMIENTO_INVALIDA');
-  }
-
-  const ageMs = now.getTime() - date.getTime();
-  const ageYears = ageMs / (365.25 * 24 * 60 * 60 * 1000);
-  if (ageYears < MIN_EDAD_ANIOS || ageYears > MAX_EDAD_ANIOS) {
-    validationError('fecha_nacimiento fuera de rango permitido', 'FECHA_NACIMIENTO_INVALIDA');
-  }
-
-  return dateStr;
+  return result.iso;
 }
 
 function validateNumeroDocumento(numero) {
@@ -462,7 +449,7 @@ export async function upsertIdentidadPropia(supabaseAdmin, userId, payload = {})
     .single();
 
   if (error) {
-    if (error.code === '23505' && String(error.message ?? '').includes('numero_documento_hash')) {
+    if (error.code === '23505' && /numero_documento_hash|idx_jugadores_identidad_doc_hash_unique/.test(String(error.message ?? ''))) {
       const err = new Error('El documento ya está registrado en otra cuenta');
       err.code = 'DOCUMENTO_DUPLICADO';
       err.status = 409;

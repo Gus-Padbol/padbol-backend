@@ -1,0 +1,35 @@
+import { readFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const { PGlite } = await import(process.env.PGLITE_MODULE || '@electric-sql/pglite');
+const db = new PGlite();
+try {
+ await db.exec(`CREATE TABLE organizaciones(id uuid primary key,nombre text,estado text);
+ CREATE TABLE sedes(id bigint primary key);
+ CREATE TABLE user_roles(email text,organizacion_id uuid,role text CHECK(role IN ('super_admin','admin_club')));
+ CREATE TABLE invitaciones_admin(id bigint primary key,email text);
+ CREATE TABLE sedes_pendientes(id bigint primary key,estado text);
+ INSERT INTO organizaciones VALUES('550e8400-e29b-41d4-a716-446655440000','Padbol Internacional','activa');
+ INSERT INTO user_roles VALUES('synthetic@example.invalid',NULL,'super_admin');
+ INSERT INTO invitaciones_admin VALUES(1,'synthetic@example.invalid'); INSERT INTO sedes_pendientes VALUES(1,'pendiente');`);
+ const before = (await db.query(`SELECT conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='user_roles'::regclass ORDER BY conname`)).rows;
+ const sql=await readFile(new URL('../candidates/20261031180000_multisede_schema_minimal.sql',import.meta.url),'utf8');
+ assert.ok(!/\b(?:GRANT|REVOKE|CREATE POLICY|ENABLE ROW LEVEL SECURITY)\b/i.test(sql));
+ await db.exec(sql);
+ assert.equal((await db.query(`SELECT to_regclass('public.organizacion_sedes') AS value`)).rows[0].value,null);
+ await db.exec(sql.replace(/ROLLBACK;\s*$/,'COMMIT;'));
+ const required=(await db.query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public' AND ((table_name='organizacion_sedes' AND column_name IN ('organizacion_id','sede_id','created_at')) OR (table_name='invitaciones_admin' AND column_name='organizacion_id') OR (table_name='sedes_pendientes' AND column_name IN ('organizacion_id','cantidad_canchas_solicitadas')))`)).rows;
+ assert.equal(required.length,6);
+ assert.equal((await db.query(`SELECT count(*)::int AS n FROM organizacion_sedes`)).rows[0].n,0);
+ assert.equal((await db.query(`SELECT count(*)::int AS n FROM organizaciones`)).rows[0].n,1);
+ assert.deepEqual((await db.query(`SELECT conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='user_roles'::regclass ORDER BY conname`)).rows,before);
+ assert.deepEqual((await db.query(`SELECT role,organizacion_id FROM user_roles`)).rows,[{role:'super_admin',organizacion_id:null}]);
+ assert.equal((await db.query(`SELECT organizacion_id FROM invitaciones_admin`)).rows[0].organizacion_id,null);
+ assert.equal((await db.query(`SELECT organizacion_id FROM sedes_pendientes`)).rows[0].organizacion_id,null);
+ await db.exec(`INSERT INTO sedes VALUES(1),(2); INSERT INTO organizacion_sedes VALUES('550e8400-e29b-41d4-a716-446655440000',1,now());`);
+ await assert.rejects(db.exec(`INSERT INTO organizacion_sedes VALUES('550e8400-e29b-41d4-a716-446655440000',999,now())`),/foreign key/i);
+ await assert.rejects(db.exec(`INSERT INTO organizacion_sedes VALUES('550e8400-e29b-41d4-a716-446655440000',1,now())`),/unique/i);
+ await assert.rejects(db.exec(`UPDATE sedes_pendientes SET cantidad_canchas_solicitadas=0`),/check constraint/i);
+ await assert.rejects(db.exec(sql),/already exists/i);
+ await db.exec('ROLLBACK');
+ console.log('PASS: dry-run rollback; six columns; unchanged organization/roles/constraints/invitations; empty links; FK/uniqueness/positive quota; drift fails explicitly. Synthetic in-memory only.');
+} finally { await db.close(); }
