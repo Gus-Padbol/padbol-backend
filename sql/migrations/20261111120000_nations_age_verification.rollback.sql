@@ -1,0 +1,2 @@
+-- Rollback de release NO destructivo: conservar evidencia/referencias y edades verificadas.
+-- Retirar endpoint/UI; cualquier DROP requiere backup y aprobación específica.

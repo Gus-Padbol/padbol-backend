@@ -22,6 +22,7 @@ export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,pro
  app.get(pub+'/profile-request',run('profile_request_status',async r=>profileRequests.ownStatus(r.params.slug,await user(r)),20));
  app.get(admin+'/profile-requests',run('profile_request_list',async r=>profileRequests.pending(r.params.slug,await user(r)),20));
  app.post(admin+'/profile-requests/:requestId/review',run('profile_request_review',async r=>profileRequests.review(r.params.slug,await user(r),r.params.requestId,r.body||{}),10));
+ app.post(admin+'/profile-requests/:requestId/verify-age',run('profile_request_verify_age',async r=>profileRequests.verifyAge(r.params.slug,await user(r),r.params.requestId,r.body||{}),5));
  // Metadatos publicos minimos torneo -> evento (slug). No revela nomina ni identidades.
  app.get('/api/nations-activation/by-torneo/:torneoId', async (req,res)=>{
    res.setHeader('Cache-Control','no-store');
