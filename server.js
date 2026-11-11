@@ -298,6 +298,7 @@ import { revertirPadcoinsParticipacionPorReserva } from './src/padcoins/matchPar
 import { isReservaNoShow } from './src/padcoins/padcoinsReservasService.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
 import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
+import { createScoreboardBulkHandler } from './src/scoreboard/scoreboardBulkHttp.js';
 import { resolveScoreboardsMapForTorneoPartidos } from './src/scoreboard/scoreboardTorneoPartidoResolver.js';
 import {
   actualizarRango,
@@ -2367,21 +2368,20 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
 });
 
 // POST /api/torneos/:id/generar-scoreboards
-app.post('/api/torneos/:id/generar-scoreboards', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const auth = await requireTorneoAdminByTorneoId(req, res, id);
-    if (!auth) return;
-
-    const result = await generarScoreboardsForTorneo(supabaseAdmin, id, req.body ?? {});
-    console.log(
-      `✅ Scoreboards torneo ${id}: created=${result.created}, skipped=${result.skipped}, total=${result.items.length}`,
-    );
-    res.json(result);
-  } catch (err) {
-    console.error('❌ Error generar-scoreboards:', err.message);
-    sendHttpError(res, err);
-  }
+// Bulk preparation is opt-in; default keeps the legacy Supabase path.
+const SCOREBOARD_BULK_PREPARATION_ENABLED = String(process.env.NATIONS_BULK_PREPARATION_ENABLED || '').trim().toLowerCase() === 'true';
+const scoreboardBulkHandler = createScoreboardBulkHandler({
+  pool: pgPool,
+  supabaseAdmin,
+  enabled: SCOREBOARD_BULK_PREPARATION_ENABLED,
+  legacy: generarScoreboardsForTorneo,
+  bulk: generarScoreboardsForTorneo,
+});
+app.post('/api/torneos/:id/generar-scoreboards', async (req, res, next) => {
+  const auth = await requireTorneoAdminByTorneoId(req, res, req.params.id);
+  if (!auth) return;
+  req.torneoAdminAuth = auth;
+  return scoreboardBulkHandler(req, res, next);
 });
 
 // POST /api/torneos/:id/generar-knockout-desde-grupos
