@@ -1,3 +1,5 @@
+import {registerNationsMarkerDurableRoutes} from './lib/torneos/nationsMarkerDurableRuntime.js';
+import {recoverOneGamesFinalization,startGamesFinalizationRecovery} from './lib/torneos/nationsGamesFinalizationRecovery.js';
 import { mountAdminHelpRoutes, readAdminHelpRole } from './routes/adminHelp.js';
 import { randomUUID } from 'node:crypto';
 import { readAuthenticatedPlayerProfile, updateAuthenticatedPlayerProfile } from './lib/authenticatedPlayerProfile.js';
@@ -296,6 +298,7 @@ import { revertirPadcoinsParticipacionPorReserva } from './src/padcoins/matchPar
 import { isReservaNoShow } from './src/padcoins/padcoinsReservasService.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
 import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
+import { registerNationsScoreboardGenerationRoute } from './routes/nationsScoreboardGeneration.js';
 import { resolveScoreboardsMapForTorneoPartidos } from './src/scoreboard/scoreboardTorneoPartidoResolver.js';
 import {
   actualizarRango,
@@ -1311,8 +1314,19 @@ mountLicenseRequestRoutes(app, {
   crmService,
   leadAnalyzer: crmLeadAnalyzer,
 });
+// Candidate is OFF until schema, recovery and end-to-end gates are verified.
+const nationsGamesEnabled = process.env.NATIONS_GAMES_ENABLED === 'true';
+if (nationsGamesEnabled && !pgPool) throw new Error('NATIONS_GAMES_REQUIRES_POSTGRES');
+registerNationsMarkerDurableRoutes(app,{pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser,enabled:nationsGamesEnabled});
+const stopNationsGamesRecovery = startGamesFinalizationRecovery({pool:pgPool,db:supabaseAdmin,enabled:nationsGamesEnabled,onResult:result=>{
+  if(['blocked','pending'].includes(result.status))console.warn('[nations-games-recovery]',{status:result.status,reason:result.reason,scoreboardId:result.scoreboardId});
+}});
+httpServer.once('close',stopNationsGamesRecovery);
 mountScoreboardRoutes(app, {
   supabaseAdmin,
+  nationsGamesEnabled,
+  nationsGamesPool: pgPool,
+  recoverNationsFinalization: scoreboardId=>recoverOneGamesFinalization({pool:pgPool,db:supabaseAdmin,scoreboardId}),
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
@@ -2354,21 +2368,15 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
 });
 
 // POST /api/torneos/:id/generar-scoreboards
-app.post('/api/torneos/:id/generar-scoreboards', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const auth = await requireTorneoAdminByTorneoId(req, res, id);
-    if (!auth) return;
-
-    const result = await generarScoreboardsForTorneo(supabaseAdmin, id, req.body ?? {});
-    console.log(
-      `✅ Scoreboards torneo ${id}: created=${result.created}, skipped=${result.skipped}, total=${result.items.length}`,
-    );
-    res.json(result);
-  } catch (err) {
-    console.error('❌ Error generar-scoreboards:', err.message);
-    sendHttpError(res, err);
-  }
+// Bulk preparation is opt-in; default keeps the legacy Supabase path.
+const SCOREBOARD_BULK_PREPARATION_ENABLED = String(process.env.NATIONS_BULK_PREPARATION_ENABLED || '').trim().toLowerCase() === 'true';
+registerNationsScoreboardGenerationRoute(app, {
+  pool: pgPool,
+  supabaseAdmin,
+  enabled: SCOREBOARD_BULK_PREPARATION_ENABLED,
+  requireTorneoAdmin: requireTorneoAdminByTorneoId,
+  generate: generarScoreboardsForTorneo,
+  sendError: sendHttpError,
 });
 
 // POST /api/torneos/:id/generar-knockout-desde-grupos
