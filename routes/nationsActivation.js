@@ -1,7 +1,8 @@
 import {createNationsActivationService,activationError} from '../lib/nationsActivation.js';
 import {createNationsProfileRequestsService} from '../lib/nationsProfileRequests.js';
 import {createNationsSelectorService} from '../lib/nationsSelector.js';
-export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,profileRequestsDep=null,selectorDep=null,service=pool?createNationsActivationService({pool}):null,now=()=>Date.now(),logger=console}={}){
+const NAPLES_SLUG='nations-cup-napoli-2026';
+export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,profileRequestsDep=null,selectorDep=null,fichaReadinessDep=null,service=pool?createNationsActivationService({pool}):null,now=()=>Date.now(),logger=console}={}){
  const profileRequests=profileRequestsDep||createNationsProfileRequestsService({pool});
  const selector=selectorDep||(pool?createNationsSelectorService({pool}):null);
  const buckets=new Map();
@@ -18,8 +19,9 @@ export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,pro
  app.get(pub+'/players',run('lookup',r=>service.players(r.params.slug,r.query),20));
  app.get(pub+'/selector',run('selector',async r=>selector.list(r.params.slug),60));
  app.post(pub+'/selector/report',run('selector_report',async r=>selector.report(r.params.slug,await user(r),r.body?.selection_id),10));
- app.post(pub+'/profile-request',run('profile_request',async r=>profileRequests.submit(r.params.slug,await user(r),r.body||{}),10));
- app.get(pub+'/profile-request',run('profile_request_status',async r=>profileRequests.ownStatus(r.params.slug,await user(r)),20));
+ app.get(pub+'/profile-readiness',run('profile_readiness',async r=>{if(!fichaReadinessDep)throw activationError('NOT_READY',503);return fichaReadinessDep(await user(r));},20));
+ app.post(pub+'/profile-request',run('profile_request',async r=>{const u=await user(r);if(r.params.slug===NAPLES_SLUG&&fichaReadinessDep){const ready=await fichaReadinessDep(u);if(ready?.complete!==true)throw activationError('PLAYER_PROFILE_INCOMPLETE',409);}return profileRequests.submit(r.params.slug,u,r.body||{});},10));
+ app.get(pub+'/profile-request',run('profile_request_status',async r=>{const u=await user(r);const out=await profileRequests.ownStatus(r.params.slug,u);if(r.params.slug===NAPLES_SLUG&&fichaReadinessDep){out.profile_readiness=await fichaReadinessDep(u);}return out;},20));
  app.get(admin+'/profile-requests',run('profile_request_list',async r=>profileRequests.pending(r.params.slug,await user(r)),20));
  app.post(admin+'/profile-requests/:requestId/review',run('profile_request_review',async r=>profileRequests.review(r.params.slug,await user(r),r.params.requestId,r.body||{}),10));
  app.post(admin+'/profile-requests/:requestId/verify-age',run('profile_request_verify_age',async r=>profileRequests.verifyAge(r.params.slug,await user(r),r.params.requestId,r.body||{}),5));

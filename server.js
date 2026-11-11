@@ -11,6 +11,7 @@ import {mayReadTournamentEnrollment,mapTournamentTeamReadRow} from './lib/dto/to
 import { projectVerifiedTournamentRankingTeams } from './lib/verifiedTournamentRanking.js';
 import { mountTournamentParticipantsRoutes } from './routes/tournamentParticipants.js';
 import { registerNationsActivationRoutes } from './routes/nationsActivation.js';
+import { readNationsFichaReadiness } from './lib/nationsFicha.js';
 import {mountTournamentPlanningRoutes, startPlannedTournament} from './routes/tournamentPlanning.js';
 import { canReadQaCatalogRow, pickPlayerSedeSummary } from './lib/qaCatalogVisibility.js';
 import { canReadPublicTournamentCatalogRow } from './lib/torneos/tournamentCatalogVisibility.js';
@@ -1974,7 +1975,7 @@ mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: u
 mountNationsCountryRankingRoutes(app, { db: supabaseAdmin });
 mountQaManualTeamsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
 mountTournamentParticipantsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
-registerNationsActivationRoutes(app, { pool: pgPool, authUserFromBearer });
+registerNationsActivationRoutes(app, { pool: pgPool, authUserFromBearer, fichaReadinessDep: user => readNationsFichaReadiness({ supabaseAdmin, user }) });
 mountTournamentPlanningRoutes(app, {db:supabaseAdmin, requireTorneoAdmin:requireTorneoAdminByTorneoId});
 mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountTorneosFinalizadosRoutes(app, { pgPool });
