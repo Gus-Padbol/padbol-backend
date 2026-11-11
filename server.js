@@ -1975,7 +1975,7 @@ mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: u
 mountNationsCountryRankingRoutes(app, { db: supabaseAdmin });
 mountQaManualTeamsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
 mountTournamentParticipantsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
-registerNationsActivationRoutes(app, { pool: pgPool, authUserFromBearer, fichaReadinessDep: user => readNationsFichaReadiness({ supabaseAdmin, user }) });
+registerNationsActivationRoutes(app, { pool: pgPool, authUserFromBearer, selectorSourceDep: loadOfficialFipaSource, fichaReadinessDep: user => readNationsFichaReadiness({ supabaseAdmin, user }) });
 mountTournamentPlanningRoutes(app, {db:supabaseAdmin, requireTorneoAdmin:requireTorneoAdminByTorneoId});
 mountNationalTeamRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
 mountTorneosFinalizadosRoutes(app, { pgPool });
