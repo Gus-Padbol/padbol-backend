@@ -110,4 +110,3 @@ BEGIN
  RETURN result;
 END $$;
 REVOKE ALL ON FUNCTION nations_marker_private.commit_games_command_candidate(uuid,uuid,jsonb,timestamptz,jsonb,jsonb,uuid) FROM PUBLIC;
--- Runtime may use service_role (Supabase pool). Minimum explicit execute; no PUBLIC.
