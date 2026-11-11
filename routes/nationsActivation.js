@@ -1,10 +1,12 @@
 import {createNationsActivationService,activationError} from '../lib/nationsActivation.js';
 import {createNationsProfileRequestsService} from '../lib/nationsProfileRequests.js';
-export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,profileRequestsDep=null,service=pool?createNationsActivationService({pool}):null,now=()=>Date.now(),logger=console}={}){
+import {createNationsSelectorService} from '../lib/nationsSelector.js';
+export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,profileRequestsDep=null,selectorDep=null,service=pool?createNationsActivationService({pool}):null,now=()=>Date.now(),logger=console}={}){
  const profileRequests=profileRequestsDep||createNationsProfileRequestsService({pool});
+ const selector=selectorDep||(pool?createNationsSelectorService({pool}):null);
  const buckets=new Map();
  function limit(req,action,max){const key=`${action}:${String(req.ip||req.socket?.remoteAddress||'unknown')}`;const t=now(),old=buckets.get(key);if(!old&&buckets.size>=10000){for(const [k,v]of buckets)if(v.until<t)buckets.delete(k);if(buckets.size>=10000)throw activationError('RATE_LIMITED',429);}if(!old||old.until<t)buckets.set(key,{count:1,until:t+60000});else if(++old.count>max)throw activationError('RATE_LIMITED',429);}
- const run=(action,fn,max=30)=>async(req,res)=>{res.setHeader('Cache-Control','no-store');try{limit(req,action,max);if(!service)throw activationError('NOT_READY',503);if(!/^[a-z0-9][a-z0-9-]{2,79}$/.test(req.params.slug||''))throw activationError('EVENT_NOT_AVAILABLE',404);return res.json(await fn(req));}catch(e){const status=[400,401,403,404,409,429,503].includes(e.status)?e.status:503;logger?.error?.('[nations-activation]',{code:e.code||'UNAVAILABLE'});return res.status(status).json({error:e.code||'UNAVAILABLE',code:e.code||'UNAVAILABLE'});}};
+ const run=(action,fn,max=30)=>async(req,res)=>{res.setHeader('Cache-Control','no-store');try{limit(req,action,max);if(!service)throw activationError('NOT_READY',503);if(!/^[a-z0-9][a-z0-9-]{2,79}$/.test(req.params.slug||''))throw activationError('EVENT_NOT_AVAILABLE',404);return res.json(await fn(req));}catch(e){const status=[400,401,403,404,409,422,429,503].includes(e.status)?e.status:503;logger?.error?.('[nations-activation]',{code:e.code||'UNAVAILABLE'});return res.status(status).json({error:e.code||'UNAVAILABLE',code:e.code||'UNAVAILABLE'});}};
  const user=async req=>{const u=await authUserFromBearer(req);if(!u?.id||!u.email_confirmed_at)throw activationError('VERIFIED_ACCOUNT_REQUIRED',401);return u;};
  const pub='/api/nations-activation/events/:slug',admin='/api/admin/nations-activation/events/:slug';
  app.get(admin+'/access',run('access',async r=>service.access(await user(r)),30));
@@ -14,10 +16,13 @@ export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,pro
  app.get(pub,run('event',r=>service.publicEvent(r.params.slug),60));
  app.get(pub+'/me',run('me',async r=>service.me(r.params.slug,await user(r)),60));
  app.get(pub+'/players',run('lookup',r=>service.players(r.params.slug,r.query),20));
+ app.get(pub+'/selector',run('selector',async r=>selector.list(r.params.slug),60));
+ app.post(pub+'/selector/report',run('selector_report',async r=>selector.report(r.params.slug,await user(r),r.body?.selection_id),10));
  app.post(pub+'/profile-request',run('profile_request',async r=>profileRequests.submit(r.params.slug,await user(r),r.body||{}),10));
  app.get(pub+'/profile-request',run('profile_request_status',async r=>profileRequests.ownStatus(r.params.slug,await user(r)),20));
  app.get(admin+'/profile-requests',run('profile_request_list',async r=>profileRequests.pending(r.params.slug,await user(r)),20));
  app.post(admin+'/profile-requests/:requestId/review',run('profile_request_review',async r=>profileRequests.review(r.params.slug,await user(r),r.params.requestId,r.body||{}),10));
+ app.post(admin+'/profile-requests/:requestId/verify-age',run('profile_request_verify_age',async r=>profileRequests.verifyAge(r.params.slug,await user(r),r.params.requestId,r.body||{}),5));
  // Metadatos publicos minimos torneo -> evento (slug). No revela nomina ni identidades.
  app.get('/api/nations-activation/by-torneo/:torneoId', async (req,res)=>{
    res.setHeader('Cache-Control','no-store');
