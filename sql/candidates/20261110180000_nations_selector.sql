@@ -5,6 +5,7 @@ BEGIN;
 
 ALTER TABLE public.nations_profile_requests
   ADD COLUMN IF NOT EXISTS selected_participante_id uuid NULL REFERENCES public.torneo_participantes(id),
+  ADD COLUMN IF NOT EXISTS payload_hash_version integer NOT NULL DEFAULT 1 CHECK (payload_hash_version IN (1,2)),
   ADD COLUMN IF NOT EXISTS selection_status text NOT NULL DEFAULT 'declarada'
     CHECK (selection_status IN ('sin_seleccion','declarada','verificacion_pendiente','en_conflicto','reportada'));
 
