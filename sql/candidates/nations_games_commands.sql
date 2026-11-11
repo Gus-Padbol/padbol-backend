@@ -18,6 +18,10 @@ CREATE TABLE nations_marker_private.games_finalization_intents(
  lease_token uuid, lease_until timestamptz,
  PRIMARY KEY(scoreboard_id,epoch,effect_kind));
 REVOKE ALL ON nations_marker_private.games_finalization_intents FROM PUBLIC;
+-- Minimal read-only role grants for Supabase guard/read paths. No UPDATE, no anon/auth, no function EXECUTE.
+GRANT USAGE ON SCHEMA nations_marker_private TO service_role;
+GRANT SELECT ON nations_marker_private.nations_marker_match TO service_role;
+GRANT SELECT ON nations_marker_private.games_finalization_intents TO service_role;
 CREATE FUNCTION nations_marker_private.commit_games_command_candidate(
  p_id uuid,p_request_id uuid,p_command jsonb,p_expected timestamptz,
  p_next jsonb,p_history jsonb DEFAULT NULL,p_history_id uuid DEFAULT NULL)
@@ -107,4 +111,3 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION nations_marker_private.commit_games_command_candidate(uuid,uuid,jsonb,timestamptz,jsonb,jsonb,uuid) FROM PUBLIC;
 -- Runtime may use service_role (Supabase pool). Minimum explicit execute; no PUBLIC.
-GRANT EXECUTE ON FUNCTION nations_marker_private.commit_games_command_candidate(uuid,uuid,jsonb,timestamptz,jsonb,jsonb,uuid) TO service_role;

@@ -15,6 +15,9 @@ BEGIN
  -- Lock order agrees with marker commands: scoreboard then participation.
  SELECT * INTO sb FROM public.scoreboard_partidos WHERE id=h.partido_id FOR UPDATE;
  IF NOT FOUND THEN RAISE EXCEPTION 'GAME_SCOREBOARD_MISSING'; END IF;
+ -- The scoreboard row is already locked above, as it is during START.
+ -- Untracked legacy histories need no marker row lock or marker UPDATE privilege.
+ IF NOT EXISTS(SELECT 1 FROM nations_marker_private.nations_marker_match WHERE match_id=h.partido_id::text) THEN RETURN h; END IF;
  SELECT * INTO agg FROM nations_marker_private.nations_marker_match WHERE match_id=h.partido_id::text FOR UPDATE;
  IF NOT FOUND THEN RETURN h; END IF; -- Legacy boards, not opted into tracking.
  IF coalesce(to_jsonb(agg)->>'tracking_status','active')<>'active' THEN RAISE EXCEPTION 'GAME_TRACKING_RESTART_REQUIRED'; END IF;
