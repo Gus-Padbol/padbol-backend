@@ -94,4 +94,5 @@ const intent=(await d.query('SELECT * FROM nations_marker_private.games_finaliza
 await command(finalKey,finalCmd,{games_a:99},finalHistory);assert.equal((await d.query('SELECT count(*)::int n FROM nations_marker_private.games_finalization_intents')).rows[0].n,1);
 assert.equal((await d.query("SELECT has_table_privilege('authenticated','nations_marker_private.games_finalization_intents','select') ok")).rows[0].ok,false);
 console.log('PASS final point and recovery intent commit atomically, rollback together and deduplicate without exposing tokens');
+assert.equal((await d.query("SELECT has_function_privilege('service_role','nations_marker_private.commit_games_command_candidate(uuid,uuid,jsonb,timestamptz,jsonb,jsonb,uuid)','execute') ok")).rows[0].ok,true);console.log('PASS service_role has minimum execute; authenticated/public do not');
 await d.close();
