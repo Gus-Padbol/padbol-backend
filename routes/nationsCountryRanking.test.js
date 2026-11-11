@@ -24,10 +24,13 @@ const tables = (over = {}) => ({
   ...over,
 });
 
-function fakeDb(source) {
+function fakeDb(source, rpc = null) {
   const calls = [];
+  const rpcCalls = [];
   return {
     calls,
+    rpcCalls,
+    ...(rpc ? { async rpc(name, params) { rpcCalls.push({ name, params }); return rpc(name, params); } } : {}),
     from(table) {
       const result = source[table];
       const query = {
@@ -141,4 +144,30 @@ test('storage failures and incoherent country data fail honestly', async () => {
   assert.equal(incoherent.statusCode, 503);
   assert.equal(incoherent.body.ok, false);
   assert.equal(incoherent.body.code, 'NATIONS_COUNTRY_RANKING_DATA_INVALID');
+});
+
+
+test('actual RPC projection: route reads the private country map without exposing the plan', async () => {
+  const stripped = {
+    ...event,
+    plan_nations: { enabled: true, format: 'nations_3x5', revision: 7, status: 'finalized', config: { format: 'nations_3x5', timezone: 'America/Argentina/Buenos_Aires', reveal_at: '2020-01-01T00:00:00Z' } },
+  };
+  const db = fakeDb(tables({ torneos: { data: [stripped] } }), async (name, params) => ({
+    data: {
+      torneo: {
+        id: params.p_torneo_id,
+        plan_nations: { config: { country_by_team: mapping }, requests: [{ id: 'private' }] },
+      },
+    },
+    error: null,
+  }));
+  const res = await call(db);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.items.length, 15);
+  assert.equal(res.body.items.find((row) => row.pais === 'AR').puntos_total, 300);
+  assert.equal(db.rpcCalls.length, 1);
+  assert.equal(db.rpcCalls[0].name, 'leer_estado_nations');
+  const serialized = JSON.stringify(res.body);
+  assert.equal(serialized.includes('country_by_team'), false);
+  assert.equal(serialized.includes('private'), false);
 });
