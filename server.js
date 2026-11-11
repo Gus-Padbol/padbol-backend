@@ -298,6 +298,8 @@ import { revertirPadcoinsParticipacionPorReserva } from './src/padcoins/matchPar
 import { isReservaNoShow } from './src/padcoins/padcoinsReservasService.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
 import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
+import { createRequireTorneoAdminByTorneoId } from './lib/torneoAdminGuard.js';
+import { registerNationsScoreboardGenerationRoute } from './routes/nationsScoreboardGeneration.js';
 import { resolveScoreboardsMapForTorneoPartidos } from './src/scoreboard/scoreboardTorneoPartidoResolver.js';
 import {
   actualizarRango,
