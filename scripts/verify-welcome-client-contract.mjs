@@ -10,6 +10,7 @@ import {execFileSync} from 'node:child_process';
 import express from 'express';
 import {PGlite} from '@electric-sql/pglite';
 import {registerCrmInboundRoutes} from '../lib/crmInboundRoutes.js';
+import {createCrmFixtureSchema,realCrmService} from './welcome-real-crm-fixture.mjs';
 
 const root = process.env.WELCOME_CLIENT_ROOT;
 if (!root) throw Error('WELCOME_CLIENT_ROOT must name the frozen actual c82 checkout');
@@ -26,14 +27,14 @@ const SECRET='offline-contract-only';
 const nativeFetch=globalThis.fetch;
 const payload={id:'fixture-a',Nombre:'Offline Fixture',Email:'fixture@example.test',WhatsApp:'test-only',consentPrivacy:true,consentTerms:true,consentMarketing:true,consentDocumentVersion:'test',consentAcceptedAt:'2026-11-11T00:00:00Z',consentLanguage:'es',consentFormType:'contact:general'};
 
-async function boot(dir,{bootstrap=true,failReceipt=false}={}) {
+async function boot(dir,{bootstrap=true,failReceipt=false,realCrm=false}={}) {
  const db=new PGlite(dir);
- if(bootstrap){await db.exec(`create role anon;create role authenticated;create role service_role;create table public.crm_contacts(id uuid primary key);insert into public.crm_contacts values('${CONTACT}');`);await db.exec(await fs.readFile(path.join(HERE,'../sql/migrations/20261111200000_crm_welcome_ledger.sql'),'utf8'));}
+ if(bootstrap){await db.exec('create role anon;create role authenticated;create role service_role;');if(realCrm)await createCrmFixtureSchema(db);else await db.exec(`create table public.crm_contacts(id uuid primary key);insert into public.crm_contacts values('${CONTACT}');`);await db.exec(await fs.readFile(path.join(HERE,'../sql/migrations/20261111200000_crm_welcome_ledger.sql'),'utf8'));}
  let receiptFailure=failReceipt;
  const pool={query:async(sql,args)=>{if(receiptFailure&&sql.includes('set status=$2')&&args[1]==='accepted'){receiptFailure=false;throw Error('synthetic receipt persistence failure');}return db.query(sql,args);}};
  const app=express();app.use(express.json({limit:'1mb'}));
  let calls=0;
- registerCrmInboundRoutes(app,{pool,crmService:{ingestInbound:async()=>({status:++calls===1?'accepted':'idempotent',contact:{id:CONTACT},conversation:{id:`22222222-2222-4222-8222-${String(calls).padStart(12,'0')}`}})},formInboundSecret:SECRET,emailInboundSecret:SECRET,experienceRepository:{},logger:{warn(){},error(){}}});
+ registerCrmInboundRoutes(app,{pool,crmService:realCrm?realCrmService(db):{ingestInbound:async()=>({status:++calls===1?'accepted':'idempotent',contact:{id:CONTACT},conversation:{id:`22222222-2222-4222-8222-${String(calls).padStart(12,'0')}`}})},formInboundSecret:SECRET,emailInboundSecret:SECRET,experienceRepository:{},logger:{warn(){},error(){}}});
  const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
  const base=`http://127.0.0.1:${server.address().port}`;
  return {db,base,close:async()=>{await new Promise(r=>server.close(r));await db.close();}};
@@ -48,7 +49,7 @@ async function scenario(fn,options={}) {
   return nativeFetch(url,opts);
  };
  async function run(data=payload){const {default:handler}=await import(pathToFileURL(path.join(root,'api/leads.ts')).href+'?offlineContract='+importCounter++);const r={status(n){this.code=n;return this;},json(v){this.body=v;return this;},setHeader(){}};await handler({method:'POST',headers:{},body:data},r);return r;}
- try{await fn({run,get db(){return current.db;},get providerCalls(){return providerCalls;},restart:async()=>{await current.close();current=await boot(dir,{bootstrap:false});configure();}});}
+ try{await fn({run,get db(){return current.db;},get providerCalls(){return providerCalls;},restart:async()=>{await current.close();current=await boot(dir,{bootstrap:false,realCrm:options.realCrm});configure();}});}
  finally{globalThis.fetch=nativeFetch;for(const k of Object.keys(process.env))if(!(k in saved))delete process.env[k];Object.assign(process.env,saved);await current.close();await fs.rm(dir,{recursive:true,force:true});}
 }
 
@@ -71,3 +72,23 @@ test('accepted provider with receipt write failure leaves durable claim and neve
 test('client OFF and absent marketing consent perform no SQL claim or provider attempt',async()=>scenario(async s=>{
  process.env.LEADS_EXPERIENCE_WELCOME_ENABLED='false';await s.run();process.env.LEADS_EXPERIENCE_WELCOME_ENABLED='true';await s.run({...payload,id:'no-marketing',consentMarketing:false});assert.equal(s.providerCalls,0);assert.equal((await s.db.query('select count(*)::int n from crm_welcome_ledger')).rows[0].n,0);
 }));
+
+test('actual CRM contact resolver/repository persist ONE contact across two forms and database restart',async()=>scenario(async s=>{
+ const first=await s.run({...payload,id:'actual-crm-source-one',Email:'Fixture@Example.Test'});
+ assert.equal(first.code,200);assert.equal(first.body.welcomeReceipt.status,'accepted');
+ const original=(await s.db.query('select id,email_normalized from crm_contacts')).rows;
+ assert.equal(original.length,1);assert.equal(original[0].email_normalized,'fixture@example.test');
+ await s.restart();
+ const second=await s.run({...payload,id:'actual-crm-source-two',Email:'fixture@example.test'});
+ assert.equal(second.code,200);assert.equal(second.body.welcomeReceipt.id,first.body.welcomeReceipt.id);
+ const replay=await s.run({...payload,id:'actual-crm-source-two',Email:'fixture@example.test'});
+ assert.equal(replay.code,200);assert.equal(s.providerCalls,1);
+ assert.deepEqual((await s.db.query('select id,email_normalized from crm_contacts')).rows,original);
+ const conversations=(await s.db.query('select id,contact_id,source_ref from crm_conversations order by source_ref')).rows;
+ assert.equal(conversations.length,2);assert.notEqual(conversations[0].id,conversations[1].id);assert.ok(conversations.every(c=>c.contact_id===original[0].id));
+ assert.equal((await s.db.query('select count(*)::int n from crm_inbound_events')).rows[0].n,2);
+ assert.equal((await s.db.query('select count(*)::int n from crm_channel_attempts')).rows[0].n,2);
+ const ledger=(await s.db.query('select contact_id,status from crm_welcome_ledger')).rows;
+ assert.deepEqual(ledger,[{contact_id:original[0].id,status:'accepted'}]);
+ assert.equal('contact' in second.body,false);
+},{realCrm:true}));
