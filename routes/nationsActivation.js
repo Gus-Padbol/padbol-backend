@@ -2,7 +2,7 @@ import {createNationsActivationService,activationError} from '../lib/nationsActi
 import {createNationsProfileRequestsService} from '../lib/nationsProfileRequests.js';
 import {createNationsSelectorService} from '../lib/nationsSelector.js';
 const NAPLES_SLUG='nations-cup-napoli-2026';
-export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,profileRequestsDep=null,selectorDep=null,selectorSourceDep=null,fichaReadinessDep=null,service=pool?createNationsActivationService({pool}):null,now=()=>Date.now(),logger=console}={}){
+export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,profileRequestsDep=null,selectorDep=null,selectorSourceDep=null,fichaReadinessDep=null,enrollmentReadinessDep=null,service=pool?createNationsActivationService({pool}):null,now=()=>Date.now(),logger=console}={}){
  const profileRequests=profileRequestsDep||createNationsProfileRequestsService({pool});
  const selector=selectorDep||(pool?createNationsSelectorService({pool,loadOfficialSource:selectorSourceDep}):null);
  const buckets=new Map();
@@ -10,6 +10,7 @@ export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,pro
  const run=(action,fn,max=30)=>async(req,res)=>{res.setHeader('Cache-Control','no-store');try{limit(req,action,max);if(!service)throw activationError('NOT_READY',503);if(!/^[a-z0-9][a-z0-9-]{2,79}$/.test(req.params.slug||''))throw activationError('EVENT_NOT_AVAILABLE',404);return res.json(await fn(req));}catch(e){const status=[400,401,403,404,409,422,429,503].includes(e.status)?e.status:503;logger?.error?.('[nations-activation]',{code:e.code||'UNAVAILABLE'});return res.status(status).json({error:e.code||'UNAVAILABLE',code:e.code||'UNAVAILABLE'});}};
  const user=async req=>{const u=await authUserFromBearer(req);if(!u?.id||!u.email_confirmed_at)throw activationError('VERIFIED_ACCOUNT_REQUIRED',401);return u;};
  const pub='/api/nations-activation/events/:slug',admin='/api/admin/nations-activation/events/:slug';
+ const readinessFor=(slug)=>slug===NAPLES_SLUG?(enrollmentReadinessDep||fichaReadinessDep):fichaReadinessDep;
  app.get(admin+'/access',run('access',async r=>service.access(await user(r)),30));
  app.post(admin+'/configure',run('configure',async r=>service.configure(r.params.slug,await user(r),r.body||{}),5));
  app.post(admin+'/delegates',run('delegate',async r=>service.delegate(r.params.slug,await user(r),r.body||{}),10));
@@ -20,9 +21,9 @@ export function registerNationsActivationRoutes(app,{pool,authUserFromBearer,pro
  app.get(pub+'/selector',run('selector',async r=>selector.list(r.params.slug),60));
  app.get(pub+'/selector/:selectionId/history',run('selector_history',async r=>selector.history(r.params.slug,r.params.selectionId),60));
  app.post(pub+'/selector/report',run('selector_report',async r=>selector.report(r.params.slug,await user(r),r.body?.selection_id),10));
- app.get(pub+'/profile-readiness',run('profile_readiness',async r=>{if(!fichaReadinessDep)throw activationError('NOT_READY',503);return fichaReadinessDep(await user(r));},20));
- app.post(pub+'/profile-request',run('profile_request',async r=>{const u=await user(r);if(r.params.slug===NAPLES_SLUG&&fichaReadinessDep){const ready=await fichaReadinessDep(u);if(ready?.complete!==true)throw activationError('PLAYER_PROFILE_INCOMPLETE',409);}return profileRequests.submit(r.params.slug,u,r.body||{});},10));
- app.get(pub+'/profile-request',run('profile_request_status',async r=>{const u=await user(r);const out=await profileRequests.ownStatus(r.params.slug,u);if(r.params.slug===NAPLES_SLUG&&fichaReadinessDep){out.profile_readiness=await fichaReadinessDep(u);}return out;},20));
+ app.get(pub+'/profile-readiness',run('profile_readiness',async r=>{const read=readinessFor(r.params.slug);if(!read)throw activationError('NOT_READY',503);return read(await user(r));},20));
+ app.post(pub+'/profile-request',run('profile_request',async r=>{const u=await user(r);if(r.params.slug===NAPLES_SLUG&&readinessFor(r.params.slug)){const ready=await readinessFor(r.params.slug)(u);if(ready?.complete!==true)throw activationError('PLAYER_PROFILE_INCOMPLETE',409);}return profileRequests.submit(r.params.slug,u,r.body||{});},10));
+ app.get(pub+'/profile-request',run('profile_request_status',async r=>{const u=await user(r);const out=await profileRequests.ownStatus(r.params.slug,u);if(r.params.slug===NAPLES_SLUG&&readinessFor(r.params.slug)){out.profile_readiness=await readinessFor(r.params.slug)(u);}return out;},20));
  app.get(admin+'/profile-requests',run('profile_request_list',async r=>profileRequests.pending(r.params.slug,await user(r)),20));
  app.post(admin+'/profile-requests/:requestId/review',run('profile_request_review',async r=>profileRequests.review(r.params.slug,await user(r),r.params.requestId,r.body||{}),10));
  app.post(admin+'/profile-requests/:requestId/verify-age',run('profile_request_verify_age',async r=>profileRequests.verifyAge(r.params.slug,await user(r),r.params.requestId,r.body||{}),5));
