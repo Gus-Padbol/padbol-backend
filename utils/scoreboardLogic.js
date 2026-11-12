@@ -447,7 +447,7 @@ export function enrichPartidoResponse(partido, venueContext = {}, scoringPolicy 
 
   return {
     ...withVenue,
-    scoring_policy: isNapoliGroupsPolicy(scoringPolicy) ? { ...scoringPolicy } : null,
+    ...(isNapoliGroupsPolicy(scoringPolicy) ? {scoring_policy: {...scoringPolicy}} : {}),
     display: {
       ...score,
       cronometro: formatCronometro(cronometroSegundos),

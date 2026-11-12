@@ -20,7 +20,7 @@ import {
   applyHistorialPuntoSnapshot,
 } from '../utils/scoreboardLogic.js';
 import { sendHttpError } from '../lib/httpErrors.js';
-import { isDecidingSuperTiebreak } from '../src/scoreboard/napoliScoringPolicy.js';
+import { isNapoliGroupsPolicy } from '../src/scoreboard/napoliScoringPolicy.js';
 import { assertScoreboardScoringSupported } from '../src/scoreboard/scoreboardSportGuard.js';
 import { scoreboardControlWriteRateLimit } from '../lib/rateLimit.js';
 import { mapScoreboardJugadoresTempPublic } from '../lib/scoreboardPublic.js';
@@ -930,9 +930,9 @@ export function mountScoreboardRoutes(app, {
       const marker = await fetchPartido(supabaseAdmin, req.params.id);
       assertCanControlScoreboard(await resolveAuthRole(auth.user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), marker.sede_id);
       const scoringPolicy = await assertScoreboardScoringSupported(supabaseAdmin, marker);
-      if (isDecidingSuperTiebreak(marker, scoringPolicy) || marker.historial_sets?.some(set => set.type === 'super_tiebreak')) throw Object.assign(new Error('Super tie-break corrections require point undo.'), { status: 409, code: 'SUPER_TIEBREAK_POINT_UNDO_REQUIRED' });
+      if ((isNapoliGroupsPolicy(scoringPolicy) && Number(marker.sets_a) === 1 && Number(marker.sets_b) === 1) || marker.historial_sets?.some(set => set.type === 'super_tiebreak')) throw Object.assign(new Error('Super tie-break corrections require point undo.'), { status: 409, code: 'SUPER_TIEBREAK_POINT_UNDO_REQUIRED' });
       const input = validatePartialCorrection(req.body);
-      if (isDecidingSuperTiebreak({ ...marker, ...input.state }, scoringPolicy)) throw Object.assign(new Error('Super tie-break corrections require point undo.'), { status: 409, code: 'SUPER_TIEBREAK_POINT_UNDO_REQUIRED' });
+      if (isNapoliGroupsPolicy(scoringPolicy) && input.state.sets_a === 1 && input.state.sets_b === 1) throw Object.assign(new Error('Super tie-break corrections require point undo.'), { status: 409, code: 'SUPER_TIEBREAK_POINT_UNDO_REQUIRED' });
       const { data, error } = await supabaseAdmin.rpc('scoreboard_correct_partial', { p_id: marker.id, p_expected: input.updatedAt, p_actor: auth.user.id, p_reason: input.reason, p_score: input.state });
       if (error?.code === '55000') return res.status(409).json({error:'El partido no permite corregir el parcial en su estado actual.'});
       if (error) throw error;
