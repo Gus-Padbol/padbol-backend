@@ -11,7 +11,8 @@ const sendJson=(res,code,obj)=>res.writeHead(code,{'content-type':'application/j
 const hasAuthority=(b)=>['actor','actorId','clock','serverAt','serverNow','startedAt'].some(k=>Object.prototype.hasOwnProperty.call(b||{},k));
 /** Factory aislado; OFF por defecto: solo se monta si el instalador lo decide. */
 export function createNationsMarkerDurableRouter({pool,authorize,present=value=>value,onCommitted=null}) {
-  const committed=async id=>{try{await onCommitted?.(id);}catch{/* Publication failure never changes a committed command outcome. */}};
+  const PUBLISH_TIMEOUT_MS=1000;
+  const committed=async id=>{if(!onCommitted)return;try{await Promise.race([Promise.resolve().then(()=>onCommitted(id)),new Promise(resolve=>{const t=setTimeout(resolve,PUBLISH_TIMEOUT_MS);t.unref?.();})]);}catch{/* Publication failure/timeout never changes a committed command outcome. */}};
   const send=(res,code,obj)=>sendJson(res,code,present(obj));
   const store=new (withGamesLedgerRead(NationsMarkerPostgresStore))({pool});
   return async function handler(req,res){
