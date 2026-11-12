@@ -1,3 +1,4 @@
+import { createCrmWelcomeStatusReader } from './lib/crmWelcomeStatus.js';
 import {registerNationsMarkerDurableRoutes} from './lib/torneos/nationsMarkerDurableRuntime.js';
 import {recoverOneGamesFinalization,startGamesFinalizationRecovery} from './lib/torneos/nationsGamesFinalizationRecovery.js';
 import { mountAdminHelpRoutes, readAdminHelpRole } from './routes/adminHelp.js';
@@ -849,6 +850,7 @@ const crmEmailReturn = createCrmEmailReturnQueue({pool:pgPool,emailReturn:create
 registerCrmEmailProviderRoute(app,{emailReturn:crmEmailReturn});
 const crmEmailSender = routeCrmEmailSender({commercialSender:createCrmEmailSender({ runtime }),supportSender:createCrmSupportSender({ runtime })});
 const crmAdminService = createCrmAdminService({
+  readCommercialWelcomeStatuses: createCrmWelcomeStatusReader({ pool: pgPool }),
   repository: createSupabaseCrmRepository(supabaseAdmin),
   operators: whatsappOperators,
   superAdminEmails: whatsappSuperAdminEmails,
