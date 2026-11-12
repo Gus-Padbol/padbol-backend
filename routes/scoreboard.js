@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {issueNationsControlToken,readNationsControlDelegation} from '../src/scoreboard/nationsControlDelegation.js';
 import {runGamesMutation} from '../lib/torneos/nationsGamesMutationTransaction.js';
 import {isScoreboardReadId} from '../lib/scoreboardReadId.js';
 import { installScoreboardWatchRoutes } from '../src/scoreboard/scoreboardWatchRoutes.js';
@@ -474,7 +475,7 @@ export function mountScoreboardRoutes(app, {
     return enrichPartidoWithVenue(supabaseAdmin, saved);
   }
 
-  const commandContext=(req,user,role)=>({authorizeLocked:async row=>{if(user)return assertCanControlScoreboard(role,row.sede_id);const hash=createHash('sha256').update(req.params.token).digest('hex');if(row.control_token_revoked_at!=null||row.control_token_hash!==hash)throw Object.assign(new Error('Token de control revocado'),{status:401});},requestId:req.body?.requestId,epoch:req.body?.epoch,actorId:user?.id|| (req.params?.token ? 'control-token:'+createHash('sha256').update(req.params.token).digest('hex'):null)});
+  const commandContext=(req,user,role)=>({authorizeLocked:async(row,client)=>{if(user)return assertCanControlScoreboard(role,row.sede_id);const hash=createHash('sha256').update(req.params.token).digest('hex');if(row.control_token_revoked_at!=null||row.control_token_hash!==hash)throw Object.assign(new Error('Token de control revocado'),{status:401});return readNationsControlDelegation(client,row,{lock:true,actorId:'control-token:'+hash});},requestId:req.body?.requestId,epoch:req.body?.epoch,actorId:user?.id|| (req.params?.token ? 'control-token:'+createHash('sha256').update(req.params.token).digest('hex'):null)});
   async function tryGamesMutation(partido,kind,context,team){
     if(!nationsGamesEnabled){if(context?.epoch!==undefined)throw Object.assign(new Error('GAME_STORE_UNAVAILABLE'),{code:'GAME_STORE_UNAVAILABLE',status:503});return null;}
     if(!nationsGamesPool)throw Object.assign(new Error('GAME_STORE_UNAVAILABLE'),{code:'GAME_STORE_UNAVAILABLE',status:503});
@@ -595,10 +596,8 @@ export function mountScoreboardRoutes(app, {
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
       assertCanControlScoreboard(role, partido.sede_id);
 
-      const { controlToken, controlTokenCreatedAt } = await persistControlTokenForScoreboard(
-        supabaseAdmin,
-        partido.id,
-      );
+      const issued=nationsGamesEnabled&&nationsGamesPool?await issueNationsControlToken({pool:nationsGamesPool,scoreboardId:partido.id,issuerId:user.id}):null;
+      const { controlToken, controlTokenCreatedAt } = issued||await persistControlTokenForScoreboard(supabaseAdmin,partido.id);
 
       return res.json({
         ok: true,
