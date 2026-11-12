@@ -37,7 +37,10 @@
     "fipa_delegation_capacity",
     "fipa_minor_age",
     "fipa_eligibility_requirements",
-    "fipa_required_fields"
+    "fipa_required_fields",
+    "modalidad_plantel",
+    "plan_nations",
+    "es_prueba"
   ],
   "equipos": [
     "id",

@@ -20,6 +20,7 @@ import {
   applyHistorialPuntoSnapshot,
 } from '../utils/scoreboardLogic.js';
 import { sendHttpError } from '../lib/httpErrors.js';
+import { isDecidingSuperTiebreak } from '../src/scoreboard/napoliScoringPolicy.js';
 import { assertScoreboardScoringSupported } from '../src/scoreboard/scoreboardSportGuard.js';
 import { scoreboardControlWriteRateLimit } from '../lib/rateLimit.js';
 import { mapScoreboardJugadoresTempPublic } from '../lib/scoreboardPublic.js';
@@ -394,7 +395,7 @@ async function loadVenueContext(supabaseAdmin, sedeId) {
 
 async function enrichPartidoWithVenue(supabaseAdmin, partido) {
   const ctx = await loadVenueContext(supabaseAdmin, partido?.sede_id);
-  return enrichPartidoResponse(await safeNationsScoreboardProjection(supabaseAdmin,partido), ctx);
+  return enrichPartidoResponse(await safeNationsScoreboardProjection(supabaseAdmin,partido), ctx, await assertScoreboardScoringSupported(supabaseAdmin, partido, { readOnly: true }));
 }
 
 async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null) {
@@ -405,7 +406,7 @@ async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null
       sedeNombre: partido?.sede_nombre ?? null,
       canchas: [],
     };
-  const payload = enrichPartidoResponse(supabaseAdmin?await safeNationsScoreboardProjection(supabaseAdmin,partido):partido, ctx);
+  const payload = enrichPartidoResponse(supabaseAdmin?await safeNationsScoreboardProjection(supabaseAdmin,partido):partido, ctx, supabaseAdmin ? await assertScoreboardScoringSupported(supabaseAdmin, partido, { readOnly: true }) : null);
   io.to(`scoreboard:${partidoId}`).emit('scoreboard:update', payload);
 }
 
@@ -483,8 +484,8 @@ export function mountScoreboardRoutes(app, {
     if(!tracked.rows.length){if(context?.epoch!==undefined)throw Object.assign(new Error('GAME_TRACKING_MISSING'),{code:'GAME_TRACKING_MISSING',status:409});return null;}
     const out=await runGamesMutation({pool:nationsGamesPool,scoreboardId:partido.id,...context,kind,team,prepare:async locked=>{
       if(['reset','tiebreak'].includes(kind))assertScoreboardMutable(locked);else assertScoreboardScoringActive(locked);
-      await assertScoreboardScoringSupported(supabaseAdmin,locked);
-      if(kind==='point'){const history=buildHistorialPuntoSnapshot(locked,team);registrarPunto(locked,team);return {next:locked,history};}
+      const scoringPolicy = await assertScoreboardScoringSupported(supabaseAdmin,locked);
+      if(kind==='point'){const history=buildHistorialPuntoSnapshot(locked,team);registrarPunto(locked,team,scoringPolicy);return {next:locked,history};}
       if(kind==='reset'){resetPartidoCompleto(locked);return {next:locked};}
       if(kind==='tiebreak'){iniciarTiebreak(locked);return {next:locked};}
       const entry=await fetchUltimoHistorialPunto(supabaseAdmin,locked.id);
@@ -502,11 +503,11 @@ export function mountScoreboardRoutes(app, {
   async function handleRegistrarPunto(partido, equipo, context) {
     const tracked=await tryGamesMutation(partido,'point',context,equipo);if(tracked)return tracked;
     assertScoreboardScoringActive(partido);
-    await assertScoreboardScoringSupported(supabaseAdmin, partido);
+    const scoringPolicy = await assertScoreboardScoringSupported(supabaseAdmin, partido);
     const expectedUpdatedAt = partido.updated_at;
     const estadoAntes = partido.estado;
     const history = buildHistorialPuntoSnapshot(partido, equipo);
-    registrarPunto(partido, equipo);
+    registrarPunto(partido, equipo, scoringPolicy);
     const saved = await savePartido(supabaseAdmin, partido, expectedUpdatedAt, { kind: 'point', history });
     await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
     await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
@@ -928,8 +929,10 @@ export function mountScoreboardRoutes(app, {
       if (!auth.user) return res.status(auth.status || 401).json({ error: 'No autorizado' });
       const marker = await fetchPartido(supabaseAdmin, req.params.id);
       assertCanControlScoreboard(await resolveAuthRole(auth.user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), marker.sede_id);
-      await assertScoreboardScoringSupported(supabaseAdmin, marker);
+      const scoringPolicy = await assertScoreboardScoringSupported(supabaseAdmin, marker);
+      if (isDecidingSuperTiebreak(marker, scoringPolicy) || marker.historial_sets?.some(set => set.type === 'super_tiebreak')) throw Object.assign(new Error('Super tie-break corrections require point undo.'), { status: 409, code: 'SUPER_TIEBREAK_POINT_UNDO_REQUIRED' });
       const input = validatePartialCorrection(req.body);
+      if (isDecidingSuperTiebreak({ ...marker, ...input.state }, scoringPolicy)) throw Object.assign(new Error('Super tie-break corrections require point undo.'), { status: 409, code: 'SUPER_TIEBREAK_POINT_UNDO_REQUIRED' });
       const { data, error } = await supabaseAdmin.rpc('scoreboard_correct_partial', { p_id: marker.id, p_expected: input.updatedAt, p_actor: auth.user.id, p_reason: input.reason, p_score: input.state });
       if (error?.code === '55000') return res.status(409).json({error:'El partido no permite corregir el parcial en su estado actual.'});
       if (error) throw error;

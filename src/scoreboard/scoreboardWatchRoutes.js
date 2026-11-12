@@ -56,9 +56,9 @@ export function installScoreboardWatchRoutes(app, { db, boardColumns, authentica
     const before=row.estado, updatedAt=row.updated_at;
     assertScoreboardMutable(row);
     if(['punto','deshacer'].includes(action.command)) assertScoreboardScoringActive(row);
-    if(action.command!=='cronometro'||action.accion==='reset') await assertScoreboardScoringSupported(db,row);
+    const scoringPolicy = action.command!=='cronometro'||action.accion==='reset' ? await assertScoreboardScoringSupported(db,row) : null;
     let kind='update',history=null,historyId=null;
-    if(action.command==='punto') { kind='point';history=buildHistorialPuntoSnapshot(row,action.equipo);registrarPunto(row,action.equipo); }
+    if(action.command==='punto') { kind='point';history=buildHistorialPuntoSnapshot(row,action.equipo);registrarPunto(row,action.equipo,scoringPolicy); }
     else if(action.command==='deshacer') {
       if(!row.historial_puntos?.length) throw Object.assign(new Error('No hay puntos para deshacer'),{status:400});
       const entry=await fetchHistory(row.id);

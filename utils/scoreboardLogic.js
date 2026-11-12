@@ -1,3 +1,4 @@
+import { isDecidingSuperTiebreak, isNapoliGroupsPolicy } from '../src/scoreboard/napoliScoringPolicy.js';
 import { applyScoreboardVenueLabels } from '../lib/scoreboardVenueLabels.js';
 
 const SCORE_ADVANTAGE = 45;
@@ -216,7 +217,11 @@ export function applyHistorialPuntoSnapshot(partido, entry) {
   return partido;
 }
 
-export function registrarPunto(partido, equipo) {
+export function registrarPunto(partido, equipo, scoringPolicy = null) {
+  const decidingSuper = isDecidingSuperTiebreak(partido, scoringPolicy);
+  if (decidingSuper && ![partido.score_a, partido.score_b].every(v => Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) < 10)) {
+    throw Object.assign(new Error('Super tie-break state requires review'), { status: 409 });
+  }
   if (!['A', 'B'].includes(equipo)) {
     throw Object.assign(new Error('Equipo inválido'), { status: 400 });
   }
@@ -240,7 +245,19 @@ export function registrarPunto(partido, equipo) {
     equipo,
   });
 
-  if (partido.es_tiebreak) {
+  if (decidingSuper) {
+    partido.es_tiebreak = true;
+    partido.score_a = normalizePointScore(partido.score_a);
+    partido.score_b = normalizePointScore(partido.score_b);
+    if (equipo === 'A') partido.score_a += 1; else partido.score_b += 1;
+    const pointsA = partido.score_a, pointsB = partido.score_b;
+    if ((pointsA + pointsB) % 2 === 1) partido.saque_actual = toggleSaque(partido.saque_actual);
+    if (Math.max(pointsA, pointsB) >= 10) {
+      const winner = pointsA > pointsB ? 'A' : 'B';
+      finishSet(partido, winner, winner === 'A' ? 1 : 0, winner === 'B' ? 1 : 0);
+      Object.assign(partido.historial_sets[2], { type: 'super_tiebreak', points_a: pointsA, points_b: pointsB, target: 10, win_by: 1 });
+    }
+  } else if (partido.es_tiebreak) {
     partido.score_a = normalizePointScore(partido.score_a);
     partido.score_b = normalizePointScore(partido.score_b);
     winTiebreakPoint(partido, equipo);
@@ -402,8 +419,9 @@ function applyJerseysToJugadores(jugadores, jerseyValues) {
   });
 }
 
-export function enrichPartidoResponse(partido, venueContext = {}) {
+export function enrichPartidoResponse(partido, venueContext = {}, scoringPolicy = null) {
   const score = formatScoreDisplay(partido.score_a, partido.score_b, partido.es_tiebreak);
+  if (isDecidingSuperTiebreak(partido, scoringPolicy)) Object.assign(score, { displayA: String(partido.score_a), displayB: String(partido.score_b), mode: 'super_tiebreak' });
   const cronometroSegundos = getCronometroSegundos(partido);
   const equipo_a_jugadores = applyJerseysToJugadores(partido.equipo_a_jugadores, [
     partido.jersey_a1,
@@ -429,6 +447,7 @@ export function enrichPartidoResponse(partido, venueContext = {}) {
 
   return {
     ...withVenue,
+    scoring_policy: isNapoliGroupsPolicy(scoringPolicy) ? { ...scoringPolicy } : null,
     display: {
       ...score,
       cronometro: formatCronometro(cronometroSegundos),
