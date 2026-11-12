@@ -2,7 +2,19 @@
 -- Contract 20261111 §2/§3/§4. Server-only. No PII columns.
 begin;
 
-create table if not exists public.crm_welcome_ledger (
+-- Fresh-only: existing data/schema/ACL must be reviewed, never silently changed.
+do $welcome_fresh$
+begin
+  if to_regclass('public.crm_welcome_ledger') is not null then
+    raise exception 'WELCOME_LEDGER_ALREADY_EXISTS_REVIEW_REQUIRED';
+  end if;
+  if current_user <> 'postgres' then
+    raise exception using errcode = '42501', message = 'WELCOME_LEDGER_OWNER_REQUIRED';
+  end if;
+end
+$welcome_fresh$;
+
+create table public.crm_welcome_ledger (
   attempt_id uuid primary key default gen_random_uuid(),
   contact_id uuid not null references public.crm_contacts(id) on delete restrict,
   purpose text not null check (purpose in ('welcome')),
@@ -27,7 +39,7 @@ create table if not exists public.crm_welcome_ledger (
 );
 
 alter table public.crm_welcome_ledger enable row level security;
-revoke all on public.crm_welcome_ledger from public, anon, authenticated;
+revoke all on public.crm_welcome_ledger from public, anon, authenticated, service_role;
 grant select, insert, update on public.crm_welcome_ledger to service_role;
 
 comment on table public.crm_welcome_ledger is
