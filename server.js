@@ -304,7 +304,7 @@ import {
 import { revertirPadcoinsParticipacionPorReserva } from './src/padcoins/matchParticipationPadcoinsReversalService.js';
 import { isReservaNoShow } from './src/padcoins/padcoinsReservasService.js';
 import {createScoreboardReadRateLimit,createScoreboardVerifiedReadResolver} from './lib/scoreboardVerifiedReadRateLimit.js';
-import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
+import { mountScoreboardRoutes, initScoreboardSocket, createNationsPublicScoreboardPublisher } from './routes/scoreboard.js';
 import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
 import { registerNationsScoreboardGenerationRoute } from './routes/nationsScoreboardGeneration.js';
 import { resolveScoreboardsMapForTorneoPartidos } from './src/scoreboard/scoreboardTorneoPartidoResolver.js';
@@ -1340,7 +1340,7 @@ mountLicenseRequestRoutes(app, {
 // Candidate is OFF until schema, recovery and end-to-end gates are verified.
 const nationsGamesEnabled = process.env.NATIONS_GAMES_ENABLED === 'true';
 if (nationsGamesEnabled && !pgPool) throw new Error('NATIONS_GAMES_REQUIRES_POSTGRES');
-registerNationsMarkerDurableRoutes(app,{pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser,enabled:nationsGamesEnabled});
+registerNationsMarkerDurableRoutes(app,{pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser,enabled:nationsGamesEnabled,onCommitted:createNationsPublicScoreboardPublisher({io,supabaseAdmin,pool:pgPool})});
 const stopNationsGamesRecovery = startGamesFinalizationRecovery({pool:pgPool,db:supabaseAdmin,enabled:nationsGamesEnabled,onResult:result=>{
   if(['blocked','pending'].includes(result.status))console.warn('[nations-games-recovery]',{status:result.status,reason:result.reason,scoreboardId:result.scoreboardId});
 }});

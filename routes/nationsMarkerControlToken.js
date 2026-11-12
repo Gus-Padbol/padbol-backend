@@ -24,7 +24,7 @@ async function tokenBoard(q,token,id=null){
   return row;
 }
 /** Same existing control capability; no user identity, role, client-supplied scoreboard or new token kind. */
-export function createNationsMarkerControlTokenRouter({pool}){
+export function createNationsMarkerControlTokenRouter({pool,onCommitted=null}){
   return async(req,res)=>{
     res.setHeader('Cache-Control','no-store');
     try{
@@ -59,7 +59,7 @@ export function createNationsMarkerControlTokenRouter({pool}){
       const forwarded=Object.create(req);
       forwarded.body=body;
       forwarded.url=`/api/nations/marker/${encodeURIComponent(id)}${route[2]?'/'+route[2]:''}${url.search}`;
-      return await createNationsMarkerDurableRouter({pool,authorize,present:presentControlMarker})(forwarded,res);
+      return await createNationsMarkerDurableRouter({pool,authorize,present:presentControlMarker,onCommitted})(forwarded,res);
     }catch(e){return res.writeHead(e.status||503,{'content-type':'application/json'}).end(JSON.stringify({code:e.code||'CONTROL_UNAVAILABLE'}));}
   };
 }

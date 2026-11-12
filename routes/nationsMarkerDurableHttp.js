@@ -10,7 +10,8 @@ import {executeNationsMarkerCommand} from '../lib/torneos/nationsMarkerCommands.
 const sendJson=(res,code,obj)=>res.writeHead(code,{'content-type':'application/json'}).end(JSON.stringify(obj));
 const hasAuthority=(b)=>['actor','actorId','clock','serverAt','serverNow','startedAt'].some(k=>Object.prototype.hasOwnProperty.call(b||{},k));
 /** Factory aislado; OFF por defecto: solo se monta si el instalador lo decide. */
-export function createNationsMarkerDurableRouter({pool,authorize,present=value=>value}) {
+export function createNationsMarkerDurableRouter({pool,authorize,present=value=>value,onCommitted=null}) {
+  const committed=async id=>{try{await onCommitted?.(id);}catch{/* Publication failure never changes a committed command outcome. */}};
   const send=(res,code,obj)=>sendJson(res,code,present(obj));
   const store=new (withGamesLedgerRead(NationsMarkerPostgresStore))({pool});
   return async function handler(req,res){
@@ -52,17 +53,20 @@ export function createNationsMarkerDurableRouter({pool,authorize,present=value=>
       }
       if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
       if(!body.idempotencyKey)return send(res,400,{code:'IDEMPOTENCY_KEY_REQUIRED'});
-      if(m[2]==='restart'){const r=await restartGamesTracking({pool,authorize,loadContext:(c,id)=>loadNationsMarkerMatchContext(c,id,{lock:true}),clockSnapshot,req,scoreboardId,requestId:body.requestId,epoch:body.epoch});return send(res,200,r);}
+      if(m[2]==='restart'){const r=await restartGamesTracking({pool,authorize,loadContext:(c,id)=>loadNationsMarkerMatchContext(c,id,{lock:true}),clockSnapshot,req,scoreboardId,requestId:body.requestId,epoch:body.epoch});await committed(scoreboardId);return send(res,200,r);}
       if(m[2]==='start'){
         const r=await startNationsMarkerTracking({pool,authorize,req,scoreboardId,idempotencyKey:body.idempotencyKey,payload:body.payload||{}});
+        await committed(scoreboardId);
         return send(res,200,{startedAt:r.startedAt,revision:r.revision,receipt:r.receipt,deduplicated:r.deduplicated});
       }
       if(m[2]?.startsWith('team/')){
         const r=await executeNationsMarkerCommand({pool,authorize,req,scoreboardId,command:body.type,teamId:m[3],eventId:body.eventId,idempotencyKey:body.idempotencyKey,expectedRevision:body.expectedRevision,body});
+        await committed(scoreboardId);
         return send(res,200,r);
       }
       if(m[2]==='global/commands'){
         const r=await executeNationsMarkerCommand({pool,authorize,req,scoreboardId,command:body.type,idempotencyKey:body.idempotencyKey,expectedRevision:body.expectedRevision,body});
+        await committed(scoreboardId);
         return send(res,200,r);
       }
       return send(res,400,{code:'ROUTE_INVALID'});
