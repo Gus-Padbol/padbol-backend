@@ -303,6 +303,7 @@ import {
 } from './src/padcoins/padcoinsPenaltiesService.js';
 import { revertirPadcoinsParticipacionPorReserva } from './src/padcoins/matchParticipationPadcoinsReversalService.js';
 import { isReservaNoShow } from './src/padcoins/padcoinsReservasService.js';
+import {createScoreboardReadRateLimit,createScoreboardVerifiedReadResolver} from './lib/scoreboardVerifiedReadRateLimit.js';
 import { mountScoreboardRoutes, initScoreboardSocket } from './routes/scoreboard.js';
 import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
 import { registerNationsScoreboardGenerationRoute } from './routes/nationsScoreboardGeneration.js';
@@ -403,7 +404,7 @@ app.use(express.json({
   },
 }));
 
-app.use(publicReadRateLimitIfMatch);
+app.use(createScoreboardReadRateLimit({resolve:createScoreboardVerifiedReadResolver({getPool:()=>pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser})}));
 // Legacy compatibility URLs must be registered before the generic
 // `/api/torneos/:id` route, otherwise Express treats `resumen-stats` as an id.
 mountAdminLegacyAliases(app);
