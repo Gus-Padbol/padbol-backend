@@ -7,10 +7,11 @@ import {clockSnapshot, clockMismatch} from '../lib/torneos/nationsMarkerClockCon
 import {computeParticipation} from '../lib/torneos/nationsParticipationMarker.js';
 import {readSubstitutionWindow} from '../lib/torneos/nationsChangeEnds.js';
 import {executeNationsMarkerCommand} from '../lib/torneos/nationsMarkerCommands.js';
-const send=(res,code,obj)=>res.writeHead(code,{'content-type':'application/json'}).end(JSON.stringify(obj));
+const sendJson=(res,code,obj)=>res.writeHead(code,{'content-type':'application/json'}).end(JSON.stringify(obj));
 const hasAuthority=(b)=>['actor','actorId','clock','serverAt','serverNow','startedAt'].some(k=>Object.prototype.hasOwnProperty.call(b||{},k));
 /** Factory aislado; OFF por defecto: solo se monta si el instalador lo decide. */
-export function createNationsMarkerDurableRouter({pool,authorize}) {
+export function createNationsMarkerDurableRouter({pool,authorize,present=value=>value}) {
+  const send=(res,code,obj)=>sendJson(res,code,present(obj));
   const store=new (withGamesLedgerRead(NationsMarkerPostgresStore))({pool});
   return async function handler(req,res){
     try{
