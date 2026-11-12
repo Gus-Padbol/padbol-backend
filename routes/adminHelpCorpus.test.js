@@ -30,3 +30,9 @@ test('Nations operator guidance stays in the existing protected article in all l
   assert.doesNotMatch(JSON.stringify(detail.body),/Nations|Sustituye|game impar/);
  }
 });
+
+test('referee help follows the actual private-link and named-player consumer panel without changing article authority',()=>{
+ const a=articles.find(a=>a.id==='admin-marcador');assert.deepEqual(a.allowedRoles,['admin_club','super_admin']);
+ for(const lang of ['es','en','pt']){const text=a.translations[lang].steps.join(' ');for(const label of ['Crear enlace del árbitro','Iniciar partido','Registrar cambio','Reintentar el mismo intento','Cerrar seguimiento del partido terminado'])assert.ok(text.includes(label),`${lang}: ${label}`);assert.match(text,/1, 3, 5, 7/);assert.match(text,/tie-break/);assert.doesNotMatch(text,/UUID|JSON|SQL|https?:\/\/|control\//i);assert.ok(a.translations[lang].steps[9].indexOf('Cerrar seguimiento del partido terminado')>0);}
+ assert.match(a.translations.es.steps[2],/privado.*sólo.*árbitro responsable/);assert.match(a.translations.en.steps[2],/private.*only.*responsible referee/);assert.match(a.translations.pt.steps[2],/privado.*apenas.*árbitro responsável/);
+});
