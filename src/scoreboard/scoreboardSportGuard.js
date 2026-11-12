@@ -1,4 +1,4 @@
-import { resolvePersistedScoringPolicy } from './napoliScoringPolicy.js';
+import { resolvePersistedScoringPolicy, isIsolatedQaScoringCandidate } from './napoliScoringPolicy.js';
 const PICKLEBALL_UNAVAILABLE = 'El marcador de Pickleball todavía no está disponible para modificar la puntuación, el saque o reiniciar el partido.';
 const SPORT_UNVERIFIED = 'No se pudo verificar el deporte del partido. Intentá nuevamente.';
 
@@ -6,10 +6,10 @@ function conflict(message) {
   return Object.assign(new Error(message), { status: 409 });
 }
 
-async function readLinkedRow(db, table, columns, id, optional = false) {
+async function readLinkedRow(db, table, columns, id, optional = false, key = 'id') {
   let result;
   try {
-    result = await db.from(table).select(columns).eq('id', id).maybeSingle();
+    result = await db.from(table).select(columns).eq(key, id).maybeSingle();
   } catch {
     throw conflict(SPORT_UNVERIFIED);
   }
@@ -52,7 +52,13 @@ export async function assertScoreboardScoringSupported(db, scoreboard, { readOnl
   for (const id of tournamentIds) {
     const tournament = await readLinkedRow(db, 'torneos', 'id, deporte, modalidad_plantel, plan_nations, es_prueba', id, readOnly);
     if (!readOnly) assertNotPickleball(tournament);
-    if (tournamentIds.size === 1) policy = resolvePersistedScoringPolicy(tournament, linkedMatch);
+    if (tournamentIds.size === 1) {
+      // Private full plan is authoritative; its public summary deliberately omits custom config.
+      // This lookup is never performed in production or for non-QA tournaments.
+      const privatePlan = isIsolatedQaScoringCandidate(tournament)
+        ? await readLinkedRow(db, 'torneo_nations_planes', 'plan', id, true, 'torneo_id') : null;
+      policy = resolvePersistedScoringPolicy(tournament, linkedMatch, process.env, privatePlan?.plan);
+    }
   }
   if (!readOnly && tournamentIds.size > 1 && tournamentIds.has('57')) throw conflict(SPORT_UNVERIFIED);
   return policy;
