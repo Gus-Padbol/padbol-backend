@@ -4559,6 +4559,7 @@ async function buildAuthenticatedPerfilPayload(perfil, user, deportes, identidad
     telefono: perfil.telefono ?? '',
     nivel: perfil.nivel ?? '',
     lateralidad: perfil.lateralidad ?? '',
+    pierna_habil: perfil.pierna_habil ?? '',
     posicion_cancha: perfil.posicion_cancha ?? null,
     pais: perfil.pais ?? '',
     ciudad: perfil.ciudad ?? null,
@@ -4622,6 +4623,7 @@ async function handlePutAuthenticatedPerfil(req, res) {
       telefono,
       nivel,
       lateralidad,
+      pierna_habil: piernaHabil,
       posicion_cancha: posicionCancha,
       pais,
       username,
@@ -4641,6 +4643,11 @@ async function handlePutAuthenticatedPerfil(req, res) {
     if (telefono != null) updatePayload.telefono = telefono;
     if (nivel != null) updatePayload.nivel = nivel;
     if (lateralidad != null) updatePayload.lateralidad = lateralidad;
+    if (piernaHabil !== undefined) {
+      const foot = String(piernaHabil ?? '').trim().toLowerCase();
+      if (foot && !['derecha','izquierda','ambas'].includes(foot)) return res.status(400).json({error:'pierna_habil inválida'});
+      updatePayload.pierna_habil = foot || null;
+    }
     if (posicionCancha != null) {
       const trimmed = String(posicionCancha).trim();
       updatePayload.posicion_cancha = trimmed || null;
