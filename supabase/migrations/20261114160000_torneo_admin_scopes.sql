@@ -39,8 +39,9 @@ as $$
   );
 $$;
 
-revoke all on table public.torneo_admin_scopes from anon, authenticated;
+revoke all on table public.torneo_admin_scopes from public, anon, authenticated;
 grant select on table public.torneo_admin_scopes to authenticated;
+grant select, insert, update, delete on table public.torneo_admin_scopes to service_role;
 revoke insert, update, delete, truncate on table public.torneo_admin_scopes from anon, authenticated;
 revoke all on function public.torneo_admin_scope_check(uuid, bigint, bigint) from public, anon, authenticated;
 grant execute on function public.torneo_admin_scope_check(uuid, bigint, bigint) to service_role;
