@@ -5,6 +5,7 @@ import {ensureScoreboardForCompletedBracketPartido} from '../lib/torneos/bracket
 import {assertTournamentTeamsSportReady} from '../lib/tournamentParticipantsReadiness.js';
 import {sendHttpError} from '../lib/httpErrors.js';
 import {isScoreboardTorneoPartidoActivo} from '../src/scoreboard/scoreboardTorneoPartidoResolver.js';
+import {isNationsEvent} from '../lib/torneos/nationsPublicAccess.js';
 
 const invalid=(message,status=409)=>Object.assign(new Error(message),{status});
 async function read(query){const {data,error}=await query;if(error)throw error;return data;}
@@ -20,15 +21,15 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin,ensureS
  const load=async(req,res)=>{
   const auth=await requireTorneoAdmin(req,res,req.params.id);if(!auth)return null;
   const torneo=await read(db.from('torneos').select('*').eq('id',Number(req.params.id)).single());
-  if(torneo.plan_nations)throw invalid('Usa la programación y el sorteo propios de Nations Cup.');
   const equipos=await read(db.from('equipos').select('*').eq('torneo_id',Number(torneo.id)).order('id'));
   return {auth,torneo,equipos};
  };
  const route=(method,path,fn)=>app[method](path,async(req,res,next)=>{try{const c=await load(req,res);if(c && path.endsWith('/generar-partidos') && !['knockout','round_robin'].includes(c.torneo.tipo_torneo))return next();if(c)await fn(req,res,c);}catch(e){sendHttpError(res,e);}});
  for(const path of ['/api/torneos/:id/generar-partidos','/api/torneos/:id/planificar-fixture'])route('post',path,async(req,res,{auth,torneo,equipos})=>{
+  if(isNationsEvent(torneo))throw invalid('Usa la programación y el sorteo propios de Nations Cup.');
   res.json(await persistTournamentPlan(db,{torneo,equipos,actorId:auth.user.id,origin:req.body?.origen??'automatico',pairings:req.body?.cruces}));
  });
- route('post','/api/torneos/:id/iniciar',async(req,res,{auth,torneo,equipos})=>res.json(await startPlannedTournament(db,{torneo,equipos,actorId:auth.user.id})));
+ route('post','/api/torneos/:id/iniciar',async(req,res,{auth,torneo,equipos})=>{if(isNationsEvent(torneo))throw invalid('Usa el inicio propio de Nations Cup.');return res.json(await startPlannedTournament(db,{torneo,equipos,actorId:auth.user.id}));});
  route('get','/api/torneos/:id/partidos/:partidoId/operacion',async(req,res,{torneo,equipos})=>{
   const partido=await read(db.from('partidos').select('*').eq('id',Number(req.params.partidoId)).eq('torneo_id',Number(torneo.id)).single());
   if(partido.fecha_hora&&!/(Z|[+-]\d\d:\d\d)$/.test(partido.fecha_hora))partido.fecha_hora+='Z';

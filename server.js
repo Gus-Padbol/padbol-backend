@@ -2215,6 +2215,9 @@ app.put('/api/torneos/:id', async (req, res) => {
     });
     const currentAccess=resolveTorneoAdminAccess(auth,current.sede_id);
     if(!currentAccess.allowed){sendTorneoAdminForbidden(res,auth,currentAccess.reason);return;}
+    if (patch.estado === 'en_curso' && isNationsEvent(current)) {
+      return res.status(409).json({code:'NATIONS_ATOMIC_START_REQUIRED',error:'Inicia este torneo desde Nations Cup para conservar zonas, reglas y siembra.'});
+    }
     if (patch.estado === 'en_curso' && !isNationsEvent(current) && !['en_curso','activo'].includes(current.estado)) {
       const {data:equipos,error:teamError}=await supabaseAdmin.from('equipos').select('*').eq('torneo_id',Number(id)).order('id');
       if(teamError)throw teamError;
@@ -2429,7 +2432,7 @@ function mapLegacyRankingPublicRow(entry) {
 app.get('/api/jugadores/:userId/torneos-puntos',async(req,res)=>{try{const ap=await fetchNationsApprovalMap(supabaseAdmin,[]);const items=await loadPublishedNationalPoints(supabaseAdmin,{userId:req.params.userId,isRevealed:(t,now)=>isNationsPublicRevealed(t,now,ap.get(Number(t.id))===true)});res.json({ok:true,jugador_id:req.params.userId,items});}catch(error){sendHttpError(res,error);}});
 
 async function assertNationsLegacyEventRead(req,torneoId,{roster=false}={}) {
- const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,modalidad_plantel,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneoId)).maybeSingle();if(event.error)throw event.error;if(!event.data||!isNationsEvent(event.data))return;
+ const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,modalidad_plantel,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneoId)).maybeSingle();if(event.error)throw event.error;if(!event.data)throw Object.assign(new Error('Torneo no encontrado'),{status:404,code:'TORNEO_NOT_FOUND'});if(!isNationsEvent(event.data))return;
  const audience=await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},event.data);
  if(audience.admin||!roster&&audience.revealed)return {event:event.data,audience};
  throw Object.assign(new Error(roster?'Consulta los planteles mediante su acceso autorizado.':'El sorteo todavía no está publicado.'),{status:403,code:'NATIONS_PRIVATE_DATA'});
