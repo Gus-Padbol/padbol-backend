@@ -24,7 +24,7 @@ import { verifiedSuspendedBookings } from './lib/verifiedSuspendedBookings.js';
 import { horasAnticipacionReserva } from './lib/reservaCancelacionTiming.js';
 import { confirmReservaGratuita } from './lib/reservaGratuita.js';
 import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
-import { isNationsPublicRevealed, resolveNationsReadAudience, projectNationsMatch, rejectLegacyNationsStandings, rejectConfiguredNationsDeletion } from './lib/torneos/nationsPublicAccess.js';
+import { isNationsPublicRevealed, isNationsEvent, resolveNationsReadAudience, projectNationsMatch, rejectLegacyNationsStandings, rejectConfiguredNationsDeletion } from './lib/torneos/nationsPublicAccess.js';
 import { mountPointsConfigRoutes } from './routes/pointsConfig.js';
 import { loadPointsPolicy, buildPointsRows } from './lib/torneos/pointsPolicyService.js';
 import { mountNationsCupRoutes } from './routes/nationsCup.js';
@@ -2215,7 +2215,7 @@ app.put('/api/torneos/:id', async (req, res) => {
     });
     const currentAccess=resolveTorneoAdminAccess(auth,current.sede_id);
     if(!currentAccess.allowed){sendTorneoAdminForbidden(res,auth,currentAccess.reason);return;}
-    if (patch.estado === 'en_curso' && !current.plan_nations && !['en_curso','activo'].includes(current.estado)) {
+    if (patch.estado === 'en_curso' && !isNationsEvent(current) && !['en_curso','activo'].includes(current.estado)) {
       const {data:equipos,error:teamError}=await supabaseAdmin.from('equipos').select('*').eq('torneo_id',Number(id)).order('id');
       if(teamError)throw teamError;
       const started=await startPlannedTournament(supabaseAdmin,{torneo:current,equipos,actorId:auth.user.id});
@@ -2243,7 +2243,7 @@ app.delete('/api/torneos/:id', async (req, res) => {
     const auth = await requireTorneoAdminByTorneoId(req, res, id);
     if (!auth) return;
 
-    const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,updated_at').eq('id',id).maybeSingle();if(event.error)throw event.error;
+    const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,modalidad_plantel,updated_at').eq('id',id).maybeSingle();if(event.error)throw event.error;
     if(!event.data)return res.status(404).json({error:'Torneo no encontrado'});
     const currentAccess=resolveTorneoAdminAccess(auth,event.data.sede_id);
     if(!currentAccess.allowed){sendTorneoAdminForbidden(res,auth,currentAccess.reason);return;}
@@ -2299,7 +2299,7 @@ app.post('/api/torneos/:id/generar-partidos', async (req, res) => {
       return res.status(400).json({ error: 'El torneo ya tiene partidos generados' });
     }
 
-    if (torneo.plan_nations) return res.status(409).json({code:'NATIONS_ATOMIC_DRAW_REQUIRED',error:'Usa el sorteo de Nations Cup para conservar las tres zonas y sus reglas.'});
+    if (isNationsEvent(torneo)) return res.status(409).json({code:'NATIONS_ATOMIC_DRAW_REQUIRED',error:'Usa el sorteo de Nations Cup para conservar las tres zonas y sus reglas.'});
     let partidosData;
     switch (torneo.tipo_torneo) {
       case 'round_robin':
@@ -2429,7 +2429,7 @@ function mapLegacyRankingPublicRow(entry) {
 app.get('/api/jugadores/:userId/torneos-puntos',async(req,res)=>{try{const ap=await fetchNationsApprovalMap(supabaseAdmin,[]);const items=await loadPublishedNationalPoints(supabaseAdmin,{userId:req.params.userId,isRevealed:(t,now)=>isNationsPublicRevealed(t,now,ap.get(Number(t.id))===true)});res.json({ok:true,jugador_id:req.params.userId,items});}catch(error){sendHttpError(res,error);}});
 
 async function assertNationsLegacyEventRead(req,torneoId,{roster=false}={}) {
- const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneoId)).maybeSingle();if(event.error)throw event.error;if(!event.data?.plan_nations)return;
+ const event=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,modalidad_plantel,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneoId)).maybeSingle();if(event.error)throw event.error;if(!event.data||!isNationsEvent(event.data))return;
  const audience=await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},event.data);
  if(audience.admin||!roster&&audience.revealed)return {event:event.data,audience};
  throw Object.assign(new Error(roster?'Consulta los planteles mediante su acceso autorizado.':'El sorteo todavía no está publicado.'),{status:403,code:'NATIONS_PRIVATE_DATA'});
@@ -2592,7 +2592,7 @@ app.post('/api/torneos/:id/finalizar', async (req, res) => {
       .from('torneos').select('*').eq('id', id).single();
     if (errTorneo) throw errTorneo;
 
-    if(torneo.plan_nations) return res.status(409).json({code:'NATIONS_ATOMIC_CLOSURE_REQUIRED',error:'Finaliza desde Nations Cup para conservar la siembra y las posiciones aprobadas.'});
+    if(isNationsEvent(torneo)) return res.status(409).json({code:'NATIONS_ATOMIC_CLOSURE_REQUIRED',error:'Finaliza desde Nations Cup para conservar la siembra y las posiciones aprobadas.'});
     // Load equipos & partidos
     const [{ data: equipos, error: errEq }, { data: partidos, error: errPart }] = await Promise.all([
       supabase.from('equipos').select('*').eq('torneo_id', parseInt(id)),
@@ -2903,7 +2903,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     const { torneo_id } = req.params;
     const tid = parseInt(torneo_id, 10);
     const eventRead = await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos,modalidad_plantel').eq('id',tid).maybeSingle();
-    if(eventRead.error)throw eventRead.error;
+    if(eventRead.error)throw eventRead.error;if(!eventRead.data)return res.status(404).json({error:'Torneo no encontrado'});
     const audience=eventRead.data?.plan_nations||eventRead.data?.modalidad_plantel==='selecciones'?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
     const enrollmentAdmin=audience?audience.admin:mayReadTournamentEnrollment(await qaCatalogAudience(req),eventRead.data);
     if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
@@ -3097,7 +3097,7 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
     const eventRead=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,modalidad_plantel,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneo_id)).maybeSingle();
-    if(eventRead.error)throw eventRead.error;
+    if(eventRead.error)throw eventRead.error;if(!eventRead.data)return res.status(404).json({error:'Torneo no encontrado'});
     const audience=eventRead.data?.plan_nations||eventRead.data?.modalidad_plantel==='selecciones'?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
     if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.memberIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
     const { data, error } = await supabaseAdmin
