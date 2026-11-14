@@ -3109,11 +3109,18 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
     if (error) throw error;
 
     const partidos = (data || []).filter(m=>!audience||audience.admin||audience.revealed||[...audience.captainIds,...audience.memberIds].some(id=>[Number(m.equipo_a_id),Number(m.equipo_b_id)].includes(id)));
-    if(audience&&!audience.admin)return res.json(partidos.map(projectNationsMatch));
     const scoreboardMap = await resolveScoreboardsMapForTorneoPartidos(
       supabaseAdmin,
       partidos.map((partido) => partido.id),
     );
+    if(audience&&!audience.admin)return res.json(partidos.map((partido) => {
+      const scoreboard = scoreboardMap.get(Number(partido.id));
+      return projectNationsMatch({
+        ...partido,
+        scoreboard_id: scoreboard?.scoreboard_id ?? null,
+        scoreboard_estado: scoreboard?.scoreboard_estado ?? null,
+      });
+    }));
 
     res.json(partidos.map((partido) => {
       const scoreboard = scoreboardMap.get(Number(partido.id));
