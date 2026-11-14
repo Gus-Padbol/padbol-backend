@@ -2904,7 +2904,7 @@ app.get('/api/torneos/:torneo_id/equipos', async (req, res) => {
     const tid = parseInt(torneo_id, 10);
     const eventRead = await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos,modalidad_plantel').eq('id',tid).maybeSingle();
     if(eventRead.error)throw eventRead.error;
-    const audience=eventRead.data?.plan_nations?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
+    const audience=eventRead.data?.plan_nations||eventRead.data?.modalidad_plantel==='selecciones'?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
     const enrollmentAdmin=audience?audience.admin:mayReadTournamentEnrollment(await qaCatalogAudience(req),eventRead.data);
     if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
     // Fail-closed: un torneo de selecciones no expone planteles aunque plan_nations sea NULL.
@@ -3096,9 +3096,9 @@ app.post('/api/notificaciones/zona-interes', async (req, res) => {
 app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
   try {
     const { torneo_id } = req.params;
-    const eventRead=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneo_id)).maybeSingle();
+    const eventRead=await supabaseAdmin.from('torneos').select('id,sede_id,plan_nations,modalidad_plantel,fecha_inicio,horas_revelar_equipos').eq('id',Number(torneo_id)).maybeSingle();
     if(eventRead.error)throw eventRead.error;
-    const audience=eventRead.data?.plan_nations?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
+    const audience=eventRead.data?.plan_nations||eventRead.data?.modalidad_plantel==='selecciones'?await resolveNationsReadAudience(req,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)},eventRead.data):null;
     if(audience&&!audience.admin&&!audience.captainIds.length&&!audience.memberIds.length&&!audience.revealed)return res.status(403).json({error:'El sorteo todavía no está publicado.',code:'NATIONS_REVEAL_PENDING'});
     const { data, error } = await supabaseAdmin
       .from('partidos')
