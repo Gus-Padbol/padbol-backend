@@ -29,12 +29,18 @@ as $$
     where s.user_id = p_user_id
       and s.torneo_id = p_torneo_id
       and s.revoked_at is null
-      and (p_cancha_id is null or cardinality(s.cancha_ids) = 0 or p_cancha_id = any(s.cancha_ids))
+      and p_cancha_id is not null
+      and cardinality(s.cancha_ids) > 0
+      and p_cancha_id = any(s.cancha_ids)
+      and exists (select 1 from public.canchas c join public.torneos t on t.sede_id=c.sede_id where c.id=p_cancha_id and t.id=p_torneo_id)
   ) or exists (
     select 1 from public.user_roles r
     where r.user_id = p_user_id and r.role = 'super_admin'
   );
 $$;
 
-revoke all on function public.torneo_admin_scope_check(uuid, bigint, bigint) from public;
+revoke all on table public.torneo_admin_scopes from anon, authenticated;
+grant select on table public.torneo_admin_scopes to authenticated;
+revoke insert, update, delete, truncate on table public.torneo_admin_scopes from anon, authenticated;
+revoke all on function public.torneo_admin_scope_check(uuid, bigint, bigint) from public, anon, authenticated;
 grant execute on function public.torneo_admin_scope_check(uuid, bigint, bigint) to service_role;
