@@ -423,13 +423,17 @@ export function enrichPartidoResponse(partido, venueContext = {}, scoringPolicy 
   const score = formatScoreDisplay(partido.score_a, partido.score_b, partido.es_tiebreak);
   if (isDecidingSuperTiebreak(partido, scoringPolicy)) Object.assign(score, { displayA: String(partido.score_a), displayB: String(partido.score_b), mode: 'super_tiebreak' });
   const cronometroSegundos = getCronometroSegundos(partido);
-  const equipo_a_jugadores = applyJerseysToJugadores(partido.equipo_a_jugadores, [
+  // A Nations public projection that cannot prove the durable lineup must
+  // expose no players, not four placeholders that a spectator could mistake
+  // for an on-court pair.
+  const lineupUnavailable = partido.nations_lineup_status === 'unavailable';
+  const equipo_a_jugadores = lineupUnavailable ? [] : applyJerseysToJugadores(partido.equipo_a_jugadores, [
     partido.jersey_a1,
     partido.jersey_a2,
     partido.jersey_a3,
     partido.jersey_a4,
   ]);
-  const equipo_b_jugadores = applyJerseysToJugadores(partido.equipo_b_jugadores, [
+  const equipo_b_jugadores = lineupUnavailable ? [] : applyJerseysToJugadores(partido.equipo_b_jugadores, [
     partido.jersey_b1,
     partido.jersey_b2,
     partido.jersey_b3,
