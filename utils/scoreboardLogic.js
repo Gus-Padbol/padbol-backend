@@ -427,13 +427,14 @@ export function enrichPartidoResponse(partido, venueContext = {}, scoringPolicy 
   // expose no players, not four placeholders that a spectator could mistake
   // for an on-court pair.
   const lineupUnavailable = partido.nations_lineup_status === 'unavailable';
-  const equipo_a_jugadores = lineupUnavailable ? [] : applyJerseysToJugadores(partido.equipo_a_jugadores, [
+  const lineupCurrent = partido.nations_lineup_status === 'current';
+  const equipo_a_jugadores = lineupUnavailable ? [] : lineupCurrent ? (Array.isArray(partido.equipo_a_jugadores) ? partido.equipo_a_jugadores : []) : applyJerseysToJugadores(partido.equipo_a_jugadores, [
     partido.jersey_a1,
     partido.jersey_a2,
     partido.jersey_a3,
     partido.jersey_a4,
   ]);
-  const equipo_b_jugadores = lineupUnavailable ? [] : applyJerseysToJugadores(partido.equipo_b_jugadores, [
+  const equipo_b_jugadores = lineupUnavailable ? [] : lineupCurrent ? (Array.isArray(partido.equipo_b_jugadores) ? partido.equipo_b_jugadores : []) : applyJerseysToJugadores(partido.equipo_b_jugadores, [
     partido.jersey_b1,
     partido.jersey_b2,
     partido.jersey_b3,
