@@ -393,12 +393,12 @@ async function loadVenueContext(supabaseAdmin, sedeId) {
   };
 }
 
-async function enrichPartidoWithVenue(supabaseAdmin, partido) {
+async function enrichPartidoWithVenue(supabaseAdmin, partido, pool = null) {
   const ctx = await loadVenueContext(supabaseAdmin, partido?.sede_id);
-  return enrichPartidoResponse(await safeNationsScoreboardProjection(supabaseAdmin,partido), ctx, await assertScoreboardScoringSupported(supabaseAdmin, partido, { readOnly: true }));
+  return enrichPartidoResponse(await safeNationsScoreboardProjection(supabaseAdmin,partido,{pool}), ctx, await assertScoreboardScoringSupported(supabaseAdmin, partido, { readOnly: true }));
 }
 
-async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null) {
+async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null, pool = null) {
   if (!io) return;
   const ctx = supabaseAdmin
     ? await loadVenueContext(supabaseAdmin, partido?.sede_id)
@@ -406,7 +406,7 @@ async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null
       sedeNombre: partido?.sede_nombre ?? null,
       canchas: [],
     };
-  const payload = enrichPartidoResponse(supabaseAdmin?await safeNationsScoreboardProjection(supabaseAdmin,partido):partido, ctx, supabaseAdmin ? await assertScoreboardScoringSupported(supabaseAdmin, partido, { readOnly: true }) : null);
+  const payload = enrichPartidoResponse(supabaseAdmin?await safeNationsScoreboardProjection(supabaseAdmin,partido,{pool}):partido, ctx, supabaseAdmin ? await assertScoreboardScoringSupported(supabaseAdmin, partido, { readOnly: true }) : null);
   io.to(`scoreboard:${partidoId}`).emit('scoreboard:update', payload);
 }
 
@@ -454,7 +454,7 @@ export function mountScoreboardRoutes(app, {
       getAuthenticatedUser, fetchPartido, db: supabaseAdmin, allowTransitions: scoreboardSuspensionCandidateEnabled === true, allowResume: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true,
       resolveRole: user => resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }),
       assertCanControl: assertCanControlScoreboard,
-      publishUpdate: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin),
+      publishUpdate: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin, nationsGamesPool),
       presentPartido: row => enrichPartidoWithVenue(supabaseAdmin, row),
     });
   }
@@ -462,7 +462,7 @@ export function mountScoreboardRoutes(app, {
     db: supabaseAdmin, boardColumns: `${SCOREBOARD_PARTIDO_SELECT}, revision`, authenticate: getAuthenticatedUser,
     authorize: async (user, row) => assertCanControlScoreboard(await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), row.sede_id),
     present: row => enrichPartidoWithVenue(supabaseAdmin, row),
-    publish: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin),
+    publish: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin, nationsGamesPool),
     fetchHistory: id => fetchUltimoHistorialPunto(supabaseAdmin, id),
     assertHistory: assertLatestHistoryMatchesSnapshot,
     afterMutation: async (row, before) => {
@@ -472,7 +472,7 @@ export function mountScoreboardRoutes(app, {
   });
   async function saveAndEmit(partido, expectedUpdatedAt, options) {
     const saved = await savePartido(supabaseAdmin, partido, expectedUpdatedAt, options);
-    await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
+    await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin, nationsGamesPool);
     return enrichPartidoWithVenue(supabaseAdmin, saved);
   }
 
@@ -497,8 +497,8 @@ export function mountScoreboardRoutes(app, {
     // The final-point transaction owns a durable intent. Reconcile on both new
     // response and replay; periodic runtime recovery also covers no-client-retry.
     if(kind==='point'&&recoverNationsFinalization){try{await recoverNationsFinalization(saved.id);}catch{/* durable pending intent remains */}}
-    await emitScoreboardUpdate(io,saved.id,saved,supabaseAdmin);
-    return {...await enrichPartidoWithVenue(supabaseAdmin,saved),gamesEpoch:out.gamesEpoch,trackingStatus:out.trackingStatus};
+    await emitScoreboardUpdate(io,saved.id,saved,supabaseAdmin,nationsGamesPool);
+    return {...await enrichPartidoWithVenue(supabaseAdmin,saved,nationsGamesPool),gamesEpoch:out.gamesEpoch,trackingStatus:out.trackingStatus};
   }
   async function handleRegistrarPunto(partido, equipo, context) {
     const tracked=await tryGamesMutation(partido,'point',context,equipo);if(tracked)return tracked;
@@ -511,7 +511,7 @@ export function mountScoreboardRoutes(app, {
     const saved = await savePartido(supabaseAdmin, partido, expectedUpdatedAt, { kind: 'point', history });
     await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
     await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
-    await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin);
+    await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin, nationsGamesPool);
     return enrichPartidoWithVenue(supabaseAdmin, saved);
   }
 
@@ -874,7 +874,7 @@ export function mountScoreboardRoutes(app, {
       if (!created) throw new Error('No se pudo crear el partido');
 
       const enriched = await enrichPartidoWithVenue(supabaseAdmin, created);
-      await emitScoreboardUpdate(io, created.id, created, supabaseAdmin);
+      await emitScoreboardUpdate(io, created.id, created, supabaseAdmin, nationsGamesPool);
       return res.status(201).json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -899,7 +899,7 @@ export function mountScoreboardRoutes(app, {
       if (error) throw error;
 
       const partidos = await Promise.all(
-        (data ?? []).map(async(row) => {await assertNationsScoreboardRead(req,row);return enrichPartidoWithVenue(supabaseAdmin,row);}),
+        (data ?? []).map(async(row) => {await assertNationsScoreboardRead(req,row);return enrichPartidoWithVenue(supabaseAdmin,row,nationsGamesPool);}),
       );
       return res.json({ partidos });
     } catch (err) {
@@ -915,7 +915,7 @@ export function mountScoreboardRoutes(app, {
       }
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       await assertNationsScoreboardRead(req,partido);
-      return res.json({ ...(await enrichPartidoWithVenue(supabaseAdmin, partido)), scoreboard_suspension_candidate_enabled: scoreboardSuspensionCandidateEnabled === true, scoreboard_suspension_resume_enabled: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true, scoreboard_partial_correction_enabled: true });
+      return res.json({ ...(await enrichPartidoWithVenue(supabaseAdmin, partido, nationsGamesPool)), scoreboard_suspension_candidate_enabled: scoreboardSuspensionCandidateEnabled === true, scoreboard_suspension_resume_enabled: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true, scoreboard_partial_correction_enabled: true });
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/partidos/:id:', err.message);
@@ -937,7 +937,7 @@ export function mountScoreboardRoutes(app, {
       if (error?.code === '55000') return res.status(409).json({error:'El partido no permite corregir el parcial en su estado actual.'});
       if (error) throw error;
       if (!data) return res.status(409).json({error:'El marcador cambió. Actualiza y revisa antes de confirmar.'});
-      try { await emitScoreboardUpdate(io, data.id, data, supabaseAdmin); } catch { /* polling can recover */ }
+      try { await emitScoreboardUpdate(io, data.id, data, supabaseAdmin, nationsGamesPool); } catch { /* polling can recover */ }
       let presented = data;
       try { presented = await enrichPartidoWithVenue(supabaseAdmin, data); } catch { /* the correction has already committed */ }
       return res.json(presented);
@@ -1007,7 +1007,7 @@ export function mountScoreboardRoutes(app, {
       if (!updated) return res.status(409).json({ error: 'El marcador cambió. Actualizá y volvé a intentar.' });
 
       const enriched = await enrichPartidoWithVenue(supabaseAdmin, updated);
-      await emitScoreboardUpdate(io, updated.id, updated, supabaseAdmin);
+      await emitScoreboardUpdate(io, updated.id, updated, supabaseAdmin, nationsGamesPool);
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -1035,7 +1035,7 @@ export function mountScoreboardRoutes(app, {
       const jugadores = mapScoreboardJugadoresTempPublic(
         await fetchJugadoresTempByPartido(supabaseAdmin, partido.id),
       );
-      const safeRow=await safeNationsScoreboardProjection(supabaseAdmin,partido);
+      const safeRow=await safeNationsScoreboardProjection(supabaseAdmin,partido,{pool:nationsGamesPool});
       const publicPlayers=safeRow===partido?jugadores:jugadores.map(p=>Object.fromEntries(['nombre','apellido','jersey','numero','equipo'].filter(k=>p[k]!=null).map(k=>[k,p[k]])));
 
       return res.json({
@@ -1119,7 +1119,7 @@ export function mountScoreboardRoutes(app, {
       const jugadores = mapScoreboardJugadoresTempPublic(
         await fetchJugadoresTempByPartido(supabaseAdmin, partidoId),
       );
-      const projected=await safeNationsScoreboardProjection(supabaseAdmin,row);
+      const projected=await safeNationsScoreboardProjection(supabaseAdmin,row,{pool:nationsGamesPool});
       return res.json({ jugadores:projected===row?jugadores:jugadores.map(p=>Object.fromEntries(['nombre','apellido','jersey','numero','equipo'].filter(k=>p[k]!=null).map(k=>[k,p[k]]))) });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/jugadores-temp/:partidoId:', err.message);
