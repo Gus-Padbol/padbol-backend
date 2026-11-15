@@ -4,7 +4,7 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 export const anthropicProvider = {
   name: 'anthropic',
 
-  async completeChat({ system, userMessage, maxTokens = 512 }) {
+  async completeChat({ system, userMessage, maxTokens = 512, signal = null }) {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       const err = new Error('ANTHROPIC_API_KEY no configurada');
@@ -26,6 +26,7 @@ export const anthropicProvider = {
         system,
         messages: [{ role: 'user', content: userMessage }],
       }),
+      ...(signal ? { signal } : {}),
     });
 
     if (!response.ok) {

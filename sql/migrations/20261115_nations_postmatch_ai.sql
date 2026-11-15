@@ -32,3 +32,16 @@ CREATE INDEX IF NOT EXISTS nations_postmatch_ai_jobs_partido_idx
 REVOKE ALL ON nations_postmatch_ai.jobs FROM PUBLIC;
 COMMENT ON TABLE nations_postmatch_ai.jobs IS
   'Durable Nations post-match AI jobs. scoreboard_id is the board scope; no casual partido FK.';
+
+ALTER TABLE nations_postmatch_ai.jobs ENABLE ROW LEVEL SECURITY;
+DO $$
+DECLARE role_name text;
+BEGIN
+  FOREACH role_name IN ARRAY ARRAY['anon','authenticated']
+  LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+      EXECUTE format('REVOKE ALL ON SCHEMA nations_postmatch_ai FROM %I', role_name);
+      EXECUTE format('REVOKE ALL ON TABLE nations_postmatch_ai.jobs FROM %I', role_name);
+    END IF;
+  END LOOP;
+END $$;
