@@ -7,6 +7,10 @@ export function mountNationsPracticeRoutes(app, { pool, enabled = false } = {}) 
   if (!enabled || !pool) return;
   const load = async (id) => isVirtual(id) ? getPracticeEvent(pool, id) : null;
   const send = (res, fn) => res.json(fn());
+  app.use('/api/torneos/:id', (req, res, next) => {
+    if (!['GET','HEAD'].includes(req.method) && isVirtual(req.params.id)) return res.status(409).json({ ok: false, code: 'PRACTICE_LEGACY_MUTATION_REJECTED' });
+    return next();
+  });
   const getEvent = async (req, res, next) => { try { const data = await load(req.params.id); if (!data) return res.status(404).json({ ok: false, code: 'PRACTICE_EVENT_NOT_FOUND' }); req.practice = data; return next(); } catch { return next(); } };
   const read = (path, fn) => app.get(path, getEvent, (req, res) => send(res, () => fn(req.practice)));
   app.get('/api/torneos/:id', getEvent, (req, res) => send(res, () => practiceTournamentDto(req.practice.event)));
