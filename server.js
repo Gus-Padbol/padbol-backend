@@ -1,6 +1,8 @@
 import { createCrmWelcomeStatusReader } from './lib/crmWelcomeStatus.js';
 import {registerNationsMarkerDurableRoutes} from './lib/torneos/nationsMarkerDurableRuntime.js';
 import {recoverOneGamesFinalization,startGamesFinalizationRecovery} from './lib/torneos/nationsGamesFinalizationRecovery.js';
+import {startNationsPostmatchWorker} from './lib/torneos/nationsPostmatchAi.js';
+import {mountNationsPostmatchRoutes} from './lib/torneos/nationsPostmatchRoutes.js';
 import { mountAdminHelpRoutes, readAdminHelpRole } from './routes/adminHelp.js';
 import { randomUUID } from 'node:crypto';
 import { readAuthenticatedPlayerProfile, updateAuthenticatedPlayerProfile } from './lib/authenticatedPlayerProfile.js';
@@ -1326,6 +1328,12 @@ const stopNationsGamesRecovery = startGamesFinalizationRecovery({pool:pgPool,db:
   if(['blocked','pending'].includes(result.status))console.warn('[nations-games-recovery]',{status:result.status,reason:result.reason,scoreboardId:result.scoreboardId});
 }});
 httpServer.once('close',stopNationsGamesRecovery);
+const nationsPostmatchAiEnabled = process.env.NATIONS_POSTMATCH_AI_ENABLED === 'true';
+mountNationsPostmatchRoutes(app,{pool:pgPool,supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS),enabled:nationsPostmatchAiEnabled});
+const stopNationsPostmatchWorker = startNationsPostmatchWorker({pool:pgPool,enabled:nationsPostmatchAiEnabled,onResult:result=>{
+  if(['uncertain','insufficient'].includes(result.status))console.warn('[nations-postmatch-ai]',{status:result.status,reason:result.reason,scoreboardId:result.scoreboardId});
+}});
+httpServer.once('close',stopNationsPostmatchWorker);
 mountScoreboardRoutes(app, {
   supabaseAdmin,
   nationsGamesEnabled,

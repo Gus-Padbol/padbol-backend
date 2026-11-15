@@ -93,7 +93,7 @@ function buildSummaryResult({ row, aiResponse, payload, cached }) {
  *   },
  * }} params
  */
-export async function generateMatchSummaryForPartido({
+async function generateMatchSummaryForPartidoUnlocked({
   partidoId,
   userId = null,
   pgPool,
@@ -207,4 +207,20 @@ export async function generateMatchSummaryForPartido({
     payload,
     cached: false,
   });
+}
+
+
+// Casual single-flight: two simultaneous requests for the same partido share
+// one provider call in this process. A durable queue owns cross-instance
+// exactly-once for Nations; this guard prevents the reproduced double spend in
+// the existing casual endpoint without changing its stored row contract.
+const casualInFlight = new Map();
+
+export async function generateMatchSummaryForPartido(args = {}) {
+  const key = `${args.partidoId ?? ''}|${args.userId ?? ''}|${args.force ? 'force' : 'cached'}`;
+  const current = casualInFlight.get(key);
+  if (current) return current;
+  const pending = generateMatchSummaryForPartidoUnlocked(args);
+  casualInFlight.set(key, pending);
+  try { return await pending; } finally { casualInFlight.delete(key); }
 }
