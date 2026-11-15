@@ -22,7 +22,7 @@ export function nationalTeamListDto(c,e,{aprobado=false}={}){
   creador_id:hidden?null:e.creador_id,inscripcion_estado:e.inscripcion_estado,plantel_revision:e.plantel_revision,
   jugadores:hidden?[]:registry?registrySportingRoster(e,{references}):rosterPlayers(e)};
 }
-export function mountNationalTeamRoutes(app,{db,getAuthenticatedUser,getRole}) {
+export function mountNationalTeamRoutes(app,{db,getAuthenticatedUser,getRole,authorizeEvent=null}) {
  async function context(req,{team=false,match=false}={}) {
   const result=await getAuthenticatedUser(req);if(!result.user)throw nationalError('Inicia sesión.',result.status??401,'AUTH_REQUIRED');
   const tid=numeric(req.params.id);if(!tid)throw nationalError('Torneo inválido.');
@@ -32,7 +32,7 @@ export function mountNationalTeamRoutes(app,{db,getAuthenticatedUser,getRole}) {
   if(equipo&&Number(equipo.torneo_id)!==tid)throw nationalError('Equipo de otro torneo.',404);
   const captain=equipo?.creador_id===result.user.id;
   const role=await getRole(result.user);
-  const admin=resolveTorneoAdminAccess({user:result.user,role},torneo.sede_id).allowed;
+  const admin=resolveTorneoAdminAccess({user:result.user,role},torneo.sede_id).allowed||Boolean(authorizeEvent&&await authorizeEvent(result.user,torneo));
   const partido=match?await read(db,'partidos','id,torneo_id,estado,equipo_a_id,equipo_b_id',numeric(req.params.partidoId)):null;
   if(partido&&(Number(partido.torneo_id)!==tid||![Number(partido.equipo_a_id),Number(partido.equipo_b_id)].includes(Number(equipo?.id))))throw nationalError('El equipo no pertenece a este partido.',404);
   return {torneo,equipo,partido,user:result.user,captain,admin};
