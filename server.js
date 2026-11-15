@@ -152,6 +152,7 @@ import {
   validateCiudad,
 } from './src/jugador/jugadorPerfilFichaService.js';
 import { mountTorneosFinalizadosRoutes } from './routes/torneosFinalizados.js';
+import { mountNationsPracticeRoutes } from './routes/nationsPractice.js';
 import { mountReservasDiagnosticoRoutes } from './routes/reservasDiagnostico.js';
 import { mountReservasHoldCleanupRoutes } from './routes/reservasHoldCleanup.js';
 import {
@@ -1168,6 +1169,7 @@ async function qaCatalogAudience(req) {
   return user ? {user, role: await resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS)} : null;
 }
 
+mountNationsPracticeRoutes(app,{pool:pgPool,enabled:process.env.NATIONS_PRACTICE_ENABLED==='true'});
 app.use('/api/torneos/:torneoId', createTournamentReadVisibility({db:supabaseAdmin,getAudience:qaCatalogAudience,onError:sendHttpError}));
 
 // GET sedes
