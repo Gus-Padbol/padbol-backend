@@ -7,7 +7,7 @@ import { normalizeHubTarget, normalizeHubFrame, inspectHubImage } from '../lib/h
 
 const PNG=await sharp({create:{width:80,height:60,channels:3,background:'#d22'}}).png().toBuffer();
 function setup({privateBucket=true,dbFails=false,manifestFails=false,role='editor_contenido',commitThenError=false,beforeUpdate}={}){
-  const objects=new Map(),rows=new Map([['sport',{deporte:'padbol',card_key:'crear_partido',imagen_url:null}],['inicio',{id:'inicio_jugar',foto_url:null}]]),calls=[];
+  const objects=new Map(),rows=new Map([['sport',{deporte:'padbol',card_key:'crear_partido',imagen_url:null}],['inicio',{id:'hub_inicio_card_1',foto_url:null}],['inicio2',{id:'hub_inicio_card_2',foto_url:null}],['inicio3',{id:'hub_inicio_card_3',foto_url:null}],['inicio4',{id:'hub_inicio_card_4',foto_url:null}]]),calls=[];
   const client={storage:{getBucket:async()=>({data:{public:!privateBucket},error:null}),from:bucket=>({
     upload:async(path,bytes,opts)=>{calls.push(['upload',bucket,path]);if(manifestFails&&path.endsWith('manifest.json'))return{error:Error('write failed')};objects.set(`${bucket}/${path}`,new Blob([bytes],{type:opts.contentType}));return{error:null};},
     getPublicUrl:path=>({data:{publicUrl:`https://cdn.invalid/storage/v1/object/public/${bucket}/${path}`}}),
@@ -48,7 +48,7 @@ test('auth before multipart/storage; private bucket required; DB and manifest er
     const h=setup(opts);await serve(h.app,async base=>{
       const noAuth=await post(base,body(),false);assert.equal(noAuth.status,401);assert.equal(h.calls.length,0);
       const r=await post(base,body());assert.equal(r.status,opts.privateBucket===false?503:opts.dbFails||opts.manifestFails?500:201);
-      if(opts.privateBucket===false||opts.dbFails||opts.manifestFails){assert.equal(h.rows.size,2);assert.equal(h.rows.get('sport').imagen_url,null);assert.equal(h.objects.size,0);}
+      if(opts.privateBucket===false||opts.dbFails||opts.manifestFails){assert.equal(h.rows.size,5);assert.equal(h.rows.get('sport').imagen_url,null);assert.equal(h.objects.size,0);}
     });
   }
 });
@@ -59,8 +59,15 @@ test('old images unavailable; no source URL fetching, traversal, wrong target, i
     const old=await fetch(`${base}/api/admin/hub-images/source?kind=legacy&id=crear_partido`,{headers:{'x-user':'editor'}});assert.equal(old.status,404);assert.equal((await old.json()).code,'SOURCE_NOT_AVAILABLE');
     const ssrf=await post(base,body({original:false,originalUrl:'http://169.254.169.254/metadata'}));assert.equal(ssrf.status,400);assert.equal(h.calls.length,0);
     const invalid=await post(base,body({final:Buffer.from('not an image')}));assert.equal(invalid.status,400);assert.equal(h.calls.length,0);
-    const first=await(await post(base,body())).json();const wrong=body({original:false,source_id:first.source_id});wrong.set('target',JSON.stringify({kind:'inicio',id:'inicio_jugar'}));const r=await post(base,wrong);assert.equal(r.status,409);assert.equal((await r.json()).code,'SOURCE_TARGET_MISMATCH');
+    const first=await(await post(base,body())).json();const wrong=body({original:false,source_id:first.source_id});wrong.set('target',JSON.stringify({kind:'inicio',id:'hub_inicio_card_2'}));const r=await post(base,wrong);assert.equal(r.status,409);assert.equal((await r.json()).code,'SOURCE_TARGET_MISMATCH');
   });
+});
+test('HTTP inicio real hub_inicio_card_1 saves/reopens and rejects invented IDs',async()=>{
+ const h=setup();await serve(h.app,async base=>{
+  const inicio=body();inicio.set('target',JSON.stringify({kind:'inicio',id:'hub_inicio_card_1'}));const ok=await post(base,inicio);assert.equal(ok.status,201);const saved=await ok.json();assert.equal(saved.row.id,'hub_inicio_card_1');assert.equal(saved.row.foto_url,saved.image_url);
+  const get=await fetch(`${base}/api/admin/hub-images/source?kind=inicio&id=hub_inicio_card_1`,{headers:{'x-user':'editor'}});assert.equal(get.status,200);const reopened=await get.json();assert.equal(reopened.source_id,saved.source_id);
+  for(const id of ['inicio_jugar','hub_inicio_card_5','hub_inicio_card_1_extra']){const bad=body();bad.set('target',JSON.stringify({kind:'inicio',id}));const r=await post(base,bad);assert.equal(r.status,400);}
+ });
 });
 test('non-editor roles denied before storage; success after lost DB response preserves published image',async()=>{
   for(const role of ['jugador','admin_club','admin_nacional']){const h=setup({role});await serve(h.app,async base=>{const r=await post(base,body());assert.equal(r.status,403);assert.equal(h.calls.length,0);});}
@@ -71,7 +78,7 @@ test('stale editors and missing targets fail without uploads; atomic pointer com
  const h=setup();await serve(h.app,async base=>{
   const first=await(await post(base,body())).json();const uploads=h.calls.length;
   const stale=await post(base,body({original:false,source_id:first.source_id}));assert.equal(stale.status,409);assert.equal((await stale.json()).code,'HUB_IMAGE_CHANGED');assert.equal(h.calls.length,uploads);
-  const absent=body();absent.set('target',JSON.stringify({kind:'legacy',id:'arbitrary_new_card'}));const r=await post(base,absent);assert.equal(r.status,404);assert.equal((await r.json()).code,'HUB_TARGET_NOT_FOUND');assert.equal(h.rows.size,2);assert.equal(h.calls.length,uploads);
+  const absent=body();absent.set('target',JSON.stringify({kind:'legacy',id:'arbitrary_new_card'}));const r=await post(base,absent);assert.equal(r.status,404);assert.equal((await r.json()).code,'HUB_TARGET_NOT_FOUND');assert.equal(h.rows.size,5);assert.equal(h.calls.length,uploads);
  });
  const concurrent=setup({beforeUpdate:rows=>{rows.get('sport').imagen_url='https://cdn.invalid/newer.jpg';}});await serve(concurrent.app,async base=>{
   const r=await post(base,body());assert.equal(r.status,409);assert.equal((await r.json()).code,'HUB_IMAGE_CHANGED');assert.equal(concurrent.rows.get('sport').imagen_url,'https://cdn.invalid/newer.jpg');assert.equal(concurrent.objects.size,0);
