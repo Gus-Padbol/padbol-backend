@@ -45,3 +45,19 @@ BEGIN
     END IF;
   END LOOP;
 END $$;
+
+CREATE TABLE IF NOT EXISTS nations_postmatch_ai.casual_provider_claims (
+  summary_id bigint PRIMARY KEY,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE nations_postmatch_ai.casual_provider_claims ENABLE ROW LEVEL SECURITY;
+DO $$
+DECLARE role_name text;
+BEGIN
+  FOREACH role_name IN ARRAY ARRAY['anon','authenticated']
+  LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+      EXECUTE format('REVOKE ALL ON TABLE nations_postmatch_ai.casual_provider_claims FROM %I', role_name);
+    END IF;
+  END LOOP;
+END $$;

@@ -15,6 +15,7 @@ import {
   MATCH_SUMMARY_SOURCE_TYPE_PARTIDOS_ABIERTOS,
   createPendingMatchSummary,
   getMatchSummaryByPayloadHash,
+  claimCasualSummaryGeneration,
   markMatchSummaryFailed,
   markMatchSummaryGenerated,
 } from './matchSummaryRepository.js';
@@ -103,6 +104,7 @@ async function generateMatchSummaryForPartidoUnlocked({
 } = {}) {
   const buildPayloadFn = deps.buildPayload ?? buildMatchSummaryPayload;
   const getCacheFn = deps.getCache ?? getMatchSummaryByPayloadHash;
+  const claimFn = deps.claimGeneration ?? claimCasualSummaryGeneration;
   const createPendingFn = deps.createPending ?? createPendingMatchSummary;
   const markGeneratedFn = deps.markGenerated ?? markMatchSummaryGenerated;
   const markFailedFn = deps.markFailed ?? markMatchSummaryFailed;
@@ -148,6 +150,18 @@ async function generateMatchSummaryForPartidoUnlocked({
     pgPool,
   });
 
+  const claim = await claimFn({ id: pendingRow.id, pgPool });
+  if (!claim.claimed) {
+    const current = await getCacheFn({ partidoId: payload.partido_id, sourceType, payloadHash, pgPool });
+    if (current?.status === 'generated' && current.response) {
+      return buildSummaryResult({ row: current, aiResponse: current.response, payload, cached: true });
+    }
+    throw new MatchSummaryServiceError('Ya hay una generación de resumen en curso', {
+      status: 409,
+      code: 'MATCH_SUMMARY_IN_PROGRESS',
+    });
+  }
+
   const aiProvider = provider ?? getProviderFn();
   const prompt = resolvePromptFn('match-summary');
 
@@ -180,7 +194,6 @@ async function generateMatchSummaryForPartidoUnlocked({
       partido_id: payload.partido_id,
       payload_hash: payloadHash,
       error: parsed.error,
-      reply_preview: String(aiReply ?? '').slice(0, 400),
     });
     aiResponse = buildFallbackMatchSummaryResponse({
       payload,

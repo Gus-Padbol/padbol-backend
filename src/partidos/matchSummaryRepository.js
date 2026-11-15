@@ -336,3 +336,25 @@ export async function deleteMatchSummariesForPartido({ partidoId, pgPool }) {
 
   return { deleted: rowCount ?? 0 };
 }
+
+/**
+ * Durable cross-instance claim for casual provider calls. The private table is
+ * applied by root; if it is not present yet, the caller keeps the legacy path
+ * (and the limitation is explicit in the receipt), never an in-process guess.
+ */
+export async function claimCasualSummaryGeneration({ id, pgPool }) {
+  assertPgPool(pgPool);
+  const parsedId = parseInt(String(id), 10);
+  if (!Number.isFinite(parsedId) || parsedId <= 0) return { claimed: false, available: false, reason: 'INVALID_ID' };
+  try {
+    const table = await pgPool.query("SELECT to_regclass('nations_postmatch_ai.casual_provider_claims') AS t");
+    if (!table.rows?.[0]?.t) return { claimed: true, available: false, reason: 'SCHEMA_NOT_READY' };
+    const out = await pgPool.query(
+      "INSERT INTO nations_postmatch_ai.casual_provider_claims(summary_id) VALUES($1) ON CONFLICT(summary_id) DO NOTHING RETURNING summary_id",
+      [parsedId],
+    );
+    return { claimed: out.rowCount > 0, available: true };
+  } catch {
+    return { claimed: true, available: false, reason: 'CLAIM_UNAVAILABLE' };
+  }
+}
