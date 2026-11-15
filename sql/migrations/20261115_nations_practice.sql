@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS nations_practice.commands (
 CREATE TABLE IF NOT EXISTS nations_practice.control_tokens (
   id uuid PRIMARY KEY,
   event_id bigint NOT NULL REFERENCES nations_practice.events(id) ON DELETE CASCADE,
+  match_id bigint NOT NULL,
   token_hash text NOT NULL UNIQUE,
   expires_at timestamptz NOT NULL,
   scopes text[] NOT NULL DEFAULT ARRAY['control'],
