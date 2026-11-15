@@ -42,6 +42,12 @@ export function mountHubImageEditorRoutes(app,{supabaseAdmin,...authDeps}) {
     try {
       const target=normalizeHubTarget(parseEditorJson(req.body.target));
       const frame=normalizeHubFrame(parseEditorJson(req.body.frame));
+      const expectedImage=parseEditorJson(req.body.expected_image_url);
+      if(expectedImage!==null && (typeof expectedImage!=='string' || expectedImage.length>2048))throw editorError('INVALID_EXPECTED_IMAGE');
+      const {data:current,error:readError}=await hubTargetQuery(supabaseAdmin,target).maybeSingle();
+      if(readError)throw readError;
+      if(!current)throw editorError('HUB_TARGET_NOT_FOUND',404);
+      if(hubRowImage(current,target)!==expectedImage)throw editorError('HUB_IMAGE_CHANGED',409);
       const finalFile=req.files?.foto?.[0];
       const final=await inspectHubImage(finalFile,HUB_EDITOR_FINAL_LIMIT);
       let originalFile=req.files?.original?.[0],original;
@@ -68,10 +74,14 @@ export function mountHubImageEditorRoutes(app,{supabaseAdmin,...authDeps}) {
       const manifest={version:1,source_id:id,target,frame,original,image_url};
       await put(privateStore,manifestPath,Buffer.from(JSON.stringify(manifest)),'application/json',uploadedPrivate);
       const table=target.kind==='deporte'?'hub_deporte_config':'hub_config';
-      const payload=target.kind==='deporte'?{deporte:target.deporte,card_key:target.card_key,imagen_url:image_url}:{id:target.id,foto_url:image_url};
+      const imageColumn=target.kind==='deporte'?'imagen_url':'foto_url';
+      let update=supabaseAdmin.from(table).update({[imageColumn]:image_url});
+      update=target.kind==='deporte'?update.eq('deporte',target.deporte).eq('card_key',target.card_key):update.eq('id',target.id);
+      update=expectedImage===null?update.is(imageColumn,null):update.eq(imageColumn,expectedImage);
       publication={target,manifest};
-      const {data:row,error}=await supabaseAdmin.from(table).upsert(payload,{onConflict:target.kind==='deporte'?'deporte,card_key':'id'}).select('*').single();
+      const {data:row,error}=await update.select('*').maybeSingle();
       if(error)throw error;
+      if(!row)throw editorError('HUB_IMAGE_CHANGED',409);
       res.status(201).json({row,...dto(manifest)});
     }catch(e){
       // A network failure after DB commit must never delete the image the app now uses.
