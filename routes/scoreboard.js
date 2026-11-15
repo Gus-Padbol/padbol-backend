@@ -1312,6 +1312,7 @@ export function initScoreboardSocket(io,access=null) {
   io.on('connection', (socket) => {
     socket.on('scoreboard:join', async ({ partidoId }) => {
       if (!partidoId) return;
+      if(access?.resolvePracticeBoard){try{if(await access.resolvePracticeBoard(partidoId)){socket.join(`scoreboard:${partidoId}`);return;}}catch{} }
       if(access){try{const row=await fetchPartido(access.supabaseAdmin,partidoId);const token=socket.handshake?.auth?.token;const req={headers:token?{authorization:`Bearer ${token}`}:{}};await assertNationsScoreboardAudience(req,row,{db:access.supabaseAdmin,getAuthenticatedUser:access.getAuthenticatedUser,getRole:access.getRole});}catch(error){socket.emit('scoreboard:access-denied',{code:error.code??'SCOREBOARD_NOT_AVAILABLE'});return;}}
       socket.join(`scoreboard:${partidoId}`);
     });

@@ -3,7 +3,7 @@ import { getPracticeEvent, getPracticeBoard, practiceTournamentDto, practiceTeam
 
 function isVirtual(id) { const n = Number(id); return Number.isSafeInteger(n) && n >= 1_000_000_000_000 && n <= Number.MAX_SAFE_INTEGER; }
 
-export function mountNationsPracticeRoutes(app, { pool, enabled = false } = {}) {
+export function mountNationsPracticeRoutes(app, { pool, io = null, enabled = false } = {}) {
   if (!enabled || !pool) return;
   const load = async (id) => isVirtual(id) ? getPracticeEvent(pool, id) : null;
   const send = (res, fn) => res.json(fn());
@@ -11,9 +11,9 @@ export function mountNationsPracticeRoutes(app, { pool, enabled = false } = {}) 
     if (!['GET','HEAD'].includes(req.method) && isVirtual(req.params.id)) return res.status(409).json({ ok: false, code: 'PRACTICE_LEGACY_MUTATION_REJECTED' });
     return next();
   });
-  const getEvent = async (req, res, next) => { try { const data = await load(req.params.id); if (!data) return res.status(404).json({ ok: false, code: 'PRACTICE_EVENT_NOT_FOUND' }); req.practice = data; return next(); } catch { return next(); } };
-  const read = (path, fn) => app.get(path, getEvent, (req, res) => send(res, () => fn(req.practice)));
-  app.get('/api/torneos/:id', getEvent, (req, res) => send(res, () => practiceTournamentDto(req.practice.event)));
+  const getEvent = async (req, res, next) => { if (!isVirtual(req.params.id)) return next(); try { const data = await load(req.params.id); if (!data) return res.status(404).json({ ok: false, code: 'PRACTICE_EVENT_NOT_FOUND' }); req.practice = data; return next(); } catch (error) { return res.status(503).json({ ok: false, code: 'PRACTICE_READ_FAILED' }); } };
+  const read = (path, fn) => app.get(path, getEvent, (req, res, next) => req.practice ? send(res, () => fn(req.practice)) : next());
+  app.get('/api/torneos/:id', getEvent, (req, res, next) => req.practice ? send(res, () => practiceTournamentDto(req.practice.event)) : next());
   read('/api/torneos/:id/equipos', (d) => practiceTeamsDto(d.teams));
   read('/api/torneos/:id/jugadores', (d) => practicePlayersDto(d.teams));
   read('/api/torneos/:id/partidos', (d) => practiceMatchesDto(d.matches, d.event));
@@ -41,6 +41,7 @@ export function mountNationsPracticeRoutes(app, { pool, enabled = false } = {}) 
       if (!match) return res.status(404).json({ ok: false, code: 'PRACTICE_BOARD_NOT_FOUND' });
       const out = await executePracticeAction({ pool, matchId: match.id, action: req.body?.kind, requestId: req.body?.requestId, expectedRevision: req.body?.expectedRevision, body: req.body || {}, token: bearer(req) });
       const board = await getPracticeBoard(pool, req.params.boardId);
+      try { io?.to(`scoreboard:${board.id}`).emit('scoreboard:update', board); } catch {}
       return res.json({ ok: true, board, revision: out.revision, deduplicated: out.deduplicated, state: out.state?.status || null });
     } catch (error) {
       const revision = error?.revision ?? null;

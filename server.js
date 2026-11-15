@@ -1169,7 +1169,7 @@ async function qaCatalogAudience(req) {
   return user ? {user, role: await resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS)} : null;
 }
 
-mountNationsPracticeRoutes(app,{pool:pgPool,enabled:process.env.NATIONS_PRACTICE_ENABLED==='true'});
+mountNationsPracticeRoutes(app,{pool:pgPool,io,enabled:process.env.NATIONS_PRACTICE_ENABLED==='true'});
 app.use('/api/torneos/:torneoId', createTournamentReadVisibility({db:supabaseAdmin,getAudience:qaCatalogAudience,onError:sendHttpError}));
 
 // GET sedes
@@ -1349,7 +1349,7 @@ mountScoreboardRoutes(app, {
   scoreboardSuspensionCandidateEnabled: process.env.SCOREBOARD_SUSPENSION_ENABLED === 'true' && process.env.SCOREBOARD_SUSPENSION_RECOVERY_ENABLED === 'true',
   scoreboardSuspensionRecoveryEnabled: process.env.SCOREBOARD_SUSPENSION_RECOVERY_ENABLED === 'true',
 });
-initScoreboardSocket(io,{supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS)});
+initScoreboardSocket(io,{supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRoleForUser(user,LEGACY_TORNEO_ADMIN_DEPS),resolvePracticeBoard: process.env.NATIONS_PRACTICE_ENABLED==='true' ? async id => { const r=await pgPool.query('SELECT 1 FROM nations_practice.matches WHERE scoreboard_id=$1',[id]); return r.rowCount>0; } : null});
 mountTorneoInteresRoutes(app, {
   supabaseAdmin,
   getAuthenticatedUser,
