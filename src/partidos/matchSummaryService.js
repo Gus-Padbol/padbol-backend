@@ -156,6 +156,12 @@ async function generateMatchSummaryForPartidoUnlocked({
     if (current?.status === 'generated' && current.response) {
       return buildSummaryResult({ row: current, aiResponse: current.response, payload, cached: true });
     }
+    if (!claim.available) {
+      throw new MatchSummaryServiceError('No se pudo tomar el claim durable del resumen', {
+        status: 503,
+        code: claim.reason === 'CLAIM_UNCERTAIN' ? 'MATCH_SUMMARY_REVIEW_REQUIRED' : 'MATCH_SUMMARY_CLAIM_UNAVAILABLE',
+      });
+    }
     throw new MatchSummaryServiceError('Ya hay una generación de resumen en curso', {
       status: 409,
       code: 'MATCH_SUMMARY_IN_PROGRESS',

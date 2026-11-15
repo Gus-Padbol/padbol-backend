@@ -348,13 +348,21 @@ export async function claimCasualSummaryGeneration({ id, pgPool }) {
   if (!Number.isFinite(parsedId) || parsedId <= 0) return { claimed: false, available: false, reason: 'INVALID_ID' };
   try {
     const table = await pgPool.query("SELECT to_regclass('nations_postmatch_ai.casual_provider_claims') AS t");
-    if (!table.rows?.[0]?.t) return { claimed: true, available: false, reason: 'SCHEMA_NOT_READY' };
+    if (!table.rows?.[0]?.t) return { claimed: false, available: false, reason: 'SCHEMA_NOT_READY' };
     const out = await pgPool.query(
-      "INSERT INTO nations_postmatch_ai.casual_provider_claims(summary_id) VALUES($1) ON CONFLICT(summary_id) DO NOTHING RETURNING summary_id",
+      "INSERT INTO nations_postmatch_ai.casual_provider_claims(summary_id,status) VALUES($1,'pending') ON CONFLICT(summary_id) DO NOTHING RETURNING summary_id",
       [parsedId],
     );
-    return { claimed: out.rowCount > 0, available: true };
+    if (out.rowCount > 0) return { claimed: true, available: true };
+    const existing = await pgPool.query(
+      "SELECT status, created_at, EXTRACT(EPOCH FROM (now()-created_at)) AS age_seconds FROM nations_postmatch_ai.casual_provider_claims WHERE summary_id=$1",
+      [parsedId],
+    );
+    const row = existing.rows?.[0];
+    if (!row) return { claimed: false, available: false, reason: 'CLAIM_UNCERTAIN' };
+    if (row.status !== 'pending' || Number(row.age_seconds) > 120) return { claimed: false, available: false, reason: 'CLAIM_UNCERTAIN' };
+    return { claimed: false, available: true, reason: 'IN_PROGRESS', age_seconds: Number(row.age_seconds) };
   } catch {
-    return { claimed: true, available: false, reason: 'CLAIM_UNAVAILABLE' };
+    return { claimed: false, available: false, reason: 'CLAIM_UNAVAILABLE' };
   }
 }

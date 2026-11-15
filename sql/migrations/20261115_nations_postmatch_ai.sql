@@ -48,9 +48,11 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS nations_postmatch_ai.casual_provider_claims (
   summary_id bigint PRIMARY KEY,
+  status text NOT NULL DEFAULT 'pending',
   created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE nations_postmatch_ai.casual_provider_claims ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE nations_postmatch_ai.casual_provider_claims FROM PUBLIC;
 DO $$
 DECLARE role_name text;
 BEGIN
