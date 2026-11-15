@@ -1,4 +1,5 @@
 import multer from 'multer';
+import { mountHubImageEditorRoutes } from './hubImageEditor.js';
 import { requireAdminUser, requireContentEditorUser, requireSuperAdminUser } from '../lib/authAccess.js';
 
 const ACTIVE_RESERVATION_STATES = new Set(['confirmada', 'completada', 'pagada', 'finalizada']);
@@ -120,6 +121,7 @@ export function mountAdminQaPanelRoutes(app, {
   legacySuperAdminEmails = [],
 }) {
   const authDeps = { getAuthenticatedUser, fetchUserRoleRowForAuthUser, legacySuperAdminEmails };
+  mountHubImageEditorRoutes(app, {supabaseAdmin, ...authDeps});
 
   app.get('/api/admin/analytics-globales', async (req, res) => {
     try {
