@@ -407,9 +407,9 @@ async function nationsTeamCountries(supabaseAdmin, partido) {
   try {
     const { data: match, error: matchError } = await supabaseAdmin.from('partidos').select('torneo_id,equipo_a_id,equipo_b_id').eq('id', partido.partido_torneo_id).maybeSingle();
     if (matchError || !match?.torneo_id) return {};
-    const { data: event, error: eventError } = await supabaseAdmin.from('torneos').select('plan_nations').eq('id', match.torneo_id).maybeSingle();
+    const { data: event, error: eventError } = await supabaseAdmin.from('torneo_nations_planes').select('plan').eq('torneo_id', match.torneo_id).maybeSingle();
     if (eventError || !event) return {};
-    let plan = event.plan_nations;
+    let plan = event.plan;
     if (typeof plan === 'string') plan = JSON.parse(plan);
     const countries = nationsCountryByTeam(plan);
     return {
@@ -1175,8 +1175,8 @@ export function mountScoreboardRoutes(app, {
       const slotTeamIds = (matchRows ?? []).flatMap(row => [row.equipo_a_id,row.equipo_b_id]).filter(Boolean);
       const { data: teamRows } = slotTeamIds.length ? await supabaseAdmin.from('equipos').select('id,nombre').in('id', slotTeamIds) : {data:[]};
       const teamNames = new Map((teamRows ?? []).map(row => [String(row.id), String(row.nombre || '')]));
-      const { data: eventRow } = await supabaseAdmin.from('torneos').select('plan_nations').eq('id', eventId).maybeSingle();
-      const countries = nationsCountryByTeam(eventRow?.plan_nations);
+      const { data: eventRow } = await supabaseAdmin.from('torneo_nations_planes').select('plan').eq('torneo_id', eventId).maybeSingle();
+      const countries = nationsCountryByTeam(eventRow?.plan);
       const matchesForSlots = (matchRows ?? []).map(row => ({...row, equipo_a_nombre:teamNames.get(String(row.equipo_a_id)) || null, equipo_b_nombre:teamNames.get(String(row.equipo_b_id)) || null, equipo_a_pais_iso:countries[String(row.equipo_a_id)] || null, equipo_b_pais_iso:countries[String(row.equipo_b_id)] || null}));
       const ordered = selectCourtNext({boards:candidates ?? [], slots:slotRows, matches:matchesForSlots, courtLabel:cancha});
       const selectedLive = selected && String(selected.estado || '').toLowerCase() === 'en_curso';
