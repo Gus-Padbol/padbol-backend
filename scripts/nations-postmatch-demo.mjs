@@ -5,6 +5,9 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import pg from 'pg';
+import express from 'express';
+import {createServer} from 'node:http';
+import {mountNationsPostmatchRoutes} from '../lib/torneos/nationsPostmatchRoutes.js';
 import {buildNationsPostmatchScenario} from '../lib/torneos/nationsPostmatchScenario.js';
 import {enqueueNationsPostmatchForPartido,processOneNationsPostmatchJob,anonymizeObserved,buildNationsPostmatchProviderRequest} from '../lib/torneos/nationsPostmatchAi.js';
 
@@ -15,7 +18,7 @@ const replyArg=[...args].find(arg=>arg.startsWith('--provider-reply-file='));
 if(exportRequest){
  const scenario=buildNationsPostmatchScenario();
  const request=buildNationsPostmatchProviderRequest(scenario);
- const out=path.resolve(process.env.NATIONS_POSTMATCH_REQUEST||'/tmp/nations-postmatch-provider-request.json');
+ const out=path.resolve(process.env.NATIONS_POSTMATCH_REQUEST||path.join(OUTDIR,'nations-postmatch-provider-request.json'));
  fs.writeFileSync(out,JSON.stringify(request,null,2),{mode:0o600});
  console.log(JSON.stringify({status:'request-exported',requestHash:request.requestHash,file:out,providerCalls:0},null,2));
  process.exit(0);
@@ -27,14 +30,22 @@ const dbName=decodeURIComponent(url.pathname.split('/').filter(Boolean).at(-1)||
 if(dbName!=='nations_postmatch_ai_demo')throw new Error('REFUSE_DB_NAME');
 const host=url.searchParams.get('host')||url.hostname; if(!(host.startsWith('/')&&fs.existsSync(host)||['127.0.0.1','localhost'].includes(host)))throw new Error('REFUSE_NON_LOCAL_DB');
 const pool=new pg.Pool({connectionString:DSN,max:2});
+const OUTDIR=path.resolve(process.env.NATIONS_POSTMATCH_OUTDIR||'/Users/padbol2022/Documents/Codex/2026-11-16/IA-SIMULACION-GUS');
+fs.mkdirSync(OUTDIR,{recursive:true,mode:0o700});
 const mode=real?'real':replyArg?'reply':'stub';
 const hash=(v)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const facts=buildNationsPostmatchScenario();
 const factsHash=hash(facts);
-const cache=path.resolve(process.env.NATIONS_POSTMATCH_CACHE||`/tmp/nations-postmatch-demo-${mode}.json`);
-const claim=path.resolve(process.env.NATIONS_POSTMATCH_CLAIM||`/tmp/nations-postmatch-demo-${mode}.claim`);
-const receiptPath=path.resolve(process.env.NATIONS_POSTMATCH_RECEIPT||`/tmp/nations-postmatch-demo-${mode}-receipt.json`);
-if(fs.existsSync(cache)){console.log(JSON.stringify({status:'cached',mode,factsHash,cache},null,2));await pool.end();process.exit(0);}let replyPayload=null;
+const expectedRequestHash=(real||replyArg)?buildNationsPostmatchProviderRequest(facts).requestHash:null;
+const cache=path.resolve(process.env.NATIONS_POSTMATCH_CACHE||path.join(OUTDIR,`nations-postmatch-demo-${mode}.json`));
+const claim=path.resolve(process.env.NATIONS_POSTMATCH_CLAIM||path.join(OUTDIR,`nations-postmatch-demo-${mode}.claim`));
+const receiptPath=path.resolve(process.env.NATIONS_POSTMATCH_RECEIPT||path.join(OUTDIR,`nations-postmatch-demo-${mode}-receipt.json`));
+if(fs.existsSync(cache)){
+ const cached=JSON.parse(fs.readFileSync(cache,'utf8'));
+ const expectedProvider=real?'real':replyArg?'reply-file':'stub';
+ if(cached.mode!==mode||cached.factsHash!==factsHash||cached.provider!==expectedProvider||(expectedRequestHash&&cached.requestHash!==expectedRequestHash))throw new Error('DEMO_CACHE_MISMATCH');
+ console.log(JSON.stringify({status:'cached',mode,factsHash,cache},null,2));await pool.end();process.exit(0);
+}let replyPayload=null;
 if(replyArg){
  const file=replyArg.split('=').slice(1).join('=');
  replyPayload=JSON.parse(fs.readFileSync(path.resolve(file),'utf8'));
@@ -84,10 +95,18 @@ if(real&&!process.env.ANTHROPIC_API_KEY)throw new Error('--real-provider require
 const replyProvider={name:'reply-file',calls:0,async completeChat(){this.calls+=1;return {reply:JSON.stringify(replyPayload.reply??replyPayload.summary??replyPayload)}}}; const result=await processOneNationsPostmatchJob({pool,provider:real?undefined:(replyPayload?replyProvider:stubProvider)});
 const row=(await pool.query('SELECT status,summary,observed,updated_at FROM nations_postmatch_ai.jobs WHERE scoreboard_id=$1',[boardId])).rows[0];
 if(!row||row.status!=='ready')throw new Error(`summary not ready: ${JSON.stringify(result)}`);
+let getResumen=null;
+try {
+ const app=express(); const fake={from(table){const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:table==='torneos'?{id:57,sede_id:9,plan_nations:{roster_publication_approved:true},modalidad_plantel:'selecciones',fecha_inicio:'2026-11-20',horas_revelar_equipos:24,es_prueba:true}:table==='partidos'?{id:90016,torneo_id:57,equipo_a_id:101,equipo_b_id:102}:null,error:null})};return q;}};
+ mountNationsPostmatchRoutes(app,{pool,supabaseAdmin:fake,getAuthenticatedUser:async()=>({user:{id:'synthetic-demo'},status:200}),getRole:async()=>({rol:'super_admin'}),enabled:true});
+ const server=createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const res=await fetch(`http://127.0.0.1:${server.address().port}/api/nations/partidos/90016/resumen`,{headers:{authorization:'Bearer synthetic-demo'}});getResumen=await res.json();await new Promise(resolve=>server.close(resolve));
+ if(!getResumen?.ok||getResumen?.state!=='ready')throw new Error(`GET resumen not ready: ${JSON.stringify(getResumen)}`);
+} catch(error) { throw new Error(`GET resumen failed: ${error.message}`); }
 const anon=anonymizeObserved(row.observed,facts);
-const safe={status:'ready',mode,factsHash,provider:real?'real':replyPayload?'reply-file':'stub',model:real?process.env.ANTHROPIC_MODEL||'default':'stub',enqueue:{status:enq.status,inserted:enq.inserted},summary:row.summary,observed:{points:anon.payload.team_totals,substitutions:anon.payload.substitutions,substitutions_timeline:anon.payload.substitutions_timeline},generatedAt:row.updated_at};
+const safe={status:'ready',mode,factsHash,requestHash:expectedRequestHash,getResumen,provider:real?'real':replyPayload?'reply-file':'stub',model:real?process.env.ANTHROPIC_MODEL||'default':'stub',enqueue:{status:enq.status,inserted:enq.inserted},summary:row.summary,observed:{points:anon.payload.team_totals,substitutions:anon.payload.substitutions,substitutions_timeline:anon.payload.substitutions_timeline},generatedAt:row.updated_at};
 fs.writeFileSync(cache,JSON.stringify(safe,null,2),{mode:0o600});
-const reportPath=path.resolve(process.env.NATIONS_POSTMATCH_REPORT||`/tmp/nations-postmatch-demo-${mode}-report.html`);
+const reportPath=path.resolve(process.env.NATIONS_POSTMATCH_REPORT||path.join(OUTDIR,`nations-postmatch-demo-${mode}-report.html`));
 const txtPath=reportPath.replace(/\.html$/,'.txt');
 const lines=[`mode: ${mode}`,`factsHash: ${factsHash}`,`summary: ${safe.summary.summary}`,`sets: 6-3, 3-6, 10-9 (super tie-break)`,`points: ${safe.observed.points.A.points}-${safe.observed.points.B.points} (${facts.points.length} observed points)`,...safe.observed.substitutions_timeline.map(x=>`${x.at} ${x.team}: ${x.swaps.map(s=>`${s.out} -> ${s.in}`).join(', ')}; points ${x.points_before.A}-${x.points_before.B}`)];
 fs.writeFileSync(txtPath,lines.join('\n')+'\n',{mode:0o600});
