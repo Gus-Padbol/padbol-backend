@@ -44,7 +44,7 @@ if(fs.existsSync(cache)){
  const cached=JSON.parse(fs.readFileSync(cache,'utf8'));
  const expectedProvider=real?'real':replyArg?'reply-file':'stub';
  if(cached.mode!==mode||cached.factsHash!==factsHash||cached.provider!==expectedProvider||(expectedRequestHash&&cached.requestHash!==expectedRequestHash))throw new Error('DEMO_CACHE_MISMATCH');
- console.log(JSON.stringify({status:'cached',mode,factsHash,cache},null,2));await pool.end();process.exit(0);
+ console.log(JSON.stringify({status:'cached',mode,factsHash,cache,providerCalls:0},null,2));await pool.end();process.exit(0);
 }let replyPayload=null;
 if(replyArg){
  const file=replyArg.split('=').slice(1).join('=');
@@ -89,7 +89,7 @@ await pool.query('INSERT INTO nations_marker_private.nations_marker_match VALUES
 await pool.query("INSERT INTO nations_marker_private.games_finalization_intents VALUES($1,'completed',$2)",[boardId,new Date(facts.finalAt).toISOString()]);
 const enq=await enqueueNationsPostmatchForPartido({pool,torneoId:57,partidoId:90016});
 if(enq.status!=='queued')throw new Error(`enqueue failed: ${JSON.stringify(enq)}`);
-const stubProvider={name:'stub',calls:0,async completeChat({userMessage}){this.calls+=1;const p=JSON.parse(userMessage);return {reply:JSON.stringify({title:'Nations demo',summary:`Resultado ${p.resultado.sets_a}-${p.resultado.sets_b}; ${p.observed.substitutions_timeline?.length||0} cambios observados.`,highlights:[{type:'stats',text:`Puntos ${p.observed.team_totals.A.points}-${p.observed.team_totals.B.points}.`}],disclaimers:['Datos sintéticos del fixture.']})};}};
+const stubProvider={name:'stub',calls:0,async completeChat({userMessage}){this.calls+=1;const p=JSON.parse(userMessage);return {reply:JSON.stringify({title:'Nations demo',summary:`Resultado ${p.resultado.sets_a}-${p.resultado.sets_b}, super tie-break 10-9; A1 entró por A3 en el set 2 (elapsed 1050).`,highlights:[{type:'stats',text:`Puntos ${p.observed.team_totals.A.points}-${p.observed.team_totals.B.points}.`}],disclaimers:['Datos sintéticos del fixture.']})};}};
 if(real&&process.env.NATIONS_DEMO_REAL_AUTHORIZED!=='1')throw new Error('--real-provider requires NATIONS_DEMO_REAL_AUTHORIZED=1 and ROOT execution');
 if(real&&!process.env.ANTHROPIC_API_KEY)throw new Error('--real-provider requires ANTHROPIC_API_KEY');
 const replyProvider={name:'reply-file',calls:0,async completeChat(){this.calls+=1;return {reply:JSON.stringify(replyPayload.reply??replyPayload.summary??replyPayload)}}}; const result=await processOneNationsPostmatchJob({pool,provider:real?undefined:(replyPayload?replyProvider:stubProvider)});
