@@ -36,6 +36,8 @@ import {
 import { persistControlTokenForScoreboard } from '../src/scoreboard/scoreboardControlTokenService.js';
 import {
   resolveScoreboardForCancha,
+  pickScoreboardForCancha,
+  fetchPartidosMapByIds,
   SCOREBOARD_CANCHA_RESOLVER_SELECT,
 } from '../src/scoreboard/scoreboardCanchaResolver.js';
 import { syncScoreboardToTorneoPartido } from '../src/scoreboard/scoreboardTorneoSyncService.js';
@@ -1147,6 +1149,33 @@ export function mountScoreboardRoutes(app, {
     } catch (err) {
       console.error('❌ GET /api/scoreboard/jugadores-temp/:partidoId:', err.message);
       return sendHttpError(res, err, { fallbackMessage: 'Error al obtener jugadores temporales' });
+    }
+  });
+
+  app.get('/api/scoreboard/event/:eventId/cancha/:cancha', async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId);
+      if (!Number.isSafeInteger(eventId) || eventId <= 0) return res.status(400).json({ error: 'event_id inválido' });
+      const cancha = decodeURIComponent(String(req.params.cancha || '').trim());
+      if (!cancha) return res.status(400).json({ error: 'cancha inválida' });
+      const { data: candidates, error } = await supabaseAdmin
+        .from('scoreboard_partidos')
+        .select(SCOREBOARD_CANCHA_RESOLVER_SELECT)
+        .eq('torneo_id', eventId)
+        .eq('cancha', cancha)
+        .not('estado', 'in', '(terminado,finalizado)');
+      if (error) throw error;
+      const partidosById = await fetchPartidosMapByIds(supabaseAdmin, (candidates ?? []).map(row => row.partido_torneo_id).filter(Boolean));
+      const selected = pickScoreboardForCancha(candidates ?? [], partidosById);
+      const pending = (candidates ?? []).filter(row => String(row.estado || '').toLowerCase() === 'pendiente' && String(row.id) !== String(selected?.id));
+      const next = pending.sort((a,b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || String(a.id).localeCompare(String(b.id)))[0] ?? null;
+      const selectedLive = selected && String(selected.estado || '').toLowerCase() === 'en_curso';
+      const partido = selectedLive ? await enrichPartidoWithVenue(supabaseAdmin, selected) : null;
+      const nextMatch = next ? await enrichPartidoWithVenue(supabaseAdmin, next) : null;
+      return res.json({ partido, next: nextMatch, generated_at: new Date().toISOString() });
+    } catch (err) {
+      console.error('❌ GET /api/scoreboard/event/:eventId/cancha/:cancha:', err.message);
+      return sendHttpError(res, err, { fallbackMessage: 'Error al obtener el próximo partido por cancha' });
     }
   });
 
