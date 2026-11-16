@@ -2490,10 +2490,10 @@ app.get('/api/rankings', async (req, res) => {
       confirmedAwardIds = confirmedAwardEventIds(awardPlans || []);
       if (confirmedAwardIds.size) {
         const { data: awards, error: awardsError } = await supabaseAdmin.from('nations_awards').select('torneo_id,player_id,player_name,points,status').in('torneo_id', [...confirmedAwardIds]);
-        if (!awardsError) awardedRows = awards || [];
-        else confirmedAwardIds = new Set();
+        if (awardsError) throw Object.assign(new Error('No se pudo leer nations_awards para eventos con policy confirmada.'), {status:503, code:'AWARDS_READ_FAILED'});
+        awardedRows = awards || [];
       }
-    } catch { confirmedAwardIds = new Set(); }
+    } catch (error) { if (confirmedAwardIds.size) throw error; confirmedAwardIds = new Set(); }
 
     const { data: legadoPuntos, error: errP } = await supabaseAdmin
       .from('tabla_puntos')
@@ -2543,7 +2543,8 @@ app.get('/api/rankings', async (req, res) => {
       }
     });
 
-    awardedRows.forEach(award => mergeAwardIntoPlayerMap(playerMap, award));
+    const awardSeen = new Set();
+    awardedRows.forEach(award => mergeAwardIntoPlayerMap(playerMap, award, awardSeen));
 
     // 5. Enrich with jugadores_perfil where emails are known
     const emails = Object.values(playerMap).map(p => p.email).filter(Boolean);
