@@ -393,9 +393,32 @@ async function loadVenueContext(supabaseAdmin, sedeId) {
   };
 }
 
+
+function nationsCountryByTeam(plan) {
+  const raw = plan?.config?.country_by_team ?? plan?.country_by_team ?? {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(Object.entries(raw).map(([id, iso]) => [String(id), String(iso || '').trim().toUpperCase()]).filter(([, iso]) => /^[A-Z]{2}$/.test(iso)));
+}
+async function nationsTeamCountries(supabaseAdmin, partido) {
+  if (!partido?.partido_torneo_id) return {};
+  try {
+    const { data: match, error: matchError } = await supabaseAdmin.from('partidos').select('torneo_id,equipo_a_id,equipo_b_id').eq('id', partido.partido_torneo_id).maybeSingle();
+    if (matchError || !match?.torneo_id) return {};
+    const { data: event, error: eventError } = await supabaseAdmin.from('torneos').select('plan_nations').eq('id', match.torneo_id).maybeSingle();
+    if (eventError || !event) return {};
+    let plan = event.plan_nations;
+    if (typeof plan === 'string') plan = JSON.parse(plan);
+    const countries = nationsCountryByTeam(plan);
+    return {
+      equipo_a_pais_iso: countries[String(match.equipo_a_id)] || null,
+      equipo_b_pais_iso: countries[String(match.equipo_b_id)] || null,
+    };
+  } catch { return {}; }
+}
 async function enrichPartidoWithVenue(supabaseAdmin, partido, pool = null) {
   const ctx = await loadVenueContext(supabaseAdmin, partido?.sede_id);
-  return enrichPartidoResponse(await safeNationsScoreboardProjection(supabaseAdmin,partido,{pool}), ctx, await assertScoreboardScoringSupported(supabaseAdmin, partido, { readOnly: true }));
+  const countries = await nationsTeamCountries(supabaseAdmin, partido);
+  return enrichPartidoResponse({...await safeNationsScoreboardProjection(supabaseAdmin,partido,{pool}), ...countries}, ctx, await assertScoreboardScoringSupported(supabaseAdmin, partido, { readOnly: true }));
 }
 
 async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null, pool = null) {
