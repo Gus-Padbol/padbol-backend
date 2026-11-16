@@ -41,6 +41,11 @@ BEGIN
  PERFORM 1 FROM public.torneos WHERE id=p_torneo_id FOR UPDATE;
  SELECT p.plan INTO plan FROM public.torneo_nations_planes p WHERE p.torneo_id=p_torneo_id FOR UPDATE;
  IF plan->'award_policy'->>'confirmed' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Award policy not confirmed'; END IF;
+ IF p_payload ? 'sourceVersions' THEN
+  FOR row IN SELECT * FROM jsonb_array_elements(p_payload->'sourceVersions') LOOP
+   IF NOT EXISTS(SELECT 1 FROM public.scoreboard_partidos s JOIN nations_marker_private.nations_marker_match m ON m.match_id=s.id::text WHERE s.id::text=row->>'scoreboard_id' AND s.torneo_id=p_torneo_id AND m.revision=(row->>'revision')::int AND m.games_epoch=(row->>'epoch')::int) THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Stale scoreboard/marker source version'; END IF;
+  END LOOP;
+ END IF;
  SELECT * INTO prev FROM public.nations_award_policies WHERE torneo_id=p_torneo_id FOR UPDATE;
  IF prev.torneo_id IS NOT NULL AND src<prev.source_revision THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Stale awards source revision'; END IF;
  FOR row IN SELECT * FROM jsonb_array_elements(p_payload->'rows') LOOP
