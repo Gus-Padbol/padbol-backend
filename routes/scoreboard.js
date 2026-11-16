@@ -41,6 +41,7 @@ import {
   SCOREBOARD_CANCHA_RESOLVER_SELECT,
 } from '../src/scoreboard/scoreboardCanchaResolver.js';
 import { syncScoreboardToTorneoPartido } from '../src/scoreboard/scoreboardTorneoSyncService.js';
+import {selectCourtNext,preparedNextMatchDto} from '../lib/torneos/nationsScheduleRead.js';
 import { completeTournamentFromFinalScoreboard } from '../lib/torneos/tournamentCompletionService.js';
 import { onPartidoTorneoFinalizado } from '../lib/torneos/partidoTorneoFinalizadoEffectsService.js';
 import { advanceWinnerIfNeeded } from '../lib/torneos/bracketAdvanceService.js';
@@ -1167,18 +1168,21 @@ export function mountScoreboardRoutes(app, {
       if (error) throw error;
       const partidosById = await fetchPartidosMapByIds(supabaseAdmin, (candidates ?? []).map(row => row.partido_torneo_id).filter(Boolean));
       const selected = pickScoreboardForCancha(candidates ?? [], partidosById);
-      const pending = (candidates ?? []).filter(row => String(row.estado || '').toLowerCase() === 'pendiente' && String(row.id) !== String(selected?.id));
-      let slotOrder = new Map();
-      try {
-        const { data: slotRows } = await supabaseAdmin.from('torneo_nations_schedule_slots')
-          .select('partido_id,orden,slot_key').eq('torneo_id', eventId).eq('court_label', Number(cancha) || cancha);
-        slotOrder = new Map((slotRows ?? []).filter(row=>row.partido_id != null).map(row => [String(row.partido_id), Number(row.orden)]));
-      } catch { /* candidate table may not be applied yet; fall back to created_at */ }
-      const next = pending.sort((a,b) => (slotOrder.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER) - (slotOrder.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER) || String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || String(a.id).localeCompare(String(b.id)))[0] ?? null;
+      let slotRows = [];
+      try { const { data } = await supabaseAdmin.from('torneo_nations_schedule_slots').select('slot_key,partido_id,orden,court_label,inicio').eq('torneo_id', eventId).eq('court_label', Number(cancha) || cancha); slotRows = data ?? []; } catch { slotRows = []; }
+      const slotIds = slotRows.map(row => row.partido_id).filter(Boolean);
+      const { data: matchRows } = slotIds.length ? await supabaseAdmin.from('partidos').select('id,equipo_a_id,equipo_b_id,estado,fecha_hora').in('id', slotIds) : {data:[]};
+      const slotTeamIds = (matchRows ?? []).flatMap(row => [row.equipo_a_id,row.equipo_b_id]).filter(Boolean);
+      const { data: teamRows } = slotTeamIds.length ? await supabaseAdmin.from('equipos').select('id,nombre').in('id', slotTeamIds) : {data:[]};
+      const teamNames = new Map((teamRows ?? []).map(row => [String(row.id), String(row.nombre || '')]));
+      const matchesForSlots = (matchRows ?? []).map(row => ({...row, equipo_a_nombre:teamNames.get(String(row.equipo_a_id)) || null, equipo_b_nombre:teamNames.get(String(row.equipo_b_id)) || null}));
+      const ordered = selectCourtNext({boards:candidates ?? [], slots:slotRows, matches:matchesForSlots, courtLabel:cancha});
       const selectedLive = selected && String(selected.estado || '').toLowerCase() === 'en_curso';
+      let next = ordered.kind === 'next' ? preparedNextMatchDto(ordered.match, ordered.slot) : null;
+      if (ordered.kind === 'next-board') next = await enrichPartidoWithVenue(supabaseAdmin, ordered.board);
       const partido = selectedLive ? await enrichPartidoWithVenue(supabaseAdmin, selected) : null;
       const nextMatch = next ? await enrichPartidoWithVenue(supabaseAdmin, next) : null;
-      return res.json({ partido, next: nextMatch, generated_at: new Date().toISOString() });
+      return res.json({ partido, next, generated_at: new Date().toISOString() });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/event/:eventId/cancha/:cancha:', err.message);
       return sendHttpError(res, err, { fallbackMessage: 'Error al obtener el próximo partido por cancha' });
