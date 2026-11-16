@@ -130,6 +130,7 @@ import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountSurgeRoutes } from './routes/surge.js';
 import { mountCanchasRoutes } from './routes/canchas.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
+import {confirmedAwardEventIds,mergeAwardIntoPlayerMap} from './lib/torneos/nationsAwardsRankingReader.js';
 import { mountFipaRankingClaimRoutes } from './routes/fipaRankingClaims.js';
 import { loadOfficialFipaSource, mountFipaOfficialRankingRoutes } from './routes/fipaOfficialRanking.js';
 import { mountResenasRoutes } from './routes/resenas.js';
@@ -2481,13 +2482,26 @@ app.get('/api/rankings', async (req, res) => {
     const torneoIds = torneos.filter(t=>rankingTournamentEligible(t)&&isNationsPublicRevealed(t,Date.now(),aprobaciones.get(Number(t.id))===true)).map(t => t.id);
     if(!torneoIds.length)return res.json([]);
 
-    // 2. Load tabla_puntos for those torneos
-    const { data: puntos, error: errP } = await supabaseAdmin
+    // 2. Awarded Nations events are authoritative per player: their legacy team rows are replaced.
+    let confirmedAwardIds = new Set();
+    let awardedRows = [];
+    try {
+      const { data: awardPlans } = await supabaseAdmin.from('torneo_nations_planes').select('torneo_id,plan').in('torneo_id', torneoIds);
+      confirmedAwardIds = confirmedAwardEventIds(awardPlans || []);
+      if (confirmedAwardIds.size) {
+        const { data: awards, error: awardsError } = await supabaseAdmin.from('nations_awards').select('torneo_id,player_id,player_name,points,status').in('torneo_id', [...confirmedAwardIds]);
+        if (!awardsError) awardedRows = awards || [];
+        else confirmedAwardIds = new Set();
+      }
+    } catch { confirmedAwardIds = new Set(); }
+
+    const { data: legadoPuntos, error: errP } = await supabaseAdmin
       .from('tabla_puntos')
       .select('torneo_id, equipo_id, posicion, puntos')
       .in('torneo_id', torneoIds);
     if (errP) throw errP;
-    if (!puntos?.length) return res.json([]);
+    const puntos = (legadoPuntos || []).filter(p => !confirmedAwardIds.has(String(p.torneo_id)));
+    if (!puntos.length && !awardedRows.length) return res.json([]);
 
     // 3. Load equipos
     const equipoIds = [...new Set(puntos.map(p => p.equipo_id))];
@@ -2528,6 +2542,8 @@ app.get('/api/rankings', async (req, res) => {
         });
       }
     });
+
+    awardedRows.forEach(award => mergeAwardIntoPlayerMap(playerMap, award));
 
     // 5. Enrich with jugadores_perfil where emails are known
     const emails = Object.values(playerMap).map(p => p.email).filter(Boolean);
