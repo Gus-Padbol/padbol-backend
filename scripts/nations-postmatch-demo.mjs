@@ -12,6 +12,10 @@ import {buildNationsPostmatchScenario} from '../lib/torneos/nationsPostmatchScen
 import {enqueueNationsPostmatchForPartido,processOneNationsPostmatchJob,anonymizeObserved,buildNationsPostmatchProviderRequest} from '../lib/torneos/nationsPostmatchAi.js';
 
 const args=new Set(process.argv.slice(2));
+const OUTDIR=path.resolve(process.env.NATIONS_POSTMATCH_OUTDIR||'/Users/padbol2022/Documents/Codex/2026-11-16/IA-SIMULACION-GUS');
+fs.mkdirSync(OUTDIR,{recursive:true,mode:0o700});
+const emit=(value)=>process.stdout.write(JSON.stringify(value,null,2)+'\n');
+console.log=()=>{};
 const real=args.has('--real-provider');
 const exportRequest=args.has('--export-provider-request');
 const replyArg=[...args].find(arg=>arg.startsWith('--provider-reply-file='));
@@ -20,7 +24,7 @@ if(exportRequest){
  const request=buildNationsPostmatchProviderRequest(scenario);
  const out=path.resolve(process.env.NATIONS_POSTMATCH_REQUEST||path.join(OUTDIR,'nations-postmatch-provider-request.json'));
  fs.writeFileSync(out,JSON.stringify(request,null,2),{mode:0o600});
- console.log(JSON.stringify({status:'request-exported',requestHash:request.requestHash,file:out,providerCalls:0},null,2));
+ emit({status:'request-exported',requestHash:request.requestHash,file:out,providerCalls:0});
  process.exit(0);
 }
 const DSN=process.env.NATIONS_POSTMATCH_PG_URL;
@@ -30,8 +34,6 @@ const dbName=decodeURIComponent(url.pathname.split('/').filter(Boolean).at(-1)||
 if(dbName!=='nations_postmatch_ai_demo')throw new Error('REFUSE_DB_NAME');
 const host=url.searchParams.get('host')||url.hostname; if(!(host.startsWith('/')&&fs.existsSync(host)||['127.0.0.1','localhost'].includes(host)))throw new Error('REFUSE_NON_LOCAL_DB');
 const pool=new pg.Pool({connectionString:DSN,max:2});
-const OUTDIR=path.resolve(process.env.NATIONS_POSTMATCH_OUTDIR||'/Users/padbol2022/Documents/Codex/2026-11-16/IA-SIMULACION-GUS');
-fs.mkdirSync(OUTDIR,{recursive:true,mode:0o700});
 const mode=real?'real':replyArg?'reply':'stub';
 const hash=(v)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const facts=buildNationsPostmatchScenario();
@@ -44,7 +46,7 @@ if(fs.existsSync(cache)){
  const cached=JSON.parse(fs.readFileSync(cache,'utf8'));
  const expectedProvider=real?'real':replyArg?'reply-file':'stub';
  if(cached.mode!==mode||cached.factsHash!==factsHash||cached.provider!==expectedProvider||(expectedRequestHash&&cached.requestHash!==expectedRequestHash))throw new Error('DEMO_CACHE_MISMATCH');
- console.log(JSON.stringify({status:'cached',mode,factsHash,cache,providerCalls:0},null,2));await pool.end();process.exit(0);
+ emit({status:'cached',mode,factsHash,cache,providerCalls:0});await pool.end();process.exit(0);
 }let replyPayload=null;
 if(replyArg){
  const file=replyArg.split('=').slice(1).join('=');
@@ -112,5 +114,5 @@ const lines=[`mode: ${mode}`,`factsHash: ${factsHash}`,`summary: ${safe.summary.
 fs.writeFileSync(txtPath,lines.join('\n')+'\n',{mode:0o600});
 fs.writeFileSync(reportPath,`<!doctype html><meta charset="utf-8"><title>Nations demo ${mode}</title><h1>Nations postmatch demo — ${mode}</h1><pre>${lines.join('\n').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</pre>`,{mode:0o600});
 fs.writeFileSync(receiptPath,JSON.stringify({...safe,claim,cache,reportPath,txtPath,providerCalls:stubProvider?.calls??0},null,2),{mode:0o600});
-console.log(JSON.stringify({...safe,claim,cache,reportPath,txtPath,providerCalls:stubProvider?.calls??0},null,2));
+emit({...safe,claim,cache,reportPath,txtPath,providerCalls:stubProvider?.calls??0});
 await pool.end();
