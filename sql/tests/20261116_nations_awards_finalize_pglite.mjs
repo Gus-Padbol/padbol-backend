@@ -12,6 +12,7 @@ for(const p of [
  'sql/migrations/20261016103000_generic_selection_lineups.sql',
  'sql/migrations/20261016160000_generic_selection_compatibility.sql',
  'sql/tests/20261016_nations_registry_bootstrap.sql',
+ 'sql/20261011150000_nations_cup_event_plan.sql',
  '/Users/padbol2022/Documents/Codex/2026-11-16/Cierre-Torneo/ACTUAL-guardar_plan_nations_before_occupancy_candidate.sql',
  '/Users/padbol2022/Documents/Codex/2026-11-16/Cierre-Torneo/ACTUAL-finalizar_torneo_seleccion.sql',
  '/Users/padbol2022/Documents/Codex/2026-11-16/Cierre-Torneo/ACTUAL-proteger_plan_nations.sql',
@@ -23,8 +24,8 @@ for(const p of [
  'sql/20261021174000_scoreboard_final_result_order_candidate.sql',
  'sql/20261116_nations_awards_finalize.sql',
 ]) await load(p);
-await db.exec('CREATE TABLE IF NOT EXISTS public.scoreboard_linked_suspend_candidate(id bigint,partido_id bigint,estado text); CREATE TABLE IF NOT EXISTS public.torneo_nations_programacion(partido_id bigint,torneo_id bigint,court_id bigint,inicio timestamptz,duration_minutes integer);');
-await load('sql/tests/20261016_nations_registry_assertions.sql');
+await db.exec('CREATE TABLE IF NOT EXISTS public.scoreboard_linked_suspend_candidate(id bigint,partido_id bigint,scoreboard_id bigint,estado text,booking_id bigint,open_id bigint); CREATE TABLE IF NOT EXISTS public.torneo_nations_programacion(partido_id bigint,torneo_id bigint,court_id bigint,inicio timestamptz,duration_minutes integer,timezone text,actor_id uuid,revision bigint,updated_at timestamptz DEFAULT now(),UNIQUE(partido_id)); ALTER TABLE public.scoreboard_partidos ADD COLUMN IF NOT EXISTS reserva_id bigint, ADD COLUMN IF NOT EXISTS partido_abierto_id bigint; CREATE TABLE IF NOT EXISTS public.partidos_abiertos(id bigint,reserva_id bigint);');
+await load('sql/tests/20261116_nations_awards_registry_assertions.sql');
 console.log('ok - canonical finalization with awards migration');
 // Awards RPC: replay, void/reactivation, stale revision, policy gate and rollback.
 await db.exec(`INSERT INTO public.torneos(id,sede_id,es_prueba,deporte,modalidad_plantel,formato_equipo,estado,tipo_torneo,costo_inscripcion,nivel_torneo,fecha_inicio,fecha_fin) VALUES(91000,8,true,'padbol','selecciones','dobles','en_curso','grupos_knockout',0,'internacional','2026-11-20','2026-11-22');
