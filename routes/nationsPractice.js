@@ -16,7 +16,7 @@ export function mountNationsPracticeRoutes(app, { pool, io = null, enabled = fal
   app.get('/api/torneos/:id', getEvent, (req, res, next) => req.practice ? send(res, () => practiceTournamentDto(req.practice.event)) : next());
   read('/api/torneos/:id/equipos', (d) => practiceTeamsDto(d.teams));
   read('/api/torneos/:id/jugadores', (d) => practicePlayersDto(d.teams));
-  read('/api/torneos/:id/partidos', (d) => practiceMatchesDto(d.matches, d.event));
+  read('/api/torneos/:id/partidos', (d) => practiceMatchesDto(d.matches, d.event, d.teams));
   read('/api/torneos/:id/tabla', () => ({ equipos: [], filas: [], source: 'practice' }));
   read('/api/torneos/:id/tabla-posiciones', () => ({ equipos: [], filas: [], source: 'practice' }));
   read('/api/torneos/:id/tabla-puntos', () => ({ equipos: [], source: 'practice' }));
