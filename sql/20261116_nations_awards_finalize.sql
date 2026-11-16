@@ -41,6 +41,7 @@ BEGIN
  PERFORM 1 FROM public.torneos WHERE id=p_torneo_id FOR UPDATE;
  SELECT p.plan INTO plan FROM public.torneo_nations_planes p WHERE p.torneo_id=p_torneo_id FOR UPDATE;
  IF plan->'award_policy'->>'confirmed' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='Award policy not confirmed'; END IF;
+ IF src IS DISTINCT FROM (plan->>'revision')::bigint THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Awards source revision must equal current plan revision'; END IF;
  IF p_payload ? 'sourceVersions' THEN
   FOR row IN SELECT * FROM jsonb_array_elements(p_payload->'sourceVersions') LOOP
    IF NOT EXISTS(SELECT 1 FROM public.scoreboard_partidos s JOIN nations_marker_private.nations_marker_match m ON m.match_id=s.id::text WHERE s.id::text=row->>'scoreboard_id' AND s.torneo_id=p_torneo_id AND m.revision=(row->>'revision')::int AND m.games_epoch=(row->>'epoch')::int) THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Stale scoreboard/marker source version'; END IF;
@@ -83,7 +84,7 @@ BEGIN
    IF result->>'ok' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Core finalization unconfirmed'; END IF;
    -- A replayed core request must not rewrite awards with old client payload.
    IF result->>'status'='idempotent' THEN RETURN result; END IF;
-   PERFORM public.guardar_nations_awards(p_torneo_id,p_payload->'awards');
+   PERFORM public.guardar_nations_awards(p_torneo_id,jsonb_set(p_payload->'awards','{sourceRevision}',to_jsonb((result->>'revision')::bigint),true));
    RETURN result;
  END IF;
  RETURN public.guardar_plan_nations_core(p_torneo_id,p_actor_id,p_action,p_revision,p_request_id,p_request_digest,p_payload);
