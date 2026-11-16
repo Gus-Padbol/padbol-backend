@@ -1168,20 +1168,21 @@ export function mountScoreboardRoutes(app, {
       if (error) throw error;
       const partidosById = await fetchPartidosMapByIds(supabaseAdmin, (candidates ?? []).map(row => row.partido_torneo_id).filter(Boolean));
       const selected = pickScoreboardForCancha(candidates ?? [], partidosById);
-      let slotRows = [];
-      try { const { data } = await supabaseAdmin.from('torneo_nations_schedule_slots').select('slot_key,partido_id,orden,court_label,inicio').eq('torneo_id', eventId).eq('court_label', Number(cancha) || cancha); slotRows = data ?? []; } catch { slotRows = []; }
+      const { data: slotRows, error: slotError } = await supabaseAdmin.from('torneo_nations_schedule_slots').select('slot_key,partido_id,orden,court_label,inicio').eq('torneo_id', eventId).eq('court_label', Number(cancha) || cancha);
+      if (slotError) throw Object.assign(new Error('No se pudo leer la programación de la cancha.'), {status:503, code:'SCHEDULE_SLOTS_UNAVAILABLE'});
       const slotIds = slotRows.map(row => row.partido_id).filter(Boolean);
       const { data: matchRows } = slotIds.length ? await supabaseAdmin.from('partidos').select('id,equipo_a_id,equipo_b_id,estado,fecha_hora').in('id', slotIds) : {data:[]};
       const slotTeamIds = (matchRows ?? []).flatMap(row => [row.equipo_a_id,row.equipo_b_id]).filter(Boolean);
       const { data: teamRows } = slotTeamIds.length ? await supabaseAdmin.from('equipos').select('id,nombre').in('id', slotTeamIds) : {data:[]};
       const teamNames = new Map((teamRows ?? []).map(row => [String(row.id), String(row.nombre || '')]));
-      const matchesForSlots = (matchRows ?? []).map(row => ({...row, equipo_a_nombre:teamNames.get(String(row.equipo_a_id)) || null, equipo_b_nombre:teamNames.get(String(row.equipo_b_id)) || null}));
+      const { data: eventRow } = await supabaseAdmin.from('torneos').select('plan_nations').eq('id', eventId).maybeSingle();
+      const countries = nationsCountryByTeam(eventRow?.plan_nations);
+      const matchesForSlots = (matchRows ?? []).map(row => ({...row, equipo_a_nombre:teamNames.get(String(row.equipo_a_id)) || null, equipo_b_nombre:teamNames.get(String(row.equipo_b_id)) || null, equipo_a_pais_iso:countries[String(row.equipo_a_id)] || null, equipo_b_pais_iso:countries[String(row.equipo_b_id)] || null}));
       const ordered = selectCourtNext({boards:candidates ?? [], slots:slotRows, matches:matchesForSlots, courtLabel:cancha});
       const selectedLive = selected && String(selected.estado || '').toLowerCase() === 'en_curso';
       let next = ordered.kind === 'next' ? preparedNextMatchDto(ordered.match, ordered.slot) : null;
       if (ordered.kind === 'next-board') next = await enrichPartidoWithVenue(supabaseAdmin, ordered.board);
       const partido = selectedLive ? await enrichPartidoWithVenue(supabaseAdmin, selected) : null;
-      const nextMatch = next ? await enrichPartidoWithVenue(supabaseAdmin, next) : null;
       return res.json({ partido, next, generated_at: new Date().toISOString() });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/event/:eventId/cancha/:cancha:', err.message);
