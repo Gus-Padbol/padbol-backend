@@ -1168,7 +1168,13 @@ export function mountScoreboardRoutes(app, {
       const partidosById = await fetchPartidosMapByIds(supabaseAdmin, (candidates ?? []).map(row => row.partido_torneo_id).filter(Boolean));
       const selected = pickScoreboardForCancha(candidates ?? [], partidosById);
       const pending = (candidates ?? []).filter(row => String(row.estado || '').toLowerCase() === 'pendiente' && String(row.id) !== String(selected?.id));
-      const next = pending.sort((a,b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || String(a.id).localeCompare(String(b.id)))[0] ?? null;
+      let slotOrder = new Map();
+      try {
+        const { data: slotRows } = await supabaseAdmin.from('torneo_nations_schedule_slots')
+          .select('partido_id,orden,slot_key').eq('torneo_id', eventId).eq('court_label', Number(cancha) || cancha);
+        slotOrder = new Map((slotRows ?? []).filter(row=>row.partido_id != null).map(row => [String(row.partido_id), Number(row.orden)]));
+      } catch { /* candidate table may not be applied yet; fall back to created_at */ }
+      const next = pending.sort((a,b) => (slotOrder.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER) - (slotOrder.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER) || String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || String(a.id).localeCompare(String(b.id)))[0] ?? null;
       const selectedLive = selected && String(selected.estado || '').toLowerCase() === 'en_curso';
       const partido = selectedLive ? await enrichPartidoWithVenue(supabaseAdmin, selected) : null;
       const nextMatch = next ? await enrichPartidoWithVenue(supabaseAdmin, next) : null;
