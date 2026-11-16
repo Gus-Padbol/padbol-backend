@@ -92,3 +92,12 @@ test('stale editors and missing targets fail without uploads; atomic pointer com
   const r=await post(base,body());assert.equal(r.status,409);assert.equal((await r.json()).code,'HUB_IMAGE_CHANGED');assert.equal(concurrent.rows.get('sport').imagen_url,'https://cdn.invalid/newer.jpg');assert.equal(concurrent.objects.size,0);
  });
 });
+
+test('every enabled missing row can create once with null CAS and duplicate 409',async()=>{
+ for(const card_key of ['next_generation','comunidad','rankings','mis_partidos','torneos_acceso']){
+  const h=setup();await serve(h.app,async base=>{
+   const form=body();form.set('target',JSON.stringify({kind:'deporte',deporte:'padbol',card_key}));const r=await post(base,form);assert.equal(r.status,201,card_key);assert.ok([...h.rows.values()].some(row=>row.card_key===card_key));
+   const duplicate=body();duplicate.set('target',JSON.stringify({kind:'deporte',deporte:'padbol',card_key}));const d=await post(base,duplicate);assert.equal(d.status,409);assert.equal((await d.json()).code,'HUB_IMAGE_CHANGED');
+  });
+ }
+});

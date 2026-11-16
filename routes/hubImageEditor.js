@@ -6,7 +6,7 @@ import { HUB_EDITOR_BUCKET, HUB_EDITOR_ORIGINAL_LIMIT, HUB_EDITOR_FINAL_LIMIT, e
 const ROOT='/api/admin/hub-images';
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:HUB_EDITOR_ORIGINAL_LIMIT,files:2,fields:4,fieldSize:8192}}).fields([{name:'original',maxCount:1},{name:'foto',maxCount:1}]);
 const sameTarget=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
-const NEW_TARGET_KEYS=new Set(['next_generation','comunidad','torneos_acceso']);
+const NEW_TARGET_KEYS=new Set(['next_generation','comunidad','torneos_acceso','rankings','mis_partidos']);
 const dto=(m)=>({source_id:m.source_id,image_url:m.image_url,frame:m.frame,original:m.original,original_url:`${ROOT}/source/${m.source_id}/original`});
 export function mountHubImageEditorRoutes(app,{supabaseAdmin,...authDeps}) {
   const auth=async(req,res,next)=>{try{if(await requireContentEditorUser(req,res,authDeps))next();}catch{res.status(401).json({code:'UNAUTHORIZED'});}};
