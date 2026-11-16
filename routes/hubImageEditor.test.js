@@ -14,8 +14,9 @@ function setup({privateBucket=true,dbFails=false,manifestFails=false,role='edito
     download:async path=>({data:objects.get(`${bucket}/${path}`),error:objects.has(`${bucket}/${path}`)?null:Error('not found')}),
     remove:async paths=>{for(const path of paths)objects.delete(`${bucket}/${path}`);return{error:null};},
   })},from:table=>{
-    const filters={};let payload=null;const q={select:()=>q,eq:(k,v)=>{filters[k]=v;return q;},is:(k,v)=>{filters[k]=v;return q;},update:value=>{payload=value;return q;},maybeSingle:async()=>{
+    const filters={};let payload=null,inserting=false;const q={select:()=>q,eq:(k,v)=>{filters[k]=v;return q;},is:(k,v)=>{filters[k]=v;return q;},update:value=>{payload=value;inserting=false;return q;},insert:value=>{payload=value;inserting=true;return q;},maybeSingle:async()=>{
       if(payload && beforeUpdate)beforeUpdate(rows);
+      if(inserting){if(dbFails)return{error:Error('DB failed')};const conflict=[...rows.values()].some(r=>r.deporte===payload.deporte&&r.card_key===payload.card_key);if(conflict)return{error:Object.assign(Error('duplicate'),{code:'23505'})};const made={id:'new-'+rows.size,...payload};rows.set('new-'+rows.size,made);calls.push(['db',table]);return{data:{...made},error:null};}
       const row=[...rows.values()].find(r=>Object.entries(filters).every(([k,v])=>r[k]===v))||null;
       if(!payload)return{data:row,error:null};
       if(dbFails)return{error:Error('DB failed')};
@@ -74,6 +75,12 @@ test('non-editor roles denied before storage; success after lost DB response pre
   const h=setup({commitThenError:true});await serve(h.app,async base=>{const r=await post(base,body());assert.equal(r.status,201);const saved=await r.json();assert.equal(saved.row.imagen_url,saved.image_url);assert.equal(h.objects.size,3);});
 });
 
+test('new Next Generation target creates one row with CAS null and duplicate create conflicts',async()=>{
+ const h=setup();await serve(h.app,async base=>{
+  const form=body();form.set('target',JSON.stringify({kind:'deporte',deporte:'padbol',card_key:'next_generation'}));const r=await post(base,form);assert.equal(r.status,201);assert.equal(h.rows.size,6);assert.equal(h.rows.get('new-5').card_key,'next_generation');
+  const again=body();again.set('target',JSON.stringify({kind:'deporte',deporte:'padbol',card_key:'next_generation'}));const conflict=await post(base,again);assert.equal(conflict.status,409);assert.equal((await conflict.json()).code,'HUB_IMAGE_CHANGED');assert.equal(h.rows.size,6);
+ });
+});
 test('stale editors and missing targets fail without uploads; atomic pointer comparison rejects a concurrent publisher',async()=>{
  const h=setup();await serve(h.app,async base=>{
   const first=await(await post(base,body())).json();const uploads=h.calls.length;

@@ -6,6 +6,7 @@ import { HUB_EDITOR_BUCKET, HUB_EDITOR_ORIGINAL_LIMIT, HUB_EDITOR_FINAL_LIMIT, e
 const ROOT='/api/admin/hub-images';
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:HUB_EDITOR_ORIGINAL_LIMIT,files:2,fields:4,fieldSize:8192}}).fields([{name:'original',maxCount:1},{name:'foto',maxCount:1}]);
 const sameTarget=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+const NEW_TARGET_KEYS=new Set(['next_generation','community']);
 const dto=(m)=>({source_id:m.source_id,image_url:m.image_url,frame:m.frame,original:m.original,original_url:`${ROOT}/source/${m.source_id}/original`});
 export function mountHubImageEditorRoutes(app,{supabaseAdmin,...authDeps}) {
   const auth=async(req,res,next)=>{try{if(await requireContentEditorUser(req,res,authDeps))next();}catch{res.status(401).json({code:'UNAUTHORIZED'});}};
@@ -46,8 +47,9 @@ export function mountHubImageEditorRoutes(app,{supabaseAdmin,...authDeps}) {
       if(expectedImage!==null && (typeof expectedImage!=='string' || expectedImage.length>2048))throw editorError('INVALID_EXPECTED_IMAGE');
       const {data:current,error:readError}=await hubTargetQuery(supabaseAdmin,target).maybeSingle();
       if(readError)throw readError;
-      if(!current)throw editorError('HUB_TARGET_NOT_FOUND',404);
-      if(hubRowImage(current,target)!==expectedImage)throw editorError('HUB_IMAGE_CHANGED',409);
+      const canCreate=!current && target.kind==='deporte' && NEW_TARGET_KEYS.has(target.card_key) && expectedImage===null;
+      if(!current && !canCreate)throw editorError('HUB_TARGET_NOT_FOUND',404);
+      if(current && hubRowImage(current,target)!==expectedImage)throw editorError('HUB_IMAGE_CHANGED',409);
       const finalFile=req.files?.foto?.[0];
       const final=await inspectHubImage(finalFile,HUB_EDITOR_FINAL_LIMIT);
       let originalFile=req.files?.original?.[0],original;
@@ -75,12 +77,19 @@ export function mountHubImageEditorRoutes(app,{supabaseAdmin,...authDeps}) {
       await put(privateStore,manifestPath,Buffer.from(JSON.stringify(manifest)),'application/json',uploadedPrivate);
       const table=target.kind==='deporte'?'hub_deporte_config':'hub_config';
       const imageColumn=target.kind==='deporte'?'imagen_url':'foto_url';
-      let update=supabaseAdmin.from(table).update({[imageColumn]:image_url});
-      update=target.kind==='deporte'?update.eq('deporte',target.deporte).eq('card_key',target.card_key):update.eq('id',target.id);
-      update=expectedImage===null?update.is(imageColumn,null):update.eq(imageColumn,expectedImage);
       publication={target,manifest};
-      const {data:row,error}=await update.select('*').maybeSingle();
-      if(error)throw error;
+      let row=null,error=null;
+      if(canCreate){
+        ({data:row,error}=await supabaseAdmin.from(table).insert({deporte:target.deporte,card_key:target.card_key,[imageColumn]:image_url,media_type:'image'}).select('*').maybeSingle());
+        if(error?.code==='23505')throw editorError('HUB_IMAGE_CHANGED',409);
+        if(error)throw error;
+      } else {
+        let update=supabaseAdmin.from(table).update({[imageColumn]:image_url});
+        update=target.kind==='deporte'?update.eq('deporte',target.deporte).eq('card_key',target.card_key):update.eq('id',target.id);
+        update=expectedImage===null?update.is(imageColumn,null):update.eq(imageColumn,expectedImage);
+        ({data:row,error}=await update.select('*').maybeSingle());
+        if(error)throw error;
+      }
       if(!row)throw editorError('HUB_IMAGE_CHANGED',409);
       res.status(201).json({row,...dto(manifest)});
     }catch(e){
