@@ -5,6 +5,7 @@ const CARD_KEYS = [
   'reservar',
   'buscar_partido',
   'torneos',
+  'torneos_acceso',
   'rankings',
   'armar_partido',
   'comunidad',
