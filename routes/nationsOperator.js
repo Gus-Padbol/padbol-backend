@@ -46,7 +46,7 @@ export function mountNationsOperatorRoutes(app,{pool,db,getAuthenticatedUser,get
   ||method==='put'&&path==='/api/torneos/:id/partidos/:partidoId/equipos/:equipoId/alineacion';
  const fixedAdapter=Object.fromEntries(['get','post','put'].map(method=>[method,(path,handler)=>{if(supported(method,path))router[method](path.replace('/api/torneos','/torneos'),guarded(handler));} ]));
  const authorizeEvent=(actor,event)=>canOperateNationsEvent(pool,actor,event);
- mountNationsCupRoutes(fixedAdapter,{db,getAuthenticatedUser,getRole,authorizeEvent});
+ mountNationsCupRoutes(fixedAdapter,{db,getAuthenticatedUser,getRole,authorizeEvent,awardsPool:pool});
  mountNationalTeamRoutes(fixedAdapter,{db,getAuthenticatedUser,getRole,authorizeEvent});
  async function board(req,q=pool,{lock=false}={}){
   const id=Number(req.params.partidoId);if(!Number.isSafeInteger(id)||id<=0)throw operatorError('NATIONS_OPERATOR_MATCH_INVALID',400);

@@ -1986,7 +1986,7 @@ async function requireTorneoAdminByTorneoId(req, res, torneoId) {
   return null;
 }
 
-mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS) });
+mountNationsCupRoutes(app, { db: supabaseAdmin, getAuthenticatedUser, getRole: user => resolveAuthRoleForUser(user, LEGACY_TORNEO_ADMIN_DEPS), awardsPool: pgPool });
 mountNationsCountryRankingRoutes(app, { db: supabaseAdmin });
 mountQaManualTeamsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
 mountTournamentParticipantsRoutes(app, { db: supabaseAdmin, getAuthenticatedUser });
