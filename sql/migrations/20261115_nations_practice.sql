@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS nations_practice.commands (
   request_id uuid NOT NULL,
   expected_revision integer NOT NULL,
   action text NOT NULL,
+  payload jsonb NOT NULL,
   result jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (match_id, request_id)
