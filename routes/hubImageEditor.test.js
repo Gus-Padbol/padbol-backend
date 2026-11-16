@@ -78,7 +78,8 @@ test('non-editor roles denied before storage; success after lost DB response pre
 test('new Next Generation target creates one row with CAS null and duplicate create conflicts',async()=>{
  const h=setup();await serve(h.app,async base=>{
   const form=body();form.set('target',JSON.stringify({kind:'deporte',deporte:'padbol',card_key:'next_generation'}));const r=await post(base,form);assert.equal(r.status,201);assert.equal(h.rows.size,6);assert.equal(h.rows.get('new-5').card_key,'next_generation');
-  const again=body();again.set('target',JSON.stringify({kind:'deporte',deporte:'padbol',card_key:'next_generation'}));const conflict=await post(base,again);assert.equal(conflict.status,409);assert.equal((await conflict.json()).code,'HUB_IMAGE_CHANGED');assert.equal(h.rows.size,6);
+  const community=body();community.set('target',JSON.stringify({kind:'deporte',deporte:'padbol',card_key:'comunidad'}));const cr=await post(base,community);assert.equal(cr.status,201);assert.ok([...h.rows.values()].some(r=>r.card_key==='comunidad'));
+  const again=body();again.set('target',JSON.stringify({kind:'deporte',deporte:'padbol',card_key:'next_generation'}));const conflict=await post(base,again);assert.equal(conflict.status,409);assert.equal((await conflict.json()).code,'HUB_IMAGE_CHANGED');assert.equal(h.rows.size,7);
  });
 });
 test('stale editors and missing targets fail without uploads; atomic pointer comparison rejects a concurrent publisher',async()=>{
