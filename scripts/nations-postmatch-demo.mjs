@@ -63,7 +63,7 @@ if(existing.rows[0]?.t||existing.rows[0]?.j||existing.rows[0]?.m)throw new Error
 await pool.query(`CREATE SCHEMA nations_postmatch_ai; CREATE SCHEMA nations_marker_private;
 CREATE TABLE torneos(id bigint PRIMARY KEY,sede_id bigint,modalidad_plantel text,deporte text,plan_nations jsonb,es_prueba boolean DEFAULT true);
 CREATE TABLE partidos(id bigint PRIMARY KEY,torneo_id bigint,equipo_a_id bigint,equipo_b_id bigint); INSERT INTO partidos VALUES(90016,57,101,102);
-CREATE TABLE equipos(id bigint PRIMARY KEY,torneo_id bigint,creador_id uuid,jugadores jsonb,inscripcion_estado text);
+CREATE TABLE equipos(id bigint PRIMARY KEY,torneo_id bigint,creador_id uuid,jugadores jsonb,inscripcion_estado text,nombre text);
 CREATE TABLE torneo_partido_alineaciones(torneo_id bigint,partido_id bigint,equipo_id bigint,iniciales jsonb,suplentes jsonb,revision bigint);
 CREATE TABLE scoreboard_partidos(id uuid PRIMARY KEY,partido_torneo_id bigint,sede_id bigint,torneo_id bigint,cancha text,estado text,cronometro_inicio timestamptz,cronometro_pausado boolean,cronometro_segundos integer,updated_at timestamptz,score_a integer,score_b integer,games_a integer,games_b integer,sets_a integer,sets_b integer,historial_sets jsonb DEFAULT '[]',equipo_a_nombre text,equipo_b_nombre text,equipo_a_jugadores jsonb,equipo_b_jugadores jsonb);
 CREATE TABLE scoreboard_historial_puntos(id bigserial PRIMARY KEY,partido_id uuid,timestamp timestamptz,equipo text);
@@ -79,7 +79,7 @@ const A=facts.context.teams['101'].players.map(p=>({...p,id:mapId(p.id)}));
 const B=facts.context.teams['102'].players.map(p=>({...p,id:mapId(p.id)}));
 const boardId=U(1);
 for(const [team,list] of [[101,A],[102,B]]){
- await pool.query('INSERT INTO equipos VALUES($1,57,NULL,$2,$3)',[team,JSON.stringify(list.map(p=>({user_id:p.id,nombre:p.name,estado:'confirmado'}))),'confirmado']);
+ await pool.query('INSERT INTO equipos VALUES($1,57,NULL,$2,$3,$4)',[team,JSON.stringify(list.map(p=>({user_id:p.id,nombre:p.name,estado:'confirmado'}))),'confirmado',team===101?'Italia':'España']);
  await pool.query('INSERT INTO torneo_partido_alineaciones VALUES(57,90016,$1,$2,$3,1)',[team,JSON.stringify(list.slice(0,2).map(p=>p.id)),JSON.stringify(list.slice(2).map(p=>p.id))]);
 }
 const mapState=(state)=>({...state,active:state.active.map(mapId),roster:state.roster.map(mapId),lineup:{iniciales:state.lineup.iniciales.map(mapId),suplentes:state.lineup.suplentes.map(mapId)},events:state.events.map(e=>({...e,outId:e.outId?mapId(e.outId):null,inId:e.inId?mapId(e.inId):null}))});
