@@ -17,6 +17,7 @@ for(const p of [
  '/Users/padbol2022/Documents/Codex/2026-11-16/Cierre-Torneo/ACTUAL-finalizar_torneo_seleccion.sql',
  '/Users/padbol2022/Documents/Codex/2026-11-16/Cierre-Torneo/ACTUAL-proteger_plan_nations.sql',
  '/Users/padbol2022/Documents/Codex/2026-11-16/Cierre-Torneo/ACTUAL-GUARDAR-PLAN-NATIONS.sql',
+ 'sql/20261117_nations57_tour500_guard.sql',
  'sql/migrations/20261016150000_participant_official_accreditation.sql',
  'sql/migrations/20261016170000_nations_registered_participants.sql',
  'sql/migrations/20261016180000_participant_ranking_closure_snapshot.sql',

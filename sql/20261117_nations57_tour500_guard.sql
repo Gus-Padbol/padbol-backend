@@ -6,7 +6,7 @@ CREATE OR REPLACE FUNCTION public.guardar_plan_nations_before_occupancy_candidat
  SECURITY DEFINER
  SET search_path TO 'public', 'pg_temp'
 AS $function$
-DECLARE t public.torneos; plan jsonb; previous jsonb; row jsonb; match public.partidos; court public.canchas; new_id bigint; round_no integer; pos integer; target bigint; ids bigint[]; start_at timestamptz; minutes integer; new_revision bigint; court_number integer; actor_role public.user_roles; source jsonb; closure jsonb; base_points numeric; percent numeric;
+DECLARE t public.torneos; tour_position int; tour_base numeric; tour_wins int; plan jsonb; previous jsonb; row jsonb; match public.partidos; court public.canchas; new_id bigint; round_no integer; pos integer; target bigint; ids bigint[]; start_at timestamptz; minutes integer; new_revision bigint; court_number integer; actor_role public.user_roles; source jsonb; closure jsonb; base_points numeric; percent numeric;
 BEGIN
  SELECT * INTO t FROM public.torneos WHERE id=p_torneo_id FOR UPDATE;
  IF t.id IS NULL OR t.modalidad_plantel IS DISTINCT FROM 'selecciones' OR t.deporte IS DISTINCT FROM 'padbol' OR t.tipo_torneo IS DISTINCT FROM 'grupos_knockout' OR p_actor_id IS NULL OR p_request_id IS NULL OR p_revision IS NULL OR p_revision<0 OR p_request_digest IS NULL OR p_request_digest !~ '^[a-f0-9]{64}$' THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Invalid Nations event context'; END IF;
@@ -115,7 +115,6 @@ BEGIN
  INSERT INTO public.torneo_nations_planes(torneo_id,plan) VALUES(t.id,plan) ON CONFLICT(torneo_id) DO UPDATE SET plan=EXCLUDED.plan,updated_at=now();
  UPDATE public.torneos SET plan_nations=jsonb_build_object('enabled',true,'format','nations_3x5','revision',new_revision,'status',plan->>'status','config',jsonb_strip_nulls(jsonb_build_object('format','nations_3x5','timezone',plan->'config'->>'timezone','reveal_at',plan->'config'->>'reveal_at'))),updated_at=now() WHERE id=t.id;
  RETURN jsonb_build_object('ok',true,'status','saved','torneo_id',t.id,'revision',new_revision);
-END $function$
-
+END $function$;
 
 COMMIT;
