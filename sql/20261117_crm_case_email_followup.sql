@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS public.crm_case_email_followup_plans (
 CREATE UNIQUE INDEX IF NOT EXISTS crm_case_email_followup_one_open
   ON public.crm_case_email_followup_plans(case_type,case_id)
   WHERE status IN ('active','paused','human_review');
+CREATE UNIQUE INDEX IF NOT EXISTS crm_case_email_followup_one_open_email
+  ON public.crm_case_email_followup_plans(lower(btrim(recipient_email)))
+  WHERE status IN ('active','paused','human_review');
 CREATE TABLE IF NOT EXISTS public.crm_case_email_followup_outbox (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   plan_id uuid NOT NULL REFERENCES public.crm_case_email_followup_plans(id) ON DELETE CASCADE,
