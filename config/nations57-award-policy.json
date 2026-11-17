@@ -1,0 +1,15 @@
+{
+  "confirmed": true,
+  "unit": "sets",
+  "denominatorMode": "max_player_sets",
+  "bonusProration": "none",
+  "minimumSets": 1,
+  "participation": {
+    "zeroSets": 0,
+    "greaterThanZeroLessThanHalf": 0.5,
+    "atLeastHalf": 1
+  },
+  "tournamentId": 57,
+  "confirmedTour500": true,
+  "mode": "tour500"
+}
