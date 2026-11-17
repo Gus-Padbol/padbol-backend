@@ -34,6 +34,15 @@ const link=(await c.query("select link from public.crm_agenda_notifications wher
 await c.query('update public.crm_commercial_cases set assigned_user_id=$1 where id=$2',[ADV2,CASE]);await c.query('update public.crm_agenda_reminders set advisor_id=$1 where scheduled_at=$2',[ADV2,'2026-11-10T12:00:00Z']);
 const three=await run();
 const reassigned=await c.query("select user_id,active from public.crm_agenda_notifications order by created_at");
+await c.query('update public.crm_commercial_cases set assigned_user_id=$1 where id=$2',[ADV,CASE]);
+await c.query('update public.crm_agenda_reminders set advisor_id=$1 where scheduled_at=$2',[ADV,'2026-11-10T12:00:00Z']);
+const back=await run();
+assert.equal(back.inAppCreated,1);
+assert.equal((await c.query('select active from crm_agenda_notifications where user_id=$1',[ADV])).rows[0].active,true);
+assert.equal((await c.query('select active from crm_agenda_notifications where user_id=$1',[ADV2])).rows[0].active,false);
+await c.query('update crm_agenda_notifications set read_at=now() where user_id=$1',[ADV]);
+assert.equal((await run()).inAppCreated,0);
+assert.ok((await c.query('select read_at from crm_agenda_notifications where user_id=$1',[ADV])).rows[0].read_at);
 await c.query("update public.crm_commercial_cases set status='closed',progress_state='cerrado',next_contact_at=null where id=$1",[CASE]);await c.query('update public.crm_agenda_reminders set active=false where scheduled_at=$1',['2026-11-10T12:00:00Z']);
 const four=await run();
 const cancelled=await c.query("select count(*)::int n from public.crm_agenda_notifications where active and user_id=$1",[ADV2]);
@@ -42,4 +51,5 @@ assert.equal(one.inAppCreated,1);assert.equal(one.pushSent,0);assert.equal(after
 result.status='PASS';
 
 await c.end();
+const cleanup=new pg.Client({connectionString:adminUrl});await cleanup.connect();await cleanup.query(`drop database ${DB}`);await cleanup.end();
 const out='/Users/padbol2022/Documents/Codex/2026-11-17/CRM-SEGUIMIENTO/CRM-AGENDA-DURABLE-RESULT.json';fs.writeFileSync(out,JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify({...result,path:out},null,2));
