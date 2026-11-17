@@ -87,13 +87,13 @@ BEGIN
  ELSIF p_action='finalizar' THEN
   IF plan->'classification_source' IS DISTINCT FROM (SELECT coalesce(jsonb_agg(x ORDER BY (x->>'id')::bigint),'[]'::jsonb) FROM jsonb_array_elements(public.nations_source_snapshot(t.id)) x WHERE x->>'grupo' IS NOT NULL AND x->'bracket_round'='null'::jsonb) THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Approved classification source changed'; END IF;
   IF (SELECT count(*) FROM public.partidos WHERE torneo_id=t.id)<>(CASE WHEN plan->'config'->'rules'->'third_place_match'='true'::jsonb THEN 38 ELSE 37 END) OR EXISTS(SELECT 1 FROM public.partidos WHERE torneo_id=t.id AND estado IS DISTINCT FROM 'finalizado') OR p_payload->'source' IS DISTINCT FROM public.nations_source_snapshot(t.id) OR jsonb_array_length(p_payload->'placements')<>15 THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='Final results changed or event incomplete'; END IF;
-  IF plan->'award_policy'->>'confirmedTour500'='true' THEN
+  IF t.id=57 AND plan->'award_policy'->>'confirmed'='true' AND plan->'award_policy'->>'confirmedTour500'='true' THEN
    FOR row IN SELECT * FROM jsonb_array_elements(p_payload->'puntos') LOOP
     tour_position:=CASE WHEN (row->>'posicion')::int BETWEEN 1 AND 4 THEN (row->>'posicion')::int WHEN (row->>'posicion')::int BETWEEN 5 AND 8 THEN 5 WHEN (row->>'posicion')::int BETWEEN 9 AND 15 THEN 9 ELSE NULL END;
     tour_base:=CASE tour_position WHEN 1 THEN 500 WHEN 2 THEN 300 WHEN 3 THEN 190 WHEN 4 THEN 170 WHEN 5 THEN 90 WHEN 9 THEN 20 END;
     IF tour_base IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Tour500 position invalid'; END IF;
     tour_wins:=0;
-    SELECT count(*) INTO tour_wins FROM public.partidos gm WHERE gm.torneo_id=t.id AND ((gm.equipo_a_id=(row->>'equipo_id')::bigint) OR (gm.equipo_b_id=(row->>'equipo_id')::bigint)) AND gm.grupo IS NOT NULL AND gm.bracket_round IS NULL AND gm.estado='finalizado' AND gm.ganador_equipo_id=(row->>'equipo_id')::bigint;
+    SELECT count(*) INTO tour_wins FROM public.partidos gm WHERE gm.torneo_id=t.id AND gm.ganador_equipo_id=(row->>'equipo_id')::bigint AND gm.grupo IS NOT NULL AND gm.bracket_round IS NULL AND gm.estado='finalizado';
     IF tour_position=9 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(plan->'qualified','[]'::jsonb)) q WHERE (q->>'equipo_id')::bigint=(row->>'equipo_id')::bigint) THEN tour_base:=tour_base+tour_wins*3; END IF;
     IF (row->>'puntos')::numeric IS DISTINCT FROM tour_base THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='Tour500 country points mismatch'; END IF;
    END LOOP;
