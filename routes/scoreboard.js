@@ -6,6 +6,7 @@ import { installScoreboardWatchRoutes } from '../src/scoreboard/scoreboardWatchR
 import { validatePartialCorrection } from '../src/scoreboard/scoreboardPartialCorrection.js';
 import { installScoreboardSuspensionRoutesCandidate } from '../src/scoreboard/scoreboardSuspensionRoutesCandidate.js';
 import {assertNationsScoreboardAudience,safeNationsScoreboardProjection} from '../lib/torneos/nationsPublicAccess.js';
+import {canManageNationsContingencyScoreboard,isIndependentContingencyScoreboard,isOwnedContingencyScoreboard} from '../lib/torneos/nationsScoreboardContingency.js';
 import {
   registrarPunto,
   deshacerPunto,
@@ -110,7 +111,7 @@ export function pickScoreboardPartidoLinks(body = {}) {
 
 const SCOREBOARD_PARTIDO_SELECT = [
   'id', 'sede_id', 'torneo_id', 'torneo_nombre', 'cancha',
-  'partido_abierto_id', 'reserva_id', 'partido_torneo_id',
+  'partido_abierto_id', 'reserva_id', 'partido_torneo_id', 'created_by_user_id',
   'synced_to_torneo_at', 'sync_torneo_status',
   'equipo_a_nombre', 'equipo_b_nombre', 'equipo_a_jugadores', 'equipo_b_jugadores',
   'jersey_a1', 'jersey_a2', 'jersey_a3', 'jersey_a4',
@@ -475,6 +476,18 @@ export function mountScoreboardRoutes(app, {
   scoreboardSuspensionRecoveryEnabled = false,
 }) {
   const assertNationsScoreboardRead=(req,row)=>assertNationsScoreboardAudience(req,row,{db:supabaseAdmin,getAuthenticatedUser,getRole:user=>resolveAuthRole(user,{fetchUserRoleRowForAuthUser,legacySuperAdminEmails})});
+  // Nations 57 operators may create/control contingency scoreboards only at the
+  // tournament's own sede. The active grant is checked server-side; no admin_sede role.
+  async function assertCanControlOrContingency(user, role, sedeId, partido = null) {
+    try { assertCanControlScoreboard(role, sedeId); return 'role'; } catch (error) {
+      // The contingency grant never authorizes an official tournament board,
+      // another user's marker, or a marker that has been linked to a match.
+      if (!isOwnedContingencyScoreboard(partido, user?.id)) throw error;
+      const allowed = await canManageNationsContingencyScoreboard({ pool: nationsGamesPool, userId: user?.id, sedeId });
+      if (!allowed) throw error;
+      return 'contingency';
+    }
+  }
   if (scoreboardSuspensionCandidateEnabled === true || scoreboardSuspensionRecoveryEnabled === true) {
     installScoreboardSuspensionRoutesCandidate(app, {
       getAuthenticatedUser, fetchPartido, db: supabaseAdmin, allowTransitions: scoreboardSuspensionCandidateEnabled === true, allowResume: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true,
@@ -621,7 +634,8 @@ export function mountScoreboardRoutes(app, {
 
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      const authMode = await assertCanControlOrContingency(user, role, partido.sede_id, partido);
+      if (authMode === 'contingency') return res.status(403).json({error:'Usá el control autenticado del panel para este marcador de contingencia.'});
 
       const issued=nationsGamesEnabled&&nationsGamesPool?await issueNationsControlToken({pool:nationsGamesPool,scoreboardId:partido.id,issuerId:user.id}):null;
       const { controlToken, controlTokenCreatedAt } = issued||await persistControlTokenForScoreboard(supabaseAdmin,partido.id);
@@ -646,7 +660,7 @@ export function mountScoreboardRoutes(app, {
 
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const revokedAt = new Date().toISOString();
       const { data, error } = await supabaseAdmin
@@ -841,7 +855,11 @@ export function mountScoreboardRoutes(app, {
       }
 
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, sid);
+      const authMode = await assertCanControlOrContingency(user, role, sid, {partido_torneo_id:null,torneo_id:null,created_by_user_id:user.id});
+      if (authMode === 'contingency') {
+        const forbiddenLinks = ['torneo_id','torneo_nombre','partido_abierto_id','reserva_id','partido_torneo_id'];
+        if (forbiddenLinks.some(key => req.body?.[key] != null && req.body[key] !== '')) return res.status(403).json({error:'Un marcador de contingencia no puede vincularse a un torneo, reserva o partido.'});
+      }
 
       const jugadoresA = Array.isArray(equipo_a_jugadores) ? equipo_a_jugadores : [];
       const jugadoresB = Array.isArray(equipo_b_jugadores) ? equipo_b_jugadores : [];
@@ -856,7 +874,7 @@ export function mountScoreboardRoutes(app, {
 
       const row = {
         sede_id: sid,
-        torneo_id: torneo_id || null,
+        torneo_id: authMode === 'contingency' ? null : (torneo_id || null),
         torneo_nombre: torneo_nombre ? String(torneo_nombre).trim() : null,
         cancha,
         ...pickScoreboardPartidoLinks(req.body),
@@ -887,6 +905,7 @@ export function mountScoreboardRoutes(app, {
         color_b: String(color_b || '#6e1a1a').trim(),
         ...pickColorUniformes(req.body),
         estado: 'pendiente',
+        ...(authMode === 'contingency' ? {created_by_user_id:user.id} : {}),
       };
 
       const { data, error } = await supabaseAdmin
@@ -941,7 +960,14 @@ export function mountScoreboardRoutes(app, {
       }
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       await assertNationsScoreboardRead(req,partido);
-      return res.json({ ...(await enrichPartidoWithVenue(supabaseAdmin, partido, nationsGamesPool)), scoreboard_suspension_candidate_enabled: scoreboardSuspensionCandidateEnabled === true, scoreboard_suspension_resume_enabled: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true, scoreboard_partial_correction_enabled: true });
+      let canControlContingency = false;
+      try {
+        const auth = await getAuthenticatedUser(req);
+        if (auth?.user?.id && isOwnedContingencyScoreboard(partido, auth.user.id)) {
+          canControlContingency = await canManageNationsContingencyScoreboard({pool:nationsGamesPool,userId:auth.user.id,sedeId:partido.sede_id});
+        }
+      } catch { /* public read remains available */ }
+      return res.json({ ...(await enrichPartidoWithVenue(supabaseAdmin, partido, nationsGamesPool)), can_control: canControlContingency, scoreboard_suspension_candidate_enabled: scoreboardSuspensionCandidateEnabled === true, scoreboard_suspension_resume_enabled: scoreboardSuspensionRecoveryEnabled === true || scoreboardSuspensionCandidateEnabled === true, scoreboard_partial_correction_enabled: true });
     } catch (err) {
       const st = err.status || 500;
       console.error('❌ GET /api/scoreboard/partidos/:id:', err.message);
@@ -954,7 +980,7 @@ export function mountScoreboardRoutes(app, {
       const auth = await getAuthenticatedUser(req);
       if (!auth.user) return res.status(auth.status || 401).json({ error: 'No autorizado' });
       const marker = await fetchPartido(supabaseAdmin, req.params.id);
-      assertCanControlScoreboard(await resolveAuthRole(auth.user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), marker.sede_id);
+      await assertCanControlOrContingency(auth.user, await resolveAuthRole(auth.user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), marker.sede_id, marker);
       const scoringPolicy = await assertScoreboardScoringSupported(supabaseAdmin, marker);
       if ((isNapoliGroupsPolicy(scoringPolicy) && Number(marker.sets_a) === 1 && Number(marker.sets_b) === 1) || marker.historial_sets?.some(set => set.type === 'super_tiebreak')) throw Object.assign(new Error('Super tie-break corrections require point undo.'), { status: 409, code: 'SUPER_TIEBREAK_POINT_UNDO_REQUIRED' });
       const input = validatePartialCorrection(req.body);
@@ -975,7 +1001,7 @@ export function mountScoreboardRoutes(app, {
       const auth = await getAuthenticatedUser(req);
       if (!auth.user) return res.status(auth.status || 401).json({error:'No autorizado'});
       const marker = await fetchPartido(supabaseAdmin, req.params.id);
-      assertCanControlScoreboard(await resolveAuthRole(auth.user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), marker.sede_id);
+      await assertCanControlOrContingency(auth.user, await resolveAuthRole(auth.user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), marker.sede_id, marker);
       const {data,error}=await supabaseAdmin.from('scoreboard_partial_correction_audit').select('id,scoreboard_id,actor_id,reason,previous_score,corrected_score,created_at').eq('scoreboard_id',marker.id).order('created_at',{ascending:false}).limit(100);
       if(error) throw error;
       return res.json({correcciones:data||[]});
@@ -989,9 +1015,10 @@ export function mountScoreboardRoutes(app, {
 
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      const authMode = await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const body = req.body ?? {};
+      if (authMode === 'contingency' && ['torneo_id','torneo_nombre','partido_abierto_id','reserva_id','partido_torneo_id','created_by_user_id'].some(key => Object.hasOwn(body,key))) return res.status(403).json({error:'Un marcador de contingencia no puede vincularse ni cambiar de dueño.'});
       const patch = { ...pickColorUniformes(body) };
 
       const passthrough = [
@@ -1101,7 +1128,7 @@ export function mountScoreboardRoutes(app, {
       }
 
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const numero = body.numero != null && body.numero !== ''
         ? resolveJerseyNumber(body.numero, slot)
@@ -1228,7 +1255,7 @@ export function mountScoreboardRoutes(app, {
 
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const enriched = await handleRegistrarPunto(partido, equipo, commandContext(req,user,role));
       return res.json(enriched);
@@ -1262,7 +1289,7 @@ export function mountScoreboardRoutes(app, {
 
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const enriched = await handleUndo(partido, commandContext(req,user,role));
       return res.json(enriched);
@@ -1280,7 +1307,7 @@ export function mountScoreboardRoutes(app, {
 
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const enriched = await handleDeshacer(partido, commandContext(req,user,role));
       return res.json(enriched);
@@ -1298,7 +1325,7 @@ export function mountScoreboardRoutes(app, {
 
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const enriched = await handleSaque(partido);
       return res.json(enriched);
@@ -1316,7 +1343,7 @@ export function mountScoreboardRoutes(app, {
 
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const enriched = await handleTiebreak(partido, commandContext(req,user,role));
       return res.json(enriched);
@@ -1339,7 +1366,7 @@ export function mountScoreboardRoutes(app, {
 
       const partido = await fetchPartido(supabaseAdmin, req.params.id);
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      assertCanControlScoreboard(role, partido.sede_id);
+      await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const enriched = await handleCronometro(partido, accion, commandContext(req,user,role));
       return res.json(enriched);
