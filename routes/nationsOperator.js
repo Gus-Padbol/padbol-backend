@@ -62,7 +62,7 @@ export function mountNationsOperatorRoutes(app,{pool,db,getAuthenticatedUser,get
  })));
  router.post('/torneos/:id/partidos/:partidoId/resultado',guarded(run(async(req,res)=>{
   const actor=await user(req);
-  const result=await cargarResultadoManualPartidoTorneo(db,{torneoId:57,partidoId:req.params.partidoId,body:req.body??{},actorId:actor.id});
+  const result=await cargarResultadoManualPartidoTorneo(db,{torneoId:57,partidoId:req.params.partidoId,body:req.body??{},actorId:actor.id},{requireNationsScoreDetail:true});
   res.status(result.statusCode).json(result.body);
  })));
  router.post('/torneos/:id/partidos/:partidoId/revoke-control-token',guarded(run(async(req,res)=>{
