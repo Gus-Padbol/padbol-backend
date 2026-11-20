@@ -3,6 +3,7 @@ import {mountNationsCupRoutes} from './nationsCup.js';
 import {mountNationalTeamRoutes} from './nationalTeams.js';
 import {issueNationsControlToken} from '../src/scoreboard/nationsControlDelegation.js';
 import {buildControlPath} from '../src/scoreboard/scoreboardControlToken.js';
+import {cargarResultadoManualPartidoTorneo} from '../lib/torneos/cargarResultadoManualPartidoTorneoService.js';
 import {assertNationsOperatorGrant,assertOperatorGrantAdministrator,canOperateNationsEvent,grantNationsOperator,revokeNationsOperator,operatorEventId,operatorError} from '../lib/torneos/nationsOperatorAccess.js';
 
 const ROOT='/api/nations/operator';
@@ -58,6 +59,11 @@ export function mountNationsOperatorRoutes(app,{pool,db,getAuthenticatedUser,get
   const actor=await user(req),current=await board(req);const issued=await issueNationsControlToken({pool,scoreboardId:current.id,issuerId:actor.id});
   if(!issued)throw operatorError('NATIONS_OPERATOR_BOARD_UNCONFIRMED',409);
   res.json({ok:true,torneo_id:57,partido_id:Number(req.params.partidoId),scoreboard_id:current.id,control_path:buildControlPath(issued.controlToken),control_token_created_at:issued.controlTokenCreatedAt});
+ })));
+ router.post('/torneos/:id/partidos/:partidoId/resultado',guarded(run(async(req,res)=>{
+  const actor=await user(req);
+  const result=await cargarResultadoManualPartidoTorneo(db,{torneoId:57,partidoId:req.params.partidoId,body:req.body??{},actorId:actor.id});
+  res.status(result.statusCode).json(result.body);
  })));
  router.post('/torneos/:id/partidos/:partidoId/revoke-control-token',guarded(run(async(req,res)=>{
   const c=await pool.connect();try{await c.query('BEGIN');await c.query("SELECT pg_advisory_xact_lock(hashtextextended('manual-booking-cross-occupancy-v1',0))");const current=await board(req,c,{lock:true});await scope(req,{q:c,lock:true});
