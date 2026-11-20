@@ -60,6 +60,12 @@ export function mountNationsOperatorRoutes(app,{pool,db,getAuthenticatedUser,get
   if(!issued)throw operatorError('NATIONS_OPERATOR_BOARD_UNCONFIRMED',409);
   res.json({ok:true,torneo_id:57,partido_id:Number(req.params.partidoId),scoreboard_id:current.id,control_path:buildControlPath(issued.controlToken),control_token_created_at:issued.controlTokenCreatedAt});
  })));
+ router.post('/torneos/:id/partidos/:partidoId/resultado-recuperacion',guarded(run(async(req,res)=>{
+  const actor=await user(req);
+  const outcome=await db.rpc('recuperar_resultado_equipo_nations',{p_partido_id:Number(req.params.partidoId),p_resultado:req.body?.resultado,p_actor_id:actor.id});
+  if(outcome.error)throw operatorError(outcome.error.code==='42501'?'NATIONS_OPERATOR_SCOPE':'NATIONS_RECOVERY_REJECTED',outcome.error.code==='42501'?403:409);
+  res.json({ok:true,...outcome.data});
+ })));
  router.post('/torneos/:id/partidos/:partidoId/resultado',guarded(run(async(req,res)=>{
   const actor=await user(req);
   const phase=await pool.query('SELECT grupo FROM public.partidos WHERE id=$1 AND torneo_id=57',[Number(req.params.partidoId)]);
