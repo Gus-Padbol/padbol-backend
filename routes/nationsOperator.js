@@ -3,7 +3,7 @@ import {mountNationsCupRoutes} from './nationsCup.js';
 import {mountNationalTeamRoutes} from './nationalTeams.js';
 import {issueNationsControlToken} from '../src/scoreboard/nationsControlDelegation.js';
 import {buildControlPath} from '../src/scoreboard/scoreboardControlToken.js';
-import {cargarResultadoManualPartidoTorneo} from '../lib/torneos/cargarResultadoManualPartidoTorneoService.js';
+import {cargarResultadoManualPartidoTorneo,parseResultadoManualPartidoTorneoBody} from '../lib/torneos/cargarResultadoManualPartidoTorneoService.js';
 import {assertNationsOperatorGrant,assertOperatorGrantAdministrator,canOperateNationsEvent,grantNationsOperator,revokeNationsOperator,operatorEventId,operatorError} from '../lib/torneos/nationsOperatorAccess.js';
 
 const ROOT='/api/nations/operator';
@@ -62,7 +62,10 @@ export function mountNationsOperatorRoutes(app,{pool,db,getAuthenticatedUser,get
  })));
  router.post('/torneos/:id/partidos/:partidoId/resultado-recuperacion',guarded(run(async(req,res)=>{
   const actor=await user(req);
-  const outcome=await db.rpc('recuperar_resultado_equipo_nations',{p_partido_id:Number(req.params.partidoId),p_resultado:req.body?.resultado,p_actor_id:actor.id});
+  const phase=await pool.query('SELECT grupo FROM public.partidos WHERE id=$1 AND torneo_id=57',[Number(req.params.partidoId)]);
+  const parsed=parseResultadoManualPartidoTorneoBody(req.body?.resultado,{bestOfThree:false,requireNationsScoreDetail:true,groupPhase:Boolean(phase.rows[0]?.grupo)});
+  if(!parsed.valid)throw operatorError('NATIONS_SCORE_INCOMPLETE',400);
+  const outcome=await db.rpc('recuperar_resultado_equipo_nations',{p_partido_id:Number(req.params.partidoId),p_resultado:parsed.resultado,p_actor_id:actor.id});
   if(outcome.error)throw operatorError(outcome.error.code==='42501'?'NATIONS_OPERATOR_SCOPE':'NATIONS_RECOVERY_REJECTED',outcome.error.code==='42501'?403:409);
   res.json({ok:true,...outcome.data});
  })));
