@@ -1214,8 +1214,8 @@ export function mountScoreboardRoutes(app, {
       const ordered = selectCourtNext({boards:candidates ?? [], slots:slotRows, matches:matchesForSlots, courtLabel:cancha});
       const selectedLive = selected && String(selected.estado || '').toLowerCase() === 'en_curso';
       let next = ordered.kind === 'next' ? preparedNextMatchDto(ordered.match, ordered.slot) : null;
-      if (ordered.kind === 'next-board') next = await enrichPartidoWithVenue(supabaseAdmin, ordered.board);
-      const partido = selectedLive ? await enrichPartidoWithVenue(supabaseAdmin, selected) : null;
+      if (ordered.kind === 'next-board') next = await enrichPartidoWithVenue(supabaseAdmin, ordered.board, nationsGamesPool);
+      const partido = selectedLive ? await enrichPartidoWithVenue(supabaseAdmin, selected, nationsGamesPool) : null;
       return res.json({ partido, next, generated_at: new Date().toISOString() });
     } catch (err) {
       console.error('❌ GET /api/scoreboard/event/:eventId/cancha/:cancha:', err.message);
