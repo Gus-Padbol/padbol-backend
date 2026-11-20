@@ -119,9 +119,6 @@ BEGIN
       RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Knockout third set must be a normal set';
     END IF;
     IF set_a>set_b THEN sets_a:=sets_a+1; ELSE sets_b:=sets_b+1; END IF;
-    IF i<2 AND set_count=3 AND i=1 AND sets_a=sets_b THEN
-      RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Cannot have a third set after a 2-0 start';
-    END IF;
   END LOOP;
   IF set_count=3 AND sets_a=2 AND sets_b=0 OR set_count=3 AND sets_a=0 AND sets_b=2 THEN
     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Cannot have a third set after a 2-0 start';
