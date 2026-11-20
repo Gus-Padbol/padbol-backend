@@ -37,6 +37,7 @@ DECLARE
   winner bigint;
   existing public.nations_official_result_recoveries;
   previous_setting text;
+  first_two_split boolean := false;
 BEGIN
   IF p_actor_id IS NULL OR p_resultado IS NULL THEN
     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Actor and result are required';
@@ -103,6 +104,15 @@ BEGIN
     IF set_a < 0 OR set_b < 0 OR set_a=set_b THEN
       RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Invalid or tied set';
     END IF;
+    IF i < 2 AND s ? 'type' THEN
+      RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Super tiebreak is only valid as the third group set';
+    END IF;
+    IF i < 2 OR (i=2 AND m.grupo IS NULL) THEN
+      IF NOT ((greatest(set_a,set_b)=6 AND least(set_a,set_b)<=4)
+           OR (greatest(set_a,set_b)=7 AND least(set_a,set_b) IN (5,6))) THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Invalid normal set score';
+      END IF;
+    END IF;
     IF i=2 AND m.grupo IS NOT NULL THEN
       IF s->>'type' IS DISTINCT FROM 'super_tiebreak' OR set_a NOT IN (0,1) OR set_b NOT IN (0,1) OR set_a=set_b THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Group third set must be canonical super tiebreak';
@@ -112,15 +122,16 @@ BEGIN
       END IF;
       points_a := (s->>'points_a')::integer;
       points_b := (s->>'points_b')::integer;
-      IF greatest(points_a,points_b)<>10 OR least(points_a,points_b)>=10 OR (points_a>points_b)<>(set_a=1) THEN
+      IF greatest(points_a,points_b)<>10 OR least(points_a,points_b)<0 OR least(points_a,points_b)>=10 OR (points_a>points_b)<>(set_a=1) THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Invalid TB10 score';
       END IF;
     ELSIF i=2 AND s ? 'type' THEN
       RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Knockout third set must be a normal set';
     END IF;
     IF set_a>set_b THEN sets_a:=sets_a+1; ELSE sets_b:=sets_b+1; END IF;
+    IF i=1 THEN first_two_split := (sets_a=1 AND sets_b=1); END IF;
   END LOOP;
-  IF set_count=3 AND sets_a=2 AND sets_b=0 OR set_count=3 AND sets_a=0 AND sets_b=2 THEN
+  IF set_count=3 AND NOT first_two_split THEN
     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Cannot have a third set after a 2-0 start';
   END IF;
   IF sets_a<>sa OR sets_b<>sb THEN
