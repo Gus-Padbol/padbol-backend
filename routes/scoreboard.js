@@ -111,7 +111,7 @@ export function pickScoreboardPartidoLinks(body = {}) {
 
 const SCOREBOARD_PARTIDO_SELECT = [
   'id', 'sede_id', 'torneo_id', 'torneo_nombre', 'cancha',
-  'partido_abierto_id', 'reserva_id', 'partido_torneo_id', 'created_by_user_id',
+  'partido_abierto_id', 'reserva_id', 'partido_torneo_id',
   'synced_to_torneo_at', 'sync_torneo_status',
   'equipo_a_nombre', 'equipo_b_nombre', 'equipo_a_jugadores', 'equipo_b_jugadores',
   'jersey_a1', 'jersey_a2', 'jersey_a3', 'jersey_a4',
@@ -482,7 +482,7 @@ export function mountScoreboardRoutes(app, {
     try { assertCanControlScoreboard(role, sedeId); return 'role'; } catch (error) {
       // The contingency grant never authorizes an official tournament board,
       // another user's marker, or a marker that has been linked to a match.
-      if (!isOwnedContingencyScoreboard(partido, user?.id)) throw error;
+      if (partido?.id != null && !await isOwnedContingencyScoreboard({pool:nationsGamesPool,partido,userId:user?.id})) throw error;
       const allowed = await canManageNationsContingencyScoreboard({ pool: nationsGamesPool, userId: user?.id, sedeId });
       if (!allowed) throw error;
       return 'contingency';
@@ -855,7 +855,7 @@ export function mountScoreboardRoutes(app, {
       }
 
       const role = await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails });
-      const authMode = await assertCanControlOrContingency(user, role, sid, {partido_torneo_id:null,torneo_id:null,created_by_user_id:user.id});
+      const authMode = await assertCanControlOrContingency(user, role, sid, {partido_torneo_id:null,torneo_id:null});
       if (authMode === 'contingency') {
         const forbiddenLinks = ['torneo_id','torneo_nombre','partido_abierto_id','reserva_id','partido_torneo_id'];
         if (forbiddenLinks.some(key => req.body?.[key] != null && req.body[key] !== '')) return res.status(403).json({error:'Un marcador de contingencia no puede vincularse a un torneo, reserva o partido.'});
@@ -905,7 +905,6 @@ export function mountScoreboardRoutes(app, {
         color_b: String(color_b || '#6e1a1a').trim(),
         ...pickColorUniformes(req.body),
         estado: 'pendiente',
-        ...(authMode === 'contingency' ? {created_by_user_id:user.id} : {}),
       };
 
       const { data, error } = await supabaseAdmin
@@ -916,6 +915,13 @@ export function mountScoreboardRoutes(app, {
 
       if (error) throw error;
       const created = Array.isArray(data) ? data[0] : data;
+      if (authMode === 'contingency') {
+        if (!nationsGamesPool) throw new Error('No se pudo registrar la propiedad del marcador.');
+        await nationsGamesPool.query(
+          'INSERT INTO public.scoreboard_contingency_owners(scoreboard_id,user_id) VALUES($1,$2)',
+          [created.id, user.id],
+        );
+      }
       if (!created) throw new Error('No se pudo crear el partido');
 
       const enriched = await enrichPartidoWithVenue(supabaseAdmin, created);
@@ -963,7 +969,7 @@ export function mountScoreboardRoutes(app, {
       let canControlContingency = false;
       try {
         const auth = await getAuthenticatedUser(req);
-        if (auth?.user?.id && isOwnedContingencyScoreboard(partido, auth.user.id)) {
+        if (auth?.user?.id && await isOwnedContingencyScoreboard({pool:nationsGamesPool,partido,userId:auth.user.id})) {
           canControlContingency = await canManageNationsContingencyScoreboard({pool:nationsGamesPool,userId:auth.user.id,sedeId:partido.sede_id});
         }
       } catch { /* public read remains available */ }
@@ -1018,7 +1024,7 @@ export function mountScoreboardRoutes(app, {
       const authMode = await assertCanControlOrContingency(user, role, partido.sede_id, partido);
 
       const body = req.body ?? {};
-      if (authMode === 'contingency' && ['torneo_id','torneo_nombre','partido_abierto_id','reserva_id','partido_torneo_id','created_by_user_id'].some(key => Object.hasOwn(body,key))) return res.status(403).json({error:'Un marcador de contingencia no puede vincularse ni cambiar de dueño.'});
+      if (authMode === 'contingency' && ['torneo_id','torneo_nombre','partido_abierto_id','reserva_id','partido_torneo_id'].some(key => Object.hasOwn(body,key))) return res.status(403).json({error:'Un marcador de contingencia no puede vincularse ni cambiar de dueño.'});
       const patch = { ...pickColorUniformes(body) };
 
       const passthrough = [
