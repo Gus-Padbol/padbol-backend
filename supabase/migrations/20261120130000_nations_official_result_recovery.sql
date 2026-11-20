@@ -99,6 +99,11 @@ BEGIN
     IF jsonb_typeof(s->'a') IS DISTINCT FROM 'number' OR jsonb_typeof(s->'b') IS DISTINCT FROM 'number' THEN
       RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Each set needs numeric games';
     END IF;
+    IF s ? 'set' THEN
+      IF jsonb_typeof(s->'set') IS DISTINCT FROM 'number' OR (s->>'set')::integer <> i+1 THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Set sequence must be 1,2,3';
+      END IF;
+    END IF;
     set_a := (s->>'a')::integer;
     set_b := (s->>'b')::integer;
     IF set_a < 0 OR set_b < 0 OR set_a=set_b THEN
@@ -117,8 +122,10 @@ BEGIN
       IF s->>'type' IS DISTINCT FROM 'super_tiebreak' OR set_a NOT IN (0,1) OR set_b NOT IN (0,1) OR set_a=set_b THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='Group third set must be canonical super tiebreak';
       END IF;
-      IF jsonb_typeof(s->'points_a') IS DISTINCT FROM 'number' OR jsonb_typeof(s->'points_b') IS DISTINCT FROM 'number' THEN
-        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='TB10 points are required';
+      IF jsonb_typeof(s->'points_a') IS DISTINCT FROM 'number' OR jsonb_typeof(s->'points_b') IS DISTINCT FROM 'number'
+         OR jsonb_typeof(s->'target') IS DISTINCT FROM 'number' OR (s->>'target')::integer <> 10
+         OR jsonb_typeof(s->'win_by') IS DISTINCT FROM 'number' OR (s->>'win_by')::integer <> 1 THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='TB10 target 10 and win_by 1 are required';
       END IF;
       points_a := (s->>'points_a')::integer;
       points_b := (s->>'points_b')::integer;
