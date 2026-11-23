@@ -1,3 +1,4 @@
+import { assertReservaNotClassOccurrencePg } from '../lib/clases/classBookingGuard.js';
 import {
   parsePositiveInt,
   resolveReservaCanchaStorageText,
@@ -273,6 +274,7 @@ export async function ensureReservaPendienteParaMpPg(pgPool, body = {}, options 
   const serverMoneda = quote?.moneda ?? 'ARS';
 
   if (input.reserva_id) {
+    await assertReservaNotClassOccurrencePg(pgPool, input.reserva_id);
     const { rows } = await pgPool.query(
       `SELECT id, estado, pago_estado, user_id, email FROM reservas WHERE id = $1 LIMIT 1`,
       [input.reserva_id],

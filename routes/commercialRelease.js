@@ -784,11 +784,13 @@ async function ensureLicenciatarioAuthUserAndWelcomeEmail(email, opts = {}) {
     user_metadata: { temp_password: true },
   });
   if (cr.error) {
-    const msg = String(cr.error?.message || '').toLowerCase();
-    if (!msg.includes('already') && !msg.includes('exists') && String(cr.error?.status || '') !== '422') {
-      throw cr.error;
-    }
+    // Auth documents these codes as existing accounts. HTTP 422 alone also
+    // covers validation/password policy failures; it does not prove an account exists.
+    if (!['email_exists', 'user_already_exists'].includes(cr.error.code)) throw cr.error;
   } else {
+    if (!cr.data?.user?.id || String(cr.data.user.email || '').trim().toLowerCase() !== em) {
+      throw new Error('AUTH_PROVISION_RECEIPT_INVALID');
+    }
     created = true;
   }
   if (created) {
@@ -799,10 +801,96 @@ async function ensureLicenciatarioAuthUserAndWelcomeEmail(email, opts = {}) {
       ciudad: String(opts?.ciudad || '').trim() || null,
     });
   }
-  if (runtime.outboundDeliveryEnabled) await supabase.auth.resetPasswordForEmail(em, {
-    redirectTo: `${FRONTEND_URL}/login`,
+  // Existing accounts keep their current credentials. Do not trigger a
+  // password-recovery email just because another seat invited their owner.
+  if (!created) {
+    return { created: false, tempPassword: null, access_state: 'sign_in_or_recovery',
+      welcome_delivery: 'not_requested_existing_account' };
+  }
+  if (runtime.outboundDeliveryEnabled) {
+    const delivery = await supabase.auth.resetPasswordForEmail(em, {
+      redirectTo: `${FRONTEND_URL}/login`,
+    });
+    if (delivery?.error) throw delivery.error;
+    if (!delivery || !delivery.data) throw new Error('AUTH_RECOVERY_RECEIPT_INVALID');
+  }
+  return { created, tempPassword, access_state: runtime.outboundDeliveryEnabled
+    ? 'recovery_email_requested' : 'new_account_delivery_disabled',
+    welcome_delivery: runtime.outboundDeliveryEnabled ? 'requested_not_verified' : 'disabled' };
+}
+
+// Shared guards for the callers that provision a licenciatario Auth user.
+// They are deterministic (no side effects) and run before any seat, link, role
+// or invitation write and before the Auth call. Failure responses stay stable
+// and never expose provider detail, temporary passwords or tokens.
+function normalizarEmailLicenciatario(raw) {
+  return String(raw || '').trim().toLowerCase();
+}
+
+function emailLicenciatarioPlausible(email) {
+  return /^[^\s@]+@[^\s@]+$/.test(normalizarEmailLicenciatario(email));
+}
+
+function rechazarAccesoNoDisponible(res) {
+  return res.status(503).json({
+    error: 'No se pudo preparar el acceso. Reintentá en unos minutos.',
+    code: 'SEDE_ACCESS_PROVISION_UNAVAILABLE',
+    retry: true,
   });
-  return { created, tempPassword };
+}
+
+// The club seat creation is a single PostgreSQL transaction exposed as an RPC.
+// If the routine is not deployed, fail closed: never fall back to the previous
+// multi-step REST flow that could create duplicate seats/roles on retry.
+function rechazarAltaAtomicaNoDisponible(res) {
+  return res.status(503).json({
+    error: 'El alta atómica de la sede no está disponible en este entorno.',
+    code: 'INVITACION_ATOMIC_RPC_UNAVAILABLE',
+    retry: false,
+  });
+}
+
+function rpcAltaAtomicaNoDisponible(err) {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '');
+  if (code === 'PGRST202' || code === 'PGRST203' || code === '42883') return true;
+  if (/could not find the function/i.test(msg)) return true;
+  return /completar_invitacion_club_atomica/i.test(msg) && /does not exist/i.test(msg);
+}
+
+function validarAsignacionRolLicencia(payload) {
+  const asignacion = licenciaRoleAssignment(payload, null);
+  if (asignacion.role === 'admin_nacional') buildAdminRoleGeography(asignacion.alcance, asignacion);
+  const faltante = asignacion.alcance === 'ciudad' && !asignacion.ciudad
+    ? 'Falta ciudad_representa para alcance ciudad'
+    : asignacion.alcance === 'provincia' && !asignacion.provincia
+      ? 'Falta provincia_representa para alcance provincia'
+      : asignacion.alcance === 'pais' && !asignacion.pais
+        ? 'Falta pais_representa para alcance pais'
+        : null;
+  if (faltante) {
+    const error = new Error(faltante);
+    error.status = 400;
+    throw error;
+  }
+  return asignacion;
+}
+
+function validarInvitacionGeoTerritorio(inv) {
+  const alcance = String(inv?.invited_alcance || '').trim().toLowerCase();
+  if (!['pais', 'provincia', 'ciudad'].includes(alcance)) {
+    const error = new Error('Tipo de invitación geográfica no válido');
+    error.status = 400;
+    throw error;
+  }
+  const campo = alcance === 'pais' ? 'pais' : alcance === 'provincia' ? 'provincia' : 'ciudad';
+  if (!String(inv?.[campo] || '').trim()) {
+    const label = { pais: 'País', provincia: 'Provincia', ciudad: 'Ciudad' }[campo];
+    const error = new Error(`${label} obligatorio en la invitación`);
+    error.status = 400;
+    throw error;
+  }
+  buildAdminRoleGeography(alcance, inv);
 }
 
 app.post('/api/admin/roles', async (req, res) => {
@@ -1040,7 +1128,7 @@ function invitacionAdminUrl(token) {
   return `${base}/invitar-admin-club/${encodeURIComponent(token)}`;
 }
 
-async function insertDeportesSedeSinAuth(sedeId, deportesArr) {
+function buildDeportesSedeRows(sedeId, deportesArr) {
   const arr = Array.isArray(deportesArr) ? deportesArr : null;
   if (!arr || arr.length === 0) {
     const e = new Error('deportes debe ser un array no vacío');
@@ -1069,6 +1157,11 @@ async function insertDeportesSedeSinAuth(sedeId, deportesArr) {
     e.status = 400;
     throw e;
   }
+  return rows;
+}
+
+async function insertDeportesSedeSinAuth(sedeId, deportesArr) {
+  const rows = buildDeportesSedeRows(sedeId, deportesArr);
   const { error: delErr } = await supabase.from('canchas_por_deporte').delete().eq('sede_id', sedeId);
   if (delErr) throw delErr;
   const { data: ins, error: insErr } = await supabase.from('canchas_por_deporte').insert(rows).select('*');
@@ -1393,34 +1486,54 @@ app.post('/api/invitacion/:token/completar', async (req, res) => {
 
     if (invitacionAdminEsFlujoGeo(inv)) {
       const nombreAdmin = String(b.nombre_admin || '').trim() || null;
+      if (!emailLicenciatarioPlausible(emailInv)) {
+        return res.status(400).json({ error: 'El email de la invitación no es válido' });
+      }
+      try {
+        validarInvitacionGeoTerritorio(inv);
+      } catch (validationError) {
+        return res.status(400).json({ error: validationError.message || 'Invitación geográfica inválida' });
+      }
+      // Provision the Auth account before mutating the role or consuming the
+      // invitation, so an Auth/provider failure leaves the invitation retryable.
+      let accessProvision;
+      try {
+        accessProvision = await ensureLicenciatarioAuthUserAndWelcomeEmail(emailInv, {
+          nombre: nombreAdmin,
+          pais: String(inv.pais || '').trim() || null,
+          ciudad: String(inv.ciudad || '').trim() || null,
+        });
+      } catch (authErr) {
+        console.warn('⚠️ Alta rol geo por invitación: provisión auth no disponible:', authErr?.code || authErr?.status || 'provision_failed');
+        return rechazarAccesoNoDisponible(res);
+      }
       const urErr = await upsertUserRoleFromInvitacionGeo({
         email: emailInv,
         nombre: nombreAdmin,
         inv,
       });
-      if (urErr) {
-        const e = new Error(urErr.message || String(urErr));
-        e.status = 400;
-        throw e;
-      }
+      if (urErr) throw new Error(urErr.message || String(urErr));
       const { error: upInvGeoErr } = await supabase
         .from('invitaciones_admin')
         .update({ estado: 'completada', sede_id: null })
         .eq('id', inv.id)
         .eq('estado', 'pendiente');
       if (upInvGeoErr) {
-        console.error('⚠️ Invitación geo no actualizada:', upInvGeoErr.message);
-      }
-      try {
-        await ensureLicenciatarioAuthUserAndWelcomeEmail(emailInv, {
-          nombre: nombreAdmin,
-          pais: String(inv.pais || '').trim() || null,
-          ciudad: String(inv.ciudad || '').trim() || null,
+        console.error('⚠️ Invitación geo no actualizada:', upInvGeoErr.code || upInvGeoErr.status || 'db_error');
+        return res.status(500).json({
+          error: 'El acceso quedó preparado pero la invitación no se pudo completar. Reintentá o revisá la invitación.',
+          code: 'INVITACION_UPDATE_FAILED',
+          role_assigned: true,
+          access_state: accessProvision.access_state,
+          welcome_delivery: accessProvision.welcome_delivery,
         });
-      } catch (authErr) {
-        console.warn('⚠️ Alta rol geo por invitación: provisión auth:', authErr?.message || authErr);
       }
-      return res.status(201).json({ ok: true, flow: 'geo' });
+      return res.status(201).json({
+        ok: true,
+        flow: 'geo',
+        access_state: accessProvision.access_state,
+        welcome_delivery: accessProvision.welcome_delivery,
+      });
     }
 
     const nombre = String(b.nombre || '').trim();
@@ -1476,48 +1589,94 @@ app.post('/api/invitacion/:token/completar', async (req, res) => {
       payload.cantidad_canchas = cantidadCanchasTotal;
     }
 
-    const { data: created, error: sedeErr } = await supabase.from('sedes').insert(buildSedeReleaseInsert(payload)).select('*').single();
-    if (sedeErr) throw sedeErr;
-    const sedeId = created.id;
-
-    try {
-      const deportesArr = Array.isArray(b.deportes) ? b.deportes : [];
-      await insertDeportesSedeSinAuth(sedeId, deportesArr);
-    } catch (depErr) {
-      await supabase.from('sedes').delete().eq('id', sedeId);
-      throw depErr;
-    }
-
+    const sedeInsert = buildSedeReleaseInsert(payload);
+    const deportesRows = buildDeportesSedeRows(null, b.deportes);
     const nombreAdmin = String(b.nombre_admin || '').trim() || null;
-    const urErr = await upsertUserRoleAdminClub({
-      email: emailInv,
-      nombre: nombreAdmin,
-      pais,
-      sede_id: sedeId,
-    });
-    if (urErr) {
-      await supabase.from('canchas_por_deporte').delete().eq('sede_id', sedeId);
-      await supabase.from('sedes').delete().eq('id', sedeId);
-      throw new Error(urErr.message || String(urErr));
-    }
-
-    const { error: upInvErr } = await supabase
-      .from('invitaciones_admin')
-      .update({ estado: 'completada', sede_id: sedeId })
-      .eq('id', inv.id)
-      .eq('estado', 'pendiente');
-    if (upInvErr) {
-      console.error('⚠️ Invitación no actualizada tras crear sede:', upInvErr.message);
-    }
-
+    // Do not consume the invitation or change its seat/role while account
+    // provisioning is unavailable. The same invitation can be retried later.
+    let accessProvision;
     try {
-      await ensureLicenciatarioAuthUserAndWelcomeEmail(emailInv, {
+      accessProvision = await ensureLicenciatarioAuthUserAndWelcomeEmail(emailInv, {
         nombre: nombreAdmin,
         pais,
         ciudad,
       });
-    } catch (authErr) {
-      console.warn('⚠️ Alta sede por invitación: provisión auth:', authErr?.message || authErr);
+    } catch {
+      return res.status(503).json({
+        error: 'No se pudo preparar el acceso. Reintentá en unos minutos con esta misma invitación.',
+        code: 'SEDE_ACCESS_PROVISION_UNAVAILABLE',
+        retry: true,
+      });
+    }
+
+    // One durable transaction (claim invitation row, seat, courts, role and
+    // token consumption). Any DB failure rolls all of those writes back.
+    // Auth account creation and welcome email stay outside PostgreSQL with the
+    // already accepted semantics; they are not part of this transaction.
+    if (typeof supabase.rpc !== 'function') {
+      return rechazarAltaAtomicaNoDisponible(res);
+    }
+    const { data: rpcOut, error: rpcErr } = await supabase.rpc('completar_invitacion_club_atomica', {
+      p_token: token,
+      p_email: emailInv,
+      p_nombre_admin: nombreAdmin,
+      p_sede: sedeInsert,
+      p_deportes: deportesRows.map((row) => ({ deporte: row.deporte, cantidad: row.cantidad })),
+    });
+    if (rpcErr) {
+      if (rpcAltaAtomicaNoDisponible(rpcErr)) return rechazarAltaAtomicaNoDisponible(res);
+      console.error('⚠️ Alta atómica de sede por invitación falló:', rpcErr.code || rpcErr.message || 'db_error');
+      return res.status(500).json({
+        error: 'No se pudo completar el alta de la sede. La invitación queda disponible para reintentar.',
+        code: 'INVITACION_ATOMIC_FAILED',
+        retry: true,
+      });
+    }
+    const outcome = rpcOut && typeof rpcOut === 'object' ? rpcOut : null;
+    if (!outcome) {
+      console.error('⚠️ Alta atómica de sede sin recibo válido');
+      return res.status(500).json({
+        error: 'No se pudo confirmar el alta de la sede.',
+        code: 'INVITACION_ATOMIC_BAD_RECEIPT',
+      });
+    }
+    if (outcome.ok !== true) {
+      const reason = String(outcome.reason || '');
+      if (reason === 'not_found') return res.status(404).json({ error: 'Invitación no encontrada' });
+      if (reason === 'consumed') {
+        return res.status(410).json({ error: 'Esta invitación ya no está activa', estado: outcome.estado || 'completada' });
+      }
+      if (reason === 'expired') return res.status(410).json({ error: 'Invitación expirada' });
+      if (reason === 'email_mismatch') {
+        return res.status(400).json({ error: 'El email de contacto debe coincidir con el de la invitación' });
+      }
+      if (reason === 'role_not_allowed' || reason === 'flow_mismatch') {
+        return res.status(409).json({
+          error: 'La invitación no corresponde a un alta de club',
+          code: 'INVITACION_FLOW_MISMATCH',
+        });
+      }
+      if (reason === 'invalid_payload') {
+        return res.status(400).json({
+          error: 'Datos de sede inválidos',
+          code: 'SEDE_REQUIRED_CONFIGURATION',
+          ...(outcome.detail ? { detail: String(outcome.detail) } : {}),
+        });
+      }
+      console.error('⚠️ Alta atómica de sede rechazada:', reason || 'unknown');
+      return res.status(500).json({
+        error: 'No se pudo completar el alta de la sede.',
+        code: 'INVITACION_ATOMIC_FAILED',
+      });
+    }
+    const created = outcome.sede;
+    const sedeId = Number(outcome.sede_id);
+    if (!created || typeof created !== 'object' || !Number.isFinite(sedeId) || Number(created.id) !== sedeId) {
+      console.error('⚠️ Alta atómica de sede con recibo inconsistente');
+      return res.status(500).json({
+        error: 'No se pudo confirmar el alta de la sede.',
+        code: 'INVITACION_ATOMIC_BAD_RECEIPT',
+      });
     }
 
     void sendMakeEvent('sede_creada', {
@@ -1529,7 +1688,8 @@ app.post('/api/invitacion/:token/completar', async (req, res) => {
       origen: 'invitacion_admin_club',
     });
 
-    res.status(201).json({ ok: true, sede: pickPublicSedeWithPaymentStatus(created), sede_id: sedeId });
+    res.status(201).json({ ok: true, sede: pickPublicSedeWithPaymentStatus(created), sede_id: sedeId,
+      access_state: accessProvision.access_state, welcome_delivery: accessProvision.welcome_delivery });
   } catch (err) {
     const st = err.status || 500;
     if (st >= 400 && st < 500) return res.status(st).json({ error: err.message || String(err) });
@@ -1714,8 +1874,11 @@ app.post('/api/admin/sedes-directa', async (req, res) => {
     const b = req.body || {};
     const nombre = String(b.nombre || '').trim();
     if (!nombre) return res.status(400).json({ error: 'Nombre del club obligatorio' });
-    const licEmail = String(b.licenciatario_email || '').trim().toLowerCase();
+    const licEmail = normalizarEmailLicenciatario(b.licenciatario_email);
     if (!licEmail) return res.status(400).json({ error: 'Email del licenciatario obligatorio' });
+    if (!emailLicenciatarioPlausible(licEmail)) {
+      return res.status(400).json({ error: 'Email del licenciatario inválido' });
+    }
 
     const sedePayload = {
       nombre,
@@ -1748,8 +1911,26 @@ app.post('/api/admin/sedes-directa', async (req, res) => {
       franjas_horarias: [],
       fotos_destacadas: [],
     };
+    // Deterministic checks that must never reach Auth: seat contract, email and
+    // role geography are validated before provisioning or persisting anything.
+    const sedeInsert = buildSedeReleaseInsert(sedePayload);
+    validarAsignacionRolLicencia(b);
 
-    const { data: sedeRow, error: sedeErr } = await supabase.from('sedes').insert(buildSedeReleaseInsert(sedePayload)).select('id').single();
+    // Provision Auth before writing seat/link/role: a failed Auth or reset leaves
+    // zero writes and the operation stays retryable.
+    let authProvision;
+    try {
+      authProvision = await ensureLicenciatarioAuthUserAndWelcomeEmail(licEmail, {
+        nombre: String(b.licenciatario_nombre || '').trim() || null,
+        pais: String(b.pais || '').trim() || null,
+        ciudad: String(b.ciudad || '').trim() || null,
+      });
+    } catch (authErr) {
+      console.warn('⚠️ Alta directa sede: provisión auth no disponible:', authErr?.code || authErr?.status || 'provision_failed');
+      return rechazarAccesoNoDisponible(res);
+    }
+
+    const { data: sedeRow, error: sedeErr } = await supabase.from('sedes').insert(sedeInsert).select('id').single();
     if (sedeErr) throw sedeErr;
     const sedeId = sedeRow.id;
 
@@ -1775,22 +1956,21 @@ app.post('/api/admin/sedes-directa', async (req, res) => {
       throw urErr;
     }
 
-    const authProvision = await ensureLicenciatarioAuthUserAndWelcomeEmail(licEmail, {
-      nombre: String(b.licenciatario_nombre || '').trim() || null,
-      pais: String(b.pais || '').trim() || null,
-      ciudad: String(b.ciudad || '').trim() || null,
-    });
-
     const waLic = b.licenciatario_telefono || b.whatsapp;
     if (waLic) {
       const msg =
         `🎉 Bienvenido a PADBOL Match. Tu sede "${nombre}" está activa.\n` +
         `Ingresa al panel: padbolmatch.com/admin\n` +
-        `${authProvision?.created ? 'Revisa tu email para configurar acceso y cambiar la contraseña temporal.' : 'Si ya tenías cuenta, revisa tu email para restablecer contraseña.'}`;
+        `${authProvision?.created
+          ? (authProvision.access_state === 'recovery_email_requested'
+              ? 'Tu cuenta está creada. Pedimos el email de recuperación; si no llega, recuperá el acceso desde el inicio de sesión.'
+              : 'Tu cuenta está creada. Para configurar tu acceso, usá la recuperación desde el inicio de sesión.')
+          : 'Ingresa con tu cuenta. Si no puedes entrar, recupera el acceso desde el inicio de sesión.'}`;
       await sendTwilioWhatsAppBodyToRaw(waLic, msg);
     }
 
-    res.json({ ok: true, sede_id: sedeId, auth_user_created: Boolean(authProvision?.created) });
+    res.json({ ok: true, sede_id: sedeId, auth_user_created: Boolean(authProvision?.created),
+      access_state: authProvision.access_state, welcome_delivery: authProvision.welcome_delivery });
   } catch (err) {
     console.error('❌ POST /api/admin/sedes-directa:', err.message);
     res.status(err.status || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
@@ -1851,8 +2031,34 @@ app.post('/api/admin/sedes-pendientes/:id/aprobar', async (req, res) => {
     if (!pend) return res.status(404).json({ error: 'No encontrada' });
     if (pend.estado !== 'pendiente') return res.status(400).json({ error: 'La solicitud ya no está pendiente' });
 
-    const sedePayload = mapPendingRowToSedeInsert(pend);
-    const { data: sedeRow, error: sedeErr } = await supabase.from('sedes').insert(buildSedeReleaseInsert(sedePayload)).select('id').single();
+    const licEmail = normalizarEmailLicenciatario(pend.licenciatario_email);
+    if (!licEmail) {
+      return res.status(400).json({ error: 'Solicitud sin email de licenciatario' });
+    }
+    if (!emailLicenciatarioPlausible(licEmail)) {
+      return res.status(400).json({ error: 'Email de licenciatario inválido' });
+    }
+    // Validate the seat contract and role geography before calling Auth; a
+    // rejected request must not create a seat nor reach the provider.
+    const sedeInsert = buildSedeReleaseInsert(mapPendingRowToSedeInsert(pend));
+    const preservaAdminCadena = Boolean(
+      pend.organizacion_id && licEmail === String(pend.created_by || '').trim().toLowerCase()
+    );
+    if (!preservaAdminCadena) validarAsignacionRolLicencia(pend);
+
+    let authProvision;
+    try {
+      authProvision = await ensureLicenciatarioAuthUserAndWelcomeEmail(licEmail, {
+        nombre: String(pend.licenciatario_nombre || '').trim() || null,
+        pais: String(pend.pais || '').trim() || null,
+        ciudad: String(pend.ciudad || '').trim() || null,
+      });
+    } catch (authErr) {
+      console.warn('⚠️ Aprobar sede pendiente: provisión auth no disponible:', authErr?.code || authErr?.status || 'provision_failed');
+      return rechazarAccesoNoDisponible(res);
+    }
+
+    const { data: sedeRow, error: sedeErr } = await supabase.from('sedes').insert(sedeInsert).select('id').single();
     if (sedeErr) throw sedeErr;
     const sedeId = sedeRow.id;
 
@@ -1866,14 +2072,6 @@ app.post('/api/admin/sedes-pendientes/:id/aprobar', async (req, res) => {
       }
     }
 
-    const licEmail = String(pend.licenciatario_email || '').trim().toLowerCase();
-    if (!licEmail) {
-      await supabase.from('sedes').delete().eq('id', sedeId);
-      return res.status(400).json({ error: 'Solicitud sin email de licenciatario' });
-    }
-    const preservaAdminCadena = Boolean(
-      pend.organizacion_id && licEmail === String(pend.created_by || '').trim().toLowerCase()
-    );
     const urErr = preservaAdminCadena
       ? null
       : await upsertUserRoleLicenciaAsignada({
@@ -1887,13 +2085,21 @@ app.post('/api/admin/sedes-pendientes/:id/aprobar', async (req, res) => {
       throw urErr;
     }
 
-    await ensureLicenciatarioAuthUserAndWelcomeEmail(licEmail, {
-      nombre: String(pend.licenciatario_nombre || '').trim() || null,
-      pais: String(pend.pais || '').trim() || null,
-      ciudad: String(pend.ciudad || '').trim() || null,
-    });
-
-    await supabase.from('sedes_pendientes').update({ estado: 'aprobada' }).eq('id', id);
+    const { error: upPendErr } = await supabase
+      .from('sedes_pendientes')
+      .update({ estado: 'aprobada' })
+      .eq('id', id);
+    if (upPendErr) {
+      console.error('⚠️ Aprobar sede pendiente: estado no actualizado:', upPendErr.code || upPendErr.status || 'db_error');
+      return res.status(500).json({
+        error: 'La sede quedó creada pero la solicitud no se pudo marcar como aprobada.',
+        code: 'SEDE_PENDING_UPDATE_FAILED',
+        sede_created: true,
+        sede_id: sedeId,
+        access_state: authProvision.access_state,
+        welcome_delivery: authProvision.welcome_delivery,
+      });
+    }
 
     const nombre = String(pend.nombre || '').trim();
     const waNacional = await fetchJugadorWhatsappPorEmail(pend.created_by);
@@ -1911,7 +2117,9 @@ app.post('/api/admin/sedes-pendientes/:id/aprobar', async (req, res) => {
       );
     }
 
-    res.json({ ok: true, sede_id: sedeId });
+    res.json({ ok: true, sede_id: sedeId,
+      access_state: authProvision.access_state,
+      welcome_delivery: authProvision.welcome_delivery });
   } catch (err) {
     console.error('❌ POST aprobar sede pendiente:', err.message);
     res.status(err.status || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });

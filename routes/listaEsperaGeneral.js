@@ -119,6 +119,8 @@ export function mountListaEsperaGeneralRoutes(app, {
         return res.json({
           ok: true,
           already_registered: true,
+          registrado: true,
+          deporte,
           message: 'Ya estás anotado',
           entry: existing,
         });
@@ -136,6 +138,8 @@ export function mountListaEsperaGeneralRoutes(app, {
       return res.status(201).json({
         ok: true,
         already_registered: false,
+        registrado: true,
+        deporte,
         message: 'Te anotaste en la lista de espera',
         entry: data,
       });
@@ -175,6 +179,31 @@ export function mountListaEsperaGeneralRoutes(app, {
       const st = err.status || 500;
       console.error('❌ DELETE /api/lista-espera-general:', err.message);
       return res.status(st).json({ error: err.message || 'Error al desanotarse de la lista de espera' });
+    }
+  });
+
+  // Compatibility for the native client: own status by sede, sport optional.
+  // Existing /check contract stays unchanged.
+  app.get('/api/lista-espera-general', async (req, res) => {
+    try {
+      const { user, status, error: authError } = await getAuthenticatedUser(req);
+      if (!user) return res.status(status || 401).json({ error: authError || 'Inicia sesión' });
+      const rawSede = String(req.query?.sede_id ?? '').trim();
+      const sedeId = Number(rawSede);
+      if (!/^\d+$/.test(rawSede) || !Number.isSafeInteger(sedeId) || sedeId <= 0) {
+        return res.status(400).json({ error: 'sede_id inválido o faltante' });
+      }
+      const deporte = parseDeporte(req.query?.deporte);
+      let query = supabaseAdmin.from('lista_espera_general')
+        .select('id, deporte, created_at')
+        .eq('sede_id', sedeId).eq('user_id', user.id);
+      if (deporte) query = query.eq('deporte', deporte);
+      const { data, error } = await query.order('created_at', { ascending: false })
+        .limit(1).maybeSingle();
+      if (error) throw error;
+      return res.json({ registrado: Boolean(data), deporte: data?.deporte ?? null });
+    } catch (err) {
+      return res.status(err.status || 500).json({ error: 'No se pudo consultar la lista de espera' });
     }
   });
 

@@ -5,10 +5,18 @@ import {ensureScoreboardForCompletedBracketPartido} from '../lib/torneos/bracket
 import {assertTournamentTeamsSportReady} from '../lib/tournamentParticipantsReadiness.js';
 import {sendHttpError} from '../lib/httpErrors.js';
 import {isScoreboardTorneoPartidoActivo} from '../src/scoreboard/scoreboardTorneoPartidoResolver.js';
+import {isNationsEvent} from '../lib/torneos/nationsPublicAccess.js';
 
 const invalid=(message,status=409)=>Object.assign(new Error(message),{status});
 async function read(query){const {data,error}=await query;if(error)throw error;return data;}
-const rosterSnapshot=teams=>[...teams].sort((a,b)=>Number(a.id)-Number(b.id)).map(({id,jugadores,inscripcion_estado})=>({id,jugadores,inscripcion_estado}));
+// The persisted fixture roster is compared as JSONB by iniciar_torneo_planificado.
+// Normalize the id to a JSON number: a SQL transport may expose bigint ids as strings,
+// while the RPC builds ids with jsonb_build_object('id', id) as numbers. Looking at the
+// raw transport type made an unchanged roster fail as "Roster changed".
+const rosterSnapshot=teams=>teams.map(({id,jugadores,inscripcion_estado})=>{
+ if((typeof id!=='number'&&(typeof id!=='string'||!/^\d+$/.test(id)))||!Number.isSafeInteger(Number(id))||Number(id)<=0)throw invalid('Identificador de equipo inválido en el plantel.',400);
+ return {id:Number(id),jugadores,inscripcion_estado};
+}).sort((a,b)=>a.id-b.id);
 export async function startPlannedTournament(db,{torneo,equipos,actorId}) {
  await assertTournamentTeamsSportReady(db,{torneo,equipos});
  const {data,error}=await db.rpc('iniciar_torneo_planificado',{p_torneo_id:Number(torneo.id),p_actor_id:actorId,p_roster:rosterSnapshot(equipos)});
@@ -20,15 +28,15 @@ export function mountTournamentPlanningRoutes(app,{db,requireTorneoAdmin,ensureS
  const load=async(req,res)=>{
   const auth=await requireTorneoAdmin(req,res,req.params.id);if(!auth)return null;
   const torneo=await read(db.from('torneos').select('*').eq('id',Number(req.params.id)).single());
-  if(torneo.plan_nations)throw invalid('Usa la programación y el sorteo propios de Nations Cup.');
   const equipos=await read(db.from('equipos').select('*').eq('torneo_id',Number(torneo.id)).order('id'));
   return {auth,torneo,equipos};
  };
  const route=(method,path,fn)=>app[method](path,async(req,res,next)=>{try{const c=await load(req,res);if(c && path.endsWith('/generar-partidos') && !['knockout','round_robin'].includes(c.torneo.tipo_torneo))return next();if(c)await fn(req,res,c);}catch(e){sendHttpError(res,e);}});
  for(const path of ['/api/torneos/:id/generar-partidos','/api/torneos/:id/planificar-fixture'])route('post',path,async(req,res,{auth,torneo,equipos})=>{
+  if(isNationsEvent(torneo))throw invalid('Usa la programación y el sorteo propios de Nations Cup.');
   res.json(await persistTournamentPlan(db,{torneo,equipos,actorId:auth.user.id,origin:req.body?.origen??'automatico',pairings:req.body?.cruces}));
  });
- route('post','/api/torneos/:id/iniciar',async(req,res,{auth,torneo,equipos})=>res.json(await startPlannedTournament(db,{torneo,equipos,actorId:auth.user.id})));
+ route('post','/api/torneos/:id/iniciar',async(req,res,{auth,torneo,equipos})=>{if(isNationsEvent(torneo))throw invalid('Usa el inicio propio de Nations Cup.');return res.json(await startPlannedTournament(db,{torneo,equipos,actorId:auth.user.id}));});
  route('get','/api/torneos/:id/partidos/:partidoId/operacion',async(req,res,{torneo,equipos})=>{
   const partido=await read(db.from('partidos').select('*').eq('id',Number(req.params.partidoId)).eq('torneo_id',Number(torneo.id)).single());
   if(partido.fecha_hora&&!/(Z|[+-]\d\d:\d\d)$/.test(partido.fecha_hora))partido.fecha_hora+='Z';

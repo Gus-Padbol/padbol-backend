@@ -4,6 +4,7 @@ import { isWhatsappQaMenuEnabled } from './lib/whatsappQaMenuGate.js';
 import { createWhatsappLanguageMenu } from './lib/whatsappLanguageMenu.js';
 import { createWhatsappMenuAtomicStore } from './lib/whatsappMenuAtomic.js';
 import { createWhatsappContextRelay, createSupabaseContextOutbox } from './lib/whatsappContextRelay.js';
+import { classBookingGuardRejection, assertReservaNotClassOccurrencePg } from './lib/clases/classBookingGuard.js';
 import {registerNationsMarkerDurableRoutes} from './lib/torneos/nationsMarkerDurableRuntime.js';
 import {recoverOneGamesFinalization,startGamesFinalizationRecovery} from './lib/torneos/nationsGamesFinalizationRecovery.js';
 import { mountAdminHelpRoutes, readAdminHelpRole } from './routes/adminHelp.js';
@@ -25,7 +26,7 @@ import {createTournamentReadVisibility} from './lib/torneos/tournamentReadVisibi
 import { mountQaManualTeamsRoutes } from './routes/qaManualTeams.js';
 import { rankingTournamentEligible } from './lib/torneos/rankingTournamentEligibility.js';
 import { readPublicReservationOccupancy } from './lib/reservasDisponibilidadPublica.js';
-import { verifiedSuspendedBookings } from './lib/verifiedSuspendedBookings.js';
+import { createClasesAssertReservaSinSolape } from './lib/clases/classBookingOverlap.js';
 import { horasAnticipacionReserva } from './lib/reservaCancelacionTiming.js';
 import { confirmReservaGratuita } from './lib/reservaGratuita.js';
 import {loadPublishedNationalPoints} from './lib/torneos/nationsPublishedPointsService.js';
@@ -91,6 +92,8 @@ import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
 import { createClient } from '@supabase/supabase-js';
 import { buildCrearTorneoPayload } from './lib/torneos/crearTorneoPayload.js';
+import { mountFreeEnrollmentRoute } from './routes/freeEnrollment.js';
+import { mountTournamentFinalizationRoute, mountTournamentResultRoute } from './routes/tournamentLifecycle.js';
 import { createReservaHandler as crearReservaHandler } from './lib/crearReservaHandler.js';
 import { esSedeTorneo, errorSedeNoReservable } from './lib/sedeTipo.js';
 import { enrichSedesWithCourtCatalog, normalizeAvailabilitySport } from './lib/sedeCourtCatalog.js';
@@ -1803,6 +1806,8 @@ app.put('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
     const mapped = (data || []).map((row) => mapReservaDetailDto(row, { isAdmin: access === 'admin' }));
     res.json(mapped);
   } catch (err) {
+    const classBookingError = classBookingGuardRejection(err);
+    if (classBookingError) return res.status(409).json({ error: classBookingError.error, code: classBookingError.code });
     const st = err.status || 500;
     if (st >= 400 && st < 500) {
       return res.status(st).json({ error: sanitizeClientErrorMessage(err, st) });
@@ -1855,6 +1860,8 @@ app.delete('/api/reservas/:id', reservasWriteRateLimit, async (req, res) => {
     if (error) throw error;
     res.json({ mensaje: 'Reserva cancelada' });
   } catch (err) {
+    const classBookingError = classBookingGuardRejection(err);
+    if (classBookingError) return res.status(409).json({ error: classBookingError.error, code: classBookingError.code });
     const st = err.status || 500;
     if (st >= 400 && st < 500) {
       return res.status(st).json({ error: sanitizeClientErrorMessage(err, st) });
@@ -2054,32 +2061,9 @@ async function clasesAssertSuperAdminReq(req) {
   return { ...scope, user: scope.user || { id: scope.authUserId, email: scope.email } };
 }
 
-function clasesMinutosDesdeHora(raw) {
-  const match = /^(\d{1,2}):(\d{2})/.exec(String(raw || '').split(' - ')[0].trim());
-  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
-}
+const clasesAssertReservaSinSolape = createClasesAssertReservaSinSolape(supabaseAdmin);
 
-async function clasesAssertReservaSinSolape({ sede, fecha, hora, cancha, duracionMin, excludeId = null }) {
-  const inicio = clasesMinutosDesdeHora(hora);
-  if (inicio == null) throw Object.assign(new Error('Horario inválido'), { status: 400 });
-  let query = supabaseAdmin.from('reservas').select('id,hora,duracion,duracion_minutos,estado')
-    .eq('sede', sede).eq('fecha', fecha).eq('cancha', Number(cancha));
-  if (excludeId != null && String(excludeId).trim()) query = query.neq('id', excludeId);
-  const { data, error } = await query;
-  if (error) throw error;
-  const duracion = Number(duracionMin) > 0 ? Number(duracionMin) : 90;
-  const released = await verifiedSuspendedBookings(supabaseAdmin, data);
-  const conflict = (data || []).some((row) => {
-    if (String(row.estado || '').toLowerCase() === 'cancelada' || released.has(String(row.id))) return false;
-    const otroInicio = clasesMinutosDesdeHora(row.hora);
-    if (otroInicio == null) return false;
-    const otraDuracion = Number(row.duracion_minutos || row.duracion) > 0
-      ? Number(row.duracion_minutos || row.duracion) : 90;
-    return inicio < otroInicio + otraDuracion && inicio + duracion > otroInicio;
-  });
-  if (conflict) throw Object.assign(new Error('Este horario se solapa con otra reserva'), { status: 409 });
-}
-
+app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 registerModuloClasesRoutes(app, {
   supabase: supabaseAdmin,
   supabaseAdmin,
@@ -2209,13 +2193,10 @@ app.get('/api/torneos/:torneoId/permisos', async (req, res) => {
   }
 });
 
-// POST /api/torneos/confirmar-inscripcion — deshabilitado: confirmación solo vía pago verificado
-app.post('/api/torneos/confirmar-inscripcion', async (req, res) => {
-  return res.status(410).json({
-    error: 'Este endpoint ya no confirma inscripciones. La confirmación debe hacerse tras un pago verificado.',
-    code: 'TORNEO_CONFIRMAR_DISABLED',
-  });
-});
+// POST /api/torneos/confirmar-inscripcion — sólo inscripciones gratuitas, con guardas de servidor.
+// La decisión se toma y persiste dentro de una única transacción con lock de torneo
+// (ver confirmarInscripcionGratuitaAtomica): no hay ventana count -> update.
+mountFreeEnrollmentRoute(app, { getAuthenticatedUser, pool: pgPool, logError: err => console.error('❌ Error POST /api/torneos/confirmar-inscripcion:', err?.message || err) });
 
 app.put('/api/torneos/:id', async (req, res) => {
   try {
@@ -2600,112 +2581,7 @@ function calcPadcoinsPorPosicion(posicion) {
   return 10;
 }
 
-app.post('/api/torneos/:id/finalizar', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const auth = await requireTorneoAdminByTorneoId(req, res, id);
-    if (!auth) return;
-
-    // Load torneo
-    const { data: torneo, error: errTorneo } = await supabase
-      .from('torneos').select('*').eq('id', id).single();
-    if (errTorneo) throw errTorneo;
-
-    if(torneo.plan_nations) return res.status(409).json({code:'NATIONS_ATOMIC_CLOSURE_REQUIRED',error:'Finaliza desde Nations Cup para conservar la siembra y las posiciones aprobadas.'});
-    // Load equipos & partidos
-    const [{ data: equipos, error: errEq }, { data: partidos, error: errPart }] = await Promise.all([
-      supabase.from('equipos').select('*').eq('torneo_id', parseInt(id)),
-      supabase.from('partidos').select('*').eq('torneo_id', parseInt(id)),
-    ]);
-    if (errEq) throw errEq;
-    if (errPart) throw errPart;
-
-    // Validate all matches finished
-    const pendientes = (partidos || []).filter(p => p.estado !== 'finalizado');
-    if (pendientes.length > 0) {
-      return res.status(400).json({
-        error: `Hay ${pendientes.length} partido(s) sin finalizar. Completa todos los resultados antes de finalizar el torneo.`,
-      });
-    }
-
-    const closureEvidence = getTournamentCompletionEvidence(torneo, partidos || [], equipos || []);
-    if (!closureEvidence.verified) return res.status(409).json({
-      code: 'TORNEO_CLOSURE_UNVERIFIED', error: 'Completa los resultados y la definición del campeón antes de cerrar el torneo.',
-    });
-
-    const { rankingRows, source } = buildFinalRankingForTorneo({
-      equipos: equipos || [],
-      partidos: partidos || [],
-      tipoTorneo: torneo.tipo_torneo,
-    });
-
-    if (!rankingRows.length) {
-      return res.status(400).json({
-        error: 'No se pudo calcular el ranking final del torneo.',
-        code: 'TORNEO_RANKING_EMPTY',
-        tipo_torneo: torneo.tipo_torneo ?? null,
-      });
-    }
-
-    // Already closed ledgers are immutable: a later global policy edit is not retroactive.
-    if(torneo.estado==='finalizado') {
-      const {data:saved,error:savedError}=await supabaseAdmin.from('tabla_puntos').select('torneo_id,equipo_id,posicion,puntos').eq('torneo_id',Number(id));
-      if(savedError)throw savedError;
-      if(!Array.isArray(saved)||saved.length!==equipos.length||new Set(saved.map(p=>Number(p.equipo_id))).size!==equipos.length||saved.some(p=>!equipos.some(e=>Number(e.id)===Number(p.equipo_id))))return res.status(409).json({code:'TORNEO_HISTORICAL_LEDGER_INCOMPLETE',error:'El cierre histórico no tiene una tabla completa confirmada. No se recalcularán sus puntos.'});
-      return res.json({torneo,clasificacion:saved,status:'idempotent',source:'historical_ledger'});
-    }
-    const pointsPolicy=await loadPointsPolicy(supabaseAdmin);
-    const puntosData = buildPointsRows(pointsPolicy,{torneoId:Number(id),nivel:torneo.nivel_torneo,rankingRows:rankingRows.map((row,index)=>({...row,posicion:index+1}))});
-
-    if (isNationalRoster(torneo)) {
-      const closed=await closeNationalTournament(supabaseAdmin,{torneo,equipos,puntosData,actorId:auth.user.id});
-      await Promise.all(collectUserIdsFromEquipos(closed.equipos).map(userId=>actualizarRango(supabaseAdmin,userId).catch(()=>{})));
-      return res.json({torneo:closed.torneo,clasificacion:puntosData,status:closed.status,participacion:'alineacion_convocada'});
-    }
-
-    // Delete previous entries for this torneo (idempotent), then insert
-    await supabase.from('tabla_puntos').delete().eq('torneo_id', parseInt(id));
-    const { error: errPuntos } = await supabase.from('tabla_puntos').insert(puntosData);
-    if (errPuntos) throw errPuntos;
-
-    // Update equipos with their final puntos_ranking
-    await Promise.all(
-      puntosData.map(({ equipo_id, puntos }) =>
-        supabase.from('equipos').update({ puntos_ranking: puntos }).eq('id', equipo_id)
-      )
-    );
-
-    // Mark torneo as finalizado
-    let closeMutation = supabase.from('torneos')
-      .update({ estado: 'finalizado', fecha_fin: torneo.estado === 'finalizado' ? torneo.fecha_fin : new Date().toISOString().slice(0, 10), updated_at: new Date() })
-      .eq('id', id).eq('estado', torneo.estado);
-    closeMutation = torneo.updated_at == null ? closeMutation.is('updated_at', null) : closeMutation.eq('updated_at', torneo.updated_at);
-    const { data: torneoFinal, error: errFinal } = await closeMutation.select().maybeSingle();
-    if (errFinal) throw errFinal;
-    if (!torneoFinal) return res.status(409).json({ code: 'TORNEO_CHANGED_RETRY', error: 'El torneo cambió. Actualiza antes de volver a cerrar.' });
-
-    const jugadorUserIds = collectUserIdsFromEquipos(equipos);
-    await Promise.all(
-      jugadorUserIds.map((userId) =>
-        actualizarRango(supabaseAdmin, userId).catch((err) =>
-          console.warn(`⚠️ actualizarRango torneo ${id} user ${userId}:`, err.message),
-        ),
-      ),
-    );
-
-    // TODO: Auto-set jugadores_perfil.companero_habitual_id to the tournament doubles partner
-    // when a match is completed (use the partner from that match for each player).
-
-    console.log(`🏆 Torneo ${id} finalizado (${source}). ${puntosData.length} equipos clasificados.`);
-    res.json({
-      torneo: torneoFinal,
-      clasificacion: puntosData,
-    });
-  } catch (err) {
-    console.error('❌ Error finalizar torneo:', err.message);
-    sendHttpError(res, err);
-  }
-});
+mountTournamentFinalizationRoute(app, { supabase, supabaseAdmin, requireTorneoAdminByTorneoId, actualizarRango, sendHttpError });
 
 app.get('/api/torneos/:id/tabla', async (req, res) => {
   try {
@@ -3055,7 +2931,6 @@ mountMatchAttendanceAdminRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
-app.use('/api/clases', createClasesRouter({ supabaseAdmin, getAuthenticatedUser }));
 app.use('/api/membresias', createMembresiasRouter({ supabaseAdmin, getAuthenticatedUser }));
 mountMembresiasSedeRoutes(app, {
   supabaseAdmin,
@@ -3150,25 +3025,7 @@ app.get('/api/torneos/:torneo_id/partidos', async (req, res) => {
 mountManualPlayedDateCapabilityRoute(app, { supabaseAdmin, getAuthenticatedUser, capabilities: MANUAL_PLAYED_DATE_CAPABILITY });
 mountManualPlayedDateRoutes(app, { supabaseAdmin, requireTorneoAdminByTorneoId, enabled: MANUAL_PLAYED_DATE_CAPABILITY.writeEnabled });
 
-app.post('/api/torneos/:torneoId/partidos/:partidoId/resultado', async (req, res) => {
-  try {
-    const { torneoId, partidoId } = req.params;
-    const auth = await requireTorneoAdminByTorneoId(req, res, torneoId);
-    if (!auth) return;
-
-    const result = await cargarResultadoManualPartidoTorneo(supabaseAdmin, {
-      torneoId,
-      partidoId,
-      body: req.body ?? {},
-      actorId: auth.user?.id ?? null,
-    });
-
-    res.status(result.statusCode).json(result.body);
-  } catch (err) {
-    console.error('❌ Error POST resultado manual torneo:', err.message);
-    sendHttpError(res, err);
-  }
-});
+mountTournamentResultRoute(app, { supabaseAdmin, requireTorneoAdminByTorneoId, sendHttpError });
 
 app.get('/api/partidos/:id', async (req, res) => {
   try {
@@ -3407,6 +3264,8 @@ Si necesitás ayuda, escribinos por WhatsApp.
       padcoins_penalizacion: padcoinsCancelacionTarde,
     });
   } catch (err) {
+    const classBookingError = classBookingGuardRejection(err);
+    if (classBookingError) return res.status(409).json({ error: classBookingError.error, code: classBookingError.code });
     const st = err.status || 500;
     if (st >= 400 && st < 500) {
       return res.status(st).json({ error: sanitizeClientErrorMessage(err, st) });
@@ -3570,6 +3429,7 @@ app.post('/api/crear-preferencia', paymentsRateLimit, async (req, res) => {
     }
 
     const quoteInput = normalizeCrearPreferenciaReservaInput(req.body);
+    await assertReservaNotClassOccurrencePg(pgPool, quoteInput.reserva_id);
     const resolvedSedeId = parsePositiveInt(sedeId ?? quoteInput.sede_id);
     if (resolvedSedeId == null) {
       return res.status(400).json({ error: 'sedeId o sede_id es requerido' });
@@ -3800,6 +3660,7 @@ app.post('/api/crear-pago-stripe', paymentsRateLimit, async (req, res) => {
     }
 
     const quoteInput = normalizeCrearPreferenciaReservaInput(req.body);
+    await assertReservaNotClassOccurrencePg(pgPool, quoteInput.reserva_id);
     const resolvedSedeId = parsePositiveInt(sedeId ?? quoteInput.sede_id);
     if (resolvedSedeId == null) {
       return res.status(400).json({ error: 'sedeId o sede_id es requerido' });

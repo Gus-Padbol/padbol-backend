@@ -1,5 +1,6 @@
 import { requireAdminUser } from '../lib/authAccess.js';
 import { requireSuperAdminUser } from '../lib/authAccess.js';
+import { StoreOrderError, updateStoreOrder } from '../lib/storeOrders.js';
 
 const ORDER_STATES = ['nuevo', 'confirmado', 'preparando', 'listo_retiro', 'enviado', 'entregado', 'cancelado'];
 const PAYMENT_STATES = ['pendiente', 'a_confirmar', 'confirmado', 'rechazado', 'reembolsado'];
@@ -12,8 +13,9 @@ export function mountStoreAdminRoutes(app, deps) {
   const { supabaseAdmin } = deps;
   const requireShopAdmin = async (req, res) => {
     const auth = await requireAdminUser(req, res, authDepsFor(deps));
+    if (!auth) return null;
     const sedeId = sid(req.params.id);
-    if (!auth || !sedeId) return null;
+    if (!sedeId) { res.status(400).json({ error: 'Sede inválida' }); return null; }
     if (!canManage(auth, sedeId)) { res.status(403).json({ error: 'No tenés permiso para esta tienda' }); return null; }
     return { auth, sedeId };
   };
@@ -48,8 +50,10 @@ export function mountStoreAdminRoutes(app, deps) {
       if ('precio' in body) { const price = Number(body.precio); if (!Number.isFinite(price) || price < 0) return res.status(400).json({ error: 'Precio inválido' }); patch.precio = price; }
       if ('moneda' in body) patch.moneda = String(body.moneda || '').trim().toUpperCase().slice(0, 8) || 'ARS';
       patch.updated_at = new Date().toISOString();
-      const { data, error } = await supabaseAdmin.from('store_sede_offers').update(patch).eq('id', offerId).eq('sede_id', access.sedeId).eq('autorizado', true).select('*, product:store_catalog_products(*)').single();
-      if (error) throw error; return res.json({ offer: data });
+      const { data, error } = await supabaseAdmin.from('store_sede_offers').update(patch).eq('id', offerId).eq('sede_id', access.sedeId).eq('autorizado', true).select('*, product:store_catalog_products(*)').maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'Oferta no encontrada en esta tienda' });
+      return res.json({ offer: data });
     } catch (error) { console.error('PATCH shop offer:', error.message); return res.status(500).json({ error: 'No se pudo guardar la oferta' }); }
   });
 
@@ -67,23 +71,24 @@ export function mountStoreAdminRoutes(app, deps) {
     try {
       const access = await requireShopAdmin(req, res); if (!access) return;
       const orderId = sid(req.params.orderId); if (!orderId) return res.status(400).json({ error: 'Pedido inválido' });
-      const body = req.body || {}; const patch = { updated_at: new Date().toISOString() };
-      if ('estado' in body) { if (!ORDER_STATES.includes(body.estado)) return res.status(400).json({ error: 'Estado de pedido inválido' }); patch.estado = body.estado; }
-      if ('pago_estado' in body) { if (!PAYMENT_STATES.includes(body.pago_estado)) return res.status(400).json({ error: 'Estado de pago inválido' }); patch.pago_estado = body.pago_estado; }
-      const { data: current, error: currentError } = await supabaseAdmin.from('store_orders').select('id,estado,items:store_order_items(product_id,cantidad)').eq('id', orderId).eq('sede_id', access.sedeId).single();
-      if (currentError) throw currentError;
-      const { data, error } = await supabaseAdmin.from('store_orders').update(patch).eq('id', orderId).eq('sede_id', access.sedeId).select('*, items:store_order_items(*)').single();
-      if (error) throw error;
-      // A cancelled order releases the units reserved when it was created. Do it
-      // only once, on the transition into cancelado.
-      if (patch.estado === 'cancelado' && current.estado !== 'cancelado') {
-        await Promise.all((current.items || []).filter((item) => item.product_id).map(async (item) => {
-          const { data: offer } = await supabaseAdmin.from('store_sede_offers').select('id,stock').eq('sede_id', access.sedeId).eq('product_id', item.product_id).maybeSingle();
-          if (offer) await supabaseAdmin.from('store_sede_offers').update({ stock: Number(offer.stock || 0) + Number(item.cantidad || 0), updated_at: new Date().toISOString() }).eq('id', offer.id);
-        }));
-      }
-      return res.json({ order: data });
-    } catch (error) { console.error('PATCH shop order:', error.message); return res.status(500).json({ error: 'No se pudo actualizar el pedido' }); }
+      const body = req.body || {};
+      if ('estado' in body && !ORDER_STATES.includes(body.estado)) return res.status(400).json({ error: 'Estado de pedido inválido' });
+      if ('pago_estado' in body && !PAYMENT_STATES.includes(body.pago_estado)) return res.status(400).json({ error: 'Estado de pago inválido' });
+      // State changes and the stock release of a cancellation happen in the same
+      // transactional RPC, so a retry cannot restore the same units twice.
+      const result = await updateStoreOrder(supabaseAdmin, {
+        sedeId: access.sedeId,
+        orderId,
+        estado: 'estado' in body ? body.estado : undefined,
+        pagoEstado: 'pago_estado' in body ? body.pago_estado : undefined,
+      });
+      return res.json({ order: result.order });
+    } catch (error) {
+      const status = error instanceof StoreOrderError ? error.status : 500;
+      if (status >= 500) console.error('PATCH shop order:', error.message);
+      const message = error instanceof StoreOrderError ? error.message : 'No se pudo actualizar el pedido';
+      return res.status(status).json({ error: message });
+    }
   });
 
   const requireGlobal = async (req, res) => requireSuperAdminUser(req, res, authDepsFor(deps));

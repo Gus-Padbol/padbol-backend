@@ -20,8 +20,11 @@ export function mountStoreSedeConfigRoutes(app, {
 
   app.get('/api/sedes/:id/tienda-config', async (req, res) => {
     try {
+      const auth = await requireAdminUser(req, res, authDeps);
+      if (!auth) return;
       const sedeId = parseSedeId(req.params.id);
       if (!sedeId) return res.status(400).json({ error: 'sede_id inválido' });
+      if (!canManage(auth, sedeId)) return res.status(403).json({ error: 'No tenés permiso para administrar esta tienda' });
       const [{ data: config, error: configError }, { data: paymentMethods, error: methodsError }] = await Promise.all([
         supabaseAdmin.from('store_sede_config').select('*').eq('sede_id', sedeId).maybeSingle(),
         supabaseAdmin.from('store_sede_payment_methods').select('id,codigo,nombre,activo,instrucciones').eq('sede_id', sedeId).eq('activo', true).order('nombre'),
