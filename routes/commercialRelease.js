@@ -895,7 +895,7 @@ function validarInvitacionGeoTerritorio(inv) {
 
 app.post('/api/admin/roles', async (req, res) => {
   try {
-    await assertSuperAdminReq(req);
+    const actorScope = await assertSuperAdminReq(req);
     const b = req.body || {};
     const email = String(b.email || '').trim().toLowerCase();
     const role = String(b.role || '').trim().toLowerCase();
@@ -981,15 +981,25 @@ app.post('/api/admin/roles', async (req, res) => {
       ...geography,
       torneos_oficiales_habilitados: role === 'admin_nacional',
     };
-    const { data: existing } = await supabase.from('user_roles').select('email').eq('email', email).maybeSingle();
-    let r;
-    if (existing?.email) {
-      r = await supabase.from('user_roles').update(payload).eq('email', email).select('*').single();
-    } else {
-      r = await supabase.from('user_roles').insert(payload).select('*').single();
+    if (typeof supabase.rpc !== 'function') return res.status(503).json({
+      error: 'La asignación atómica no está disponible.', code: 'ADMIN_ROLE_ATOMIC_UNAVAILABLE',
+    });
+    const { data: result, error: roleError } = await supabase.rpc('asignar_rol_admin_atomico', {
+      p_actor_id: actorScope?.authUserId, p_payload: payload,
+    });
+    if (roleError) {
+      const missing = ['PGRST202', 'PGRST203', '42883'].includes(String(roleError.code || ''));
+      const status = missing ? 503 : roleError.code === '42501' ? 403 : roleError.code === '22023' ? 400 : 500;
+      return res.status(status).json({ error: 'No se pudo asignar el rol. Revisá la operación antes de reintentar.',
+        code: missing ? 'ADMIN_ROLE_ATOMIC_UNAVAILABLE' : 'ADMIN_ROLE_ATOMIC_FAILED' });
     }
-    if (r.error) throw r.error;
-    res.json(r.data);
+    if (result?.ok === false && result.reason === 'ambiguous_email') return res.status(409).json({
+      error: 'El email tiene más de una asignación. Revisá los roles existentes antes de continuar.', code: 'ADMIN_ROLE_EMAIL_AMBIGUOUS',
+    });
+    if (result?.ok !== true || !result.row?.id || result.row.email !== email || result.row.role !== role) return res.status(500).json({
+      error: 'No se pudo confirmar la asignación.', code: 'ADMIN_ROLE_BAD_RECEIPT',
+    });
+    res.json(result.row);
   } catch (err) {
     console.error('❌ POST /api/admin/roles:', err.message);
     res.status(err.status || 500).json({ error: err.message });
@@ -2058,48 +2068,31 @@ app.post('/api/admin/sedes-pendientes/:id/aprobar', async (req, res) => {
       return rechazarAccesoNoDisponible(res);
     }
 
-    const { data: sedeRow, error: sedeErr } = await supabase.from('sedes').insert(sedeInsert).select('id').single();
-    if (sedeErr) throw sedeErr;
-    const sedeId = sedeRow.id;
-
-    if (pend.organizacion_id) {
-      const { error: orgLinkError } = await supabase
-        .from('organizacion_sedes')
-        .insert({ organizacion_id: pend.organizacion_id, sede_id: sedeId });
-      if (orgLinkError) {
-        await supabase.from('sedes').delete().eq('id', sedeId);
-        throw orgLinkError;
-      }
-    }
-
-    const urErr = preservaAdminCadena
-      ? null
-      : await upsertUserRoleLicenciaAsignada({
-          email: licEmail,
-          nombre: pend.licenciatario_nombre || null,
-          payload: pend,
-          sedeId,
-        });
-    if (urErr) {
-      await supabase.from('sedes').delete().eq('id', sedeId);
-      throw urErr;
-    }
-
-    const { error: upPendErr } = await supabase
-      .from('sedes_pendientes')
-      .update({ estado: 'aprobada' })
-      .eq('id', id);
-    if (upPendErr) {
-      console.error('⚠️ Aprobar sede pendiente: estado no actualizado:', upPendErr.code || upPendErr.status || 'db_error');
-      return res.status(500).json({
-        error: 'La sede quedó creada pero la solicitud no se pudo marcar como aprobada.',
-        code: 'SEDE_PENDING_UPDATE_FAILED',
-        sede_created: true,
-        sede_id: sedeId,
-        access_state: authProvision.access_state,
-        welcome_delivery: authProvision.welcome_delivery,
+    // Pending row, seat, organization link and role commit together. The row
+    // lock serializes duplicate approvals; no REST fallback if RPC is absent.
+    if (typeof supabase.rpc !== 'function') return res.status(503).json({
+      error: 'La aprobación atómica no está disponible en este entorno.', code: 'SEDE_APPROVAL_ATOMIC_UNAVAILABLE',
+    });
+    const expected = Object.fromEntries(Object.entries(pend).filter(([key]) => key !== 'created_at'));
+    const { data: approved, error: approvalError } = await supabase.rpc('aprobar_sede_pendiente_atomica', {
+      p_request_id: id, p_actor_id: user.id, p_expected: expected, p_sede: sedeInsert,
+    });
+    if (approvalError) {
+      const missing = ['PGRST202', 'PGRST203', '42883'].includes(String(approvalError.code || ''));
+      return res.status(missing ? 503 : approvalError.code === '42501' ? 403 : 500).json({
+        error: missing ? 'La aprobación atómica no está disponible en este entorno.' : 'No se pudo aprobar la sede. Reintentá con esta misma solicitud.',
+        code: missing ? 'SEDE_APPROVAL_ATOMIC_UNAVAILABLE' : 'SEDE_APPROVAL_ATOMIC_FAILED', retry: !missing,
       });
     }
+    if (approved?.ok !== true) {
+      if (approved?.reason === 'not_found') return res.status(404).json({ error: 'No encontrada' });
+      if (approved?.reason === 'not_pending') return res.status(400).json({ error: 'La solicitud ya no está pendiente' });
+      return res.status(409).json({ error: 'La solicitud cambió. Actualizá antes de aprobar.', code: 'SEDE_APPROVAL_CHANGED_RETRY' });
+    }
+    const sedeId = Number(approved.sede_id);
+    if (!Number.isSafeInteger(sedeId) || sedeId <= 0) return res.status(500).json({
+      error: 'No se pudo confirmar la aprobación.', code: 'SEDE_APPROVAL_BAD_RECEIPT',
+    });
 
     const nombre = String(pend.nombre || '').trim();
     const waNacional = await fetchJugadorWhatsappPorEmail(pend.created_by);

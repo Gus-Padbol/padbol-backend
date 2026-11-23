@@ -409,6 +409,19 @@ async function emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin = null
   io.to(`scoreboard:${partidoId}`).emit('scoreboard:update', payload);
 }
 
+// Post-commit notification must never turn a confirmed scoreboard mutation into
+// a 500 that invites the client to apply the point again. Persistence, auth and
+// scoring errors still propagate; only the external emit is best-effort.
+async function emitScoreboardUpdateSafe(io, partidoId, partido, supabaseAdmin = null, pool = null) {
+  try {
+    await emitScoreboardUpdate(io, partidoId, partido, supabaseAdmin, pool);
+    return true;
+  } catch (error) {
+    console.error('⚠️ Marcador persistido; notificación no emitida:', error?.message || error);
+    return false;
+  }
+}
+
 async function fetchPartido(supabaseAdmin, partidoId) {
   const { data, error } = await supabaseAdmin
     .from('scoreboard_partidos')
@@ -466,7 +479,7 @@ export function mountScoreboardRoutes(app, {
     db: supabaseAdmin, boardColumns: `${SCOREBOARD_PARTIDO_SELECT}, revision`, authenticate: getAuthenticatedUser,
     authorize: async (user, row) => assertCanControlScoreboard(await resolveAuthRole(user, { fetchUserRoleRowForAuthUser, legacySuperAdminEmails }), row.sede_id),
     present: row => enrichPartidoWithVenue(supabaseAdmin, row, publicLineupPool),
-    publish: row => emitScoreboardUpdate(io, row.id, row, supabaseAdmin, publicLineupPool),
+    publish: row => emitScoreboardUpdateSafe(io, row.id, row, supabaseAdmin, publicLineupPool),
     fetchHistory: id => fetchUltimoHistorialPunto(supabaseAdmin, id),
     assertHistory: assertLatestHistoryMatchesSnapshot,
     afterMutation: async (row, before) => {
@@ -476,7 +489,7 @@ export function mountScoreboardRoutes(app, {
   });
   async function saveAndEmit(partido, expectedUpdatedAt, options) {
     const saved = await savePartido(supabaseAdmin, partido, expectedUpdatedAt, options);
-    await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin, publicLineupPool);
+    await emitScoreboardUpdateSafe(io, saved.id, saved, supabaseAdmin, publicLineupPool);
     return enrichPartidoWithVenue(supabaseAdmin, saved, publicLineupPool);
   }
 
@@ -501,7 +514,7 @@ export function mountScoreboardRoutes(app, {
     // The final-point transaction owns a durable intent. Reconcile on both new
     // response and replay; periodic runtime recovery also covers no-client-retry.
     if(kind==='point'&&recoverNationsFinalization){try{await recoverNationsFinalization(saved.id);}catch{/* durable pending intent remains */}}
-    await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin, publicLineupPool);
+    await emitScoreboardUpdateSafe(io, saved.id, saved, supabaseAdmin, publicLineupPool);
     return {...await enrichPartidoWithVenue(supabaseAdmin, saved, publicLineupPool),gamesEpoch:out.gamesEpoch,trackingStatus:out.trackingStatus};
   }
   async function handleRegistrarPunto(partido, equipo, context) {
@@ -515,7 +528,7 @@ export function mountScoreboardRoutes(app, {
     const saved = await savePartido(supabaseAdmin, partido, expectedUpdatedAt, { kind: 'point', history });
     await maybeSyncTorneoAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
     await maybeProcessCasualPadcoinsAfterScoreboardTerminated(supabaseAdmin, saved, estadoAntes);
-    await emitScoreboardUpdate(io, saved.id, saved, supabaseAdmin, publicLineupPool);
+    await emitScoreboardUpdateSafe(io, saved.id, saved, supabaseAdmin, publicLineupPool);
     return enrichPartidoWithVenue(supabaseAdmin, saved, publicLineupPool);
   }
 
@@ -878,7 +891,7 @@ export function mountScoreboardRoutes(app, {
       if (!created) throw new Error('No se pudo crear el partido');
 
       const enriched = await enrichPartidoWithVenue(supabaseAdmin, created, publicLineupPool);
-      await emitScoreboardUpdate(io, created.id, created, supabaseAdmin, publicLineupPool);
+      await emitScoreboardUpdateSafe(io, created.id, created, supabaseAdmin, publicLineupPool);
       return res.status(201).json(enriched);
     } catch (err) {
       const st = err.status || 500;
@@ -1009,7 +1022,7 @@ export function mountScoreboardRoutes(app, {
       if (!updated) return res.status(409).json({ error: 'El marcador cambió. Actualizá y volvé a intentar.' });
 
       const enriched = await enrichPartidoWithVenue(supabaseAdmin, updated, publicLineupPool);
-      await emitScoreboardUpdate(io, updated.id, updated, supabaseAdmin, publicLineupPool);
+      await emitScoreboardUpdateSafe(io, updated.id, updated, supabaseAdmin, publicLineupPool);
       return res.json(enriched);
     } catch (err) {
       const st = err.status || 500;

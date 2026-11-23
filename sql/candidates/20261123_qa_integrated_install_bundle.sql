@@ -1405,4 +1405,171 @@ END $post$;
 NOTIFY pgrst, 'reload schema';
 -- BODY-END 9
 
+-- SOURCE 10 sql/candidates/20261123_sede_pending_approval_atomic.sql SHA256 25ae66c827da2a9415f134e7ff2f9e7257d58b2736a14071316117a73ac0daa8
+-- BODY-BEGIN 10
+-- LOCAL CANDIDATE ONLY. Pending approval DB portion; Auth remains outside.
+-- Requires reviewed effective sedes/sedes_pendientes/user_roles/organization schema.
+-- No table/column/role/RLS change; no automatic application.
+SET LOCAL lock_timeout='3s';
+SET LOCAL statement_timeout='20s';
+CREATE OR REPLACE FUNCTION public.aprobar_sede_pendiente_atomica(
+ p_request_id bigint,p_actor_id uuid,p_expected jsonb,p_sede jsonb
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $fn$
+DECLARE
+ p public.sedes_pendientes; s public.sedes; k text; columns_sql text;
+ v_email text; preserve_chain boolean; assignment_role text; scope text;
+ country text; province text; city text; written integer; expected_roles integer;
+ allowed constant text[]:=ARRAY['nombre','direccion','ciudad','provincia','pais','timezone','latitud','longitud','horario_apertura','horario_cierre','precio_turno','precio_por_reserva','moneda','metodo_pago','stripe_account_id','mp_access_token','mp_public_key','pago_manual_instrucciones','telefono','email_contacto','cantidad_canchas','numero_licencia','fecha_licencia','licencia_activa','franjas_horarias','fotos_destacadas','whatsapp_contacto'];
+BEGIN
+ -- Actor comes from verified server identity, never a body field. Rechecked in DB.
+ PERFORM 1 FROM public.user_roles r WHERE r.user_id=p_actor_id AND r.role='super_admin' FOR SHARE;
+ IF p_actor_id IS NULL OR NOT FOUND THEN
+  RAISE EXCEPTION 'SEDE_APPROVAL_FORBIDDEN' USING ERRCODE='42501';
+ END IF;
+ SELECT * INTO p FROM public.sedes_pendientes WHERE id=p_request_id FOR UPDATE;
+ IF NOT FOUND THEN RETURN jsonb_build_object('ok',false,'reason','not_found'); END IF;
+ IF p.estado IS DISTINCT FROM 'pendiente' THEN RETURN jsonb_build_object('ok',false,'reason','not_pending'); END IF;
+ IF jsonb_typeof(p_expected) IS DISTINCT FROM 'object' OR jsonb_typeof(p_sede) IS DISTINCT FROM 'object' THEN
+  RETURN jsonb_build_object('ok',false,'reason','changed');
+ END IF;
+ -- Auth provisioning may take time. Never install a stale application snapshot.
+ -- Ignore only metadata created_at. JSONB compares numeric values semantically:
+ -- PostgREST 100.00 -> JavaScript 100 is unchanged, not a stale snapshot.
+ FOR k IN SELECT jsonb_object_keys(to_jsonb(p)) LOOP
+  IF k<>'created_at' AND p_expected->k IS DISTINCT FROM to_jsonb(p)->k THEN
+   RETURN jsonb_build_object('ok',false,'reason','changed');
+  END IF;
+ END LOOP;
+ v_email:=lower(btrim(coalesce(p.licenciatario_email,'')));
+ IF v_email !~ '^[^@[:space:]]+@[^@[:space:]]+$' THEN RAISE EXCEPTION 'SEDE_APPROVAL_INVALID_EMAIL'; END IF;
+ FOR k IN SELECT jsonb_object_keys(p_sede) LOOP
+  IF NOT(k=ANY(allowed)) THEN RAISE EXCEPTION 'SEDE_APPROVAL_COLUMN_NOT_ALLOWED'; END IF;
+ END LOOP;
+ IF EXISTS(SELECT 1 FROM unnest(ARRAY['nombre','pais','ciudad','horario_apertura','horario_cierre','whatsapp_contacto']) f WHERE coalesce(btrim(p_sede->>f),'')='')
+  OR coalesce(p_sede->>'horario_apertura','') !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+  OR coalesce(p_sede->>'horario_cierre','') !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+  OR coalesce(p_sede->>'cantidad_canchas','') !~ '^[0-9]+$'
+  OR coalesce(p_sede->>'precio_por_reserva','') !~ '^[0-9]+$' THEN RAISE EXCEPTION 'SEDE_APPROVAL_INVALID_CONFIGURATION'; END IF;
+ preserve_chain:=p.organizacion_id IS NOT NULL AND v_email=lower(btrim(coalesce(p.created_by,'')));
+ assignment_role:='admin_club';scope:='sede';
+ country:=coalesce(nullif(btrim(p.licenciatario_pais),''),nullif(btrim(p.pais),''));
+ IF lower(btrim(coalesce(p.tipo_licencia,'club_afiliado'))) IN('master_ciudad','master_provincia','master_pais') THEN
+  assignment_role:='admin_nacional';
+  scope:=CASE lower(btrim(p.tipo_licencia)) WHEN 'master_ciudad' THEN 'ciudad' WHEN 'master_provincia' THEN 'provincia' ELSE 'pais' END;
+  country:=CASE WHEN scope='pais' THEN coalesce(nullif(btrim(p.licenciatario_pais),''),nullif(btrim(p.pais),'')) ELSE nullif(btrim(p.pais),'') END;
+  IF scope IN('ciudad','provincia') THEN province:=nullif(btrim(p.provincia),''); END IF;
+  IF scope='ciudad' THEN city:=nullif(btrim(p.ciudad),''); END IF;
+  IF NOT preserve_chain AND (country IS NULL OR (scope IN('ciudad','provincia') AND province IS NULL) OR (scope='ciudad' AND city IS NULL)) THEN RAISE EXCEPTION 'SEDE_APPROVAL_TERRITORY_REQUIRED'; END IF;
+ END IF;
+ -- One same-email namespace with the accepted invitation RPC. No process lock.
+ PERFORM pg_advisory_xact_lock(hashtextextended('invitacion_admin_club:'||v_email,0));
+ -- Only the fixed allowlist can become identifiers. Omitted columns keep defaults;
+ -- JSON values are bound parameters, never interpolated SQL.
+ SELECT string_agg(format('%I',key),',' ORDER BY key) INTO columns_sql FROM jsonb_object_keys(p_sede) key;
+ EXECUTE format('INSERT INTO public.sedes(%s) SELECT %s FROM jsonb_populate_record(NULL::public.sedes,$1) RETURNING *',columns_sql,columns_sql) INTO s USING p_sede;
+ IF s.id IS NULL THEN RAISE EXCEPTION 'SEDE_APPROVAL_WRITE_SUPPRESSED'; END IF;
+ IF p.organizacion_id IS NOT NULL THEN
+  INSERT INTO public.organizacion_sedes(organizacion_id,sede_id) VALUES(p.organizacion_id,s.id);
+  GET DIAGNOSTICS written=ROW_COUNT; IF written<>1 THEN RAISE EXCEPTION 'SEDE_APPROVAL_WRITE_SUPPRESSED'; END IF;
+ END IF;
+ IF NOT preserve_chain THEN
+  SELECT count(*) INTO expected_roles FROM public.user_roles r WHERE lower(btrim(r.email))=v_email;
+  UPDATE public.user_roles r SET role=assignment_role,alcance=scope,nombre=nullif(btrim(p.licenciatario_nombre),''),
+    sede_id=CASE WHEN scope='sede' THEN s.id ELSE NULL END,pais=country,provincia=province,ciudad=city,torneos_oficiales_habilitados=(assignment_role='admin_nacional')
+   WHERE lower(btrim(r.email))=v_email;
+  GET DIAGNOSTICS written=ROW_COUNT;
+  IF written<>expected_roles THEN RAISE EXCEPTION 'SEDE_APPROVAL_ROLE_WRITE_SUPPRESSED'; END IF;
+  IF expected_roles=0 THEN
+   INSERT INTO public.user_roles(email,role,alcance,nombre,sede_id,pais,provincia,ciudad,torneos_oficiales_habilitados)
+    VALUES(v_email,assignment_role,scope,nullif(btrim(p.licenciatario_nombre),''),CASE WHEN scope='sede' THEN s.id ELSE NULL END,country,province,city,assignment_role='admin_nacional');
+   GET DIAGNOSTICS written=ROW_COUNT; IF written<>1 THEN RAISE EXCEPTION 'SEDE_APPROVAL_WRITE_SUPPRESSED'; END IF;
+  END IF;
+ END IF;
+ UPDATE public.sedes_pendientes SET estado='aprobada' WHERE id=p.id AND estado='pendiente';
+ GET DIAGNOSTICS written=ROW_COUNT;
+ IF written<>1 OR NOT EXISTS(SELECT 1 FROM public.sedes_pendientes WHERE id=p.id AND estado='aprobada') THEN RAISE EXCEPTION 'SEDE_APPROVAL_FINAL_MISMATCH'; END IF;
+ RETURN jsonb_build_object('ok',true,'sede_id',s.id);
+END $fn$;
+REVOKE ALL ON FUNCTION public.aprobar_sede_pendiente_atomica(bigint,uuid,jsonb,jsonb) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.aprobar_sede_pendiente_atomica(bigint,uuid,jsonb,jsonb) TO service_role;
+NOTIFY pgrst,'reload schema';
+-- BODY-END 10
+
+-- SOURCE 11 sql/candidates/20261123_admin_role_assignment_atomic.sql SHA256 f1f7230b7c12d8cc999445484fbb0c72cf6927e07d8853365d5e5c14cbbcd2d8
+-- BODY-BEGIN 11
+-- LOCAL CANDIDATE ONLY. Already-permitted SuperAdmin non-editor assignments.
+-- No global email UNIQUE, no role/table/RLS change, no merging/deleting old rows.
+CREATE OR REPLACE FUNCTION public.asignar_rol_admin_atomico(p_actor_id uuid,p_payload jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public SET lock_timeout='3s' AS $fn$
+DECLARE
+ target_email text; target_role text; target_scope text; target_venue bigint;
+ target_org uuid; target_country text; target_province text; target_city text;
+ ids bigint[]; r public.user_roles; affected integer; key text;
+BEGIN
+ -- Revalidate the authenticated server actor and hold its authorization row.
+ IF (SELECT count(*) FROM public.user_roles WHERE user_id=p_actor_id)<>1 THEN
+  RAISE EXCEPTION 'ADMIN_ROLE_FORBIDDEN' USING ERRCODE='42501';
+ END IF;
+ PERFORM 1 FROM public.user_roles WHERE user_id=p_actor_id AND lower(btrim(role))='super_admin'
+  AND coalesce(nullif(alcance,''),'global')='global' FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'ADMIN_ROLE_FORBIDDEN' USING ERRCODE='42501'; END IF;
+ IF jsonb_typeof(p_payload) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'ADMIN_ROLE_INVALID_PAYLOAD' USING ERRCODE='22023'; END IF;
+ FOR key IN SELECT jsonb_object_keys(p_payload) LOOP
+  IF NOT key=ANY(ARRAY['email','role','alcance','nombre','sede_id','organizacion_id','pais','provincia','ciudad','torneos_oficiales_habilitados']) THEN
+   RAISE EXCEPTION 'ADMIN_ROLE_INVALID_FIELD' USING ERRCODE='22023';
+  END IF;
+ END LOOP;
+ target_email:=lower(btrim(coalesce(p_payload->>'email','')));
+ target_role:=lower(btrim(coalesce(p_payload->>'role','')));
+ target_scope:=lower(btrim(coalesce(p_payload->>'alcance','')));
+ IF target_email='' OR target_role NOT IN('admin_club','admin_cadena','admin_nacional','empleado')
+  OR target_scope NOT IN('sede','organizacion','ciudad','provincia','pais')
+  OR (target_role='admin_cadena' AND target_scope<>'organizacion')
+  OR (target_role<>'admin_cadena' AND target_scope='organizacion')
+  OR (target_role='empleado' AND target_scope<>'sede') THEN
+  RAISE EXCEPTION 'ADMIN_ROLE_INVALID_ASSIGNMENT' USING ERRCODE='22023';
+ END IF;
+ IF target_scope='sede' THEN
+  IF coalesce(p_payload->>'sede_id','') !~ '^[1-9][0-9]*$' THEN RAISE EXCEPTION 'ADMIN_ROLE_INVALID_SEDE' USING ERRCODE='22023'; END IF;
+  target_venue:=(p_payload->>'sede_id')::bigint;
+ ELSIF target_scope='organizacion' THEN
+  target_org:=nullif(p_payload->>'organizacion_id','')::uuid;
+  IF target_org IS NULL THEN RAISE EXCEPTION 'ADMIN_ROLE_INVALID_ORGANIZATION' USING ERRCODE='22023'; END IF;
+ END IF;
+ IF target_scope IN('ciudad','provincia','pais') THEN
+  target_country:=nullif(btrim(p_payload->>'pais'),'');
+  IF target_country IS NULL THEN RAISE EXCEPTION 'ADMIN_ROLE_TERRITORY_REQUIRED' USING ERRCODE='22023'; END IF;
+ END IF;
+ IF target_scope IN('ciudad','provincia') THEN
+  target_province:=nullif(btrim(p_payload->>'provincia'),'');
+  IF target_province IS NULL THEN RAISE EXCEPTION 'ADMIN_ROLE_TERRITORY_REQUIRED' USING ERRCODE='22023'; END IF;
+ END IF;
+ IF target_scope='ciudad' THEN
+  target_city:=nullif(btrim(p_payload->>'ciudad'),'');
+  IF target_city IS NULL THEN RAISE EXCEPTION 'ADMIN_ROLE_TERRITORY_REQUIRED' USING ERRCODE='22023'; END IF;
+ END IF;
+ -- Same namespace as accepted club invitation and pending approval RPCs.
+ PERFORM pg_advisory_xact_lock(hashtextextended('invitacion_admin_club:'||target_email,0));
+ SELECT array_agg(locked.id) INTO ids FROM (
+  SELECT id FROM public.user_roles WHERE lower(btrim(email))=target_email ORDER BY id FOR UPDATE
+ ) locked;
+ IF cardinality(ids)>1 THEN RETURN jsonb_build_object('ok',false,'reason','ambiguous_email'); END IF;
+ IF cardinality(ids)=1 THEN
+  UPDATE public.user_roles SET email=target_email,role=target_role,alcance=target_scope,
+   nombre=nullif(btrim(p_payload->>'nombre'),''),sede_id=target_venue,organizacion_id=target_org,
+   pais=target_country,provincia=target_province,ciudad=target_city,
+   torneos_oficiales_habilitados=(target_role='admin_nacional') WHERE id=ids[1] RETURNING * INTO r;
+ ELSE
+  INSERT INTO public.user_roles(email,role,alcance,nombre,sede_id,organizacion_id,pais,provincia,ciudad,torneos_oficiales_habilitados)
+   VALUES(target_email,target_role,target_scope,nullif(btrim(p_payload->>'nombre'),''),target_venue,target_org,target_country,target_province,target_city,target_role='admin_nacional') RETURNING * INTO r;
+ END IF;
+ GET DIAGNOSTICS affected=ROW_COUNT;
+ IF affected<>1 OR r.id IS NULL THEN RAISE EXCEPTION 'ADMIN_ROLE_WRITE_SUPPRESSED'; END IF;
+ RETURN jsonb_build_object('ok',true,'row',to_jsonb(r));
+END $fn$;
+REVOKE ALL ON FUNCTION public.asignar_rol_admin_atomico(uuid,jsonb) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.asignar_rol_admin_atomico(uuid,jsonb) TO service_role;
+NOTIFY pgrst,'reload schema';
+-- BODY-END 11
+
 COMMIT;

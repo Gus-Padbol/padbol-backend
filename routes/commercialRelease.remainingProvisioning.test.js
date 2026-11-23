@@ -148,6 +148,31 @@ function buildFixture(options = {}) {
     // Fixture-only emulation of the atomic RPC dependency. The real HTTP+PG
     // coverage of this contract lives in invitationAtomic.test.js.
     rpc(name, args) {
+      // Dependency fixture only; pendingAtomic.test.js proves real SQL rollback.
+      if (name === 'aprobar_sede_pendiente_atomica') {
+        const pending = tables.sedes_pendientes.find(row => Number(row.id) === Number(args.p_request_id));
+        if (!pending) return Promise.resolve({ data: { ok: false, reason: 'not_found' }, error: null });
+        if (pending.estado !== 'pendiente') return Promise.resolve({ data: { ok: false, reason: 'not_pending' }, error: null });
+        if (state.failUpdateTable === 'sedes_pendientes') return Promise.resolve({ data: null, error: { code: 'P0001', message: 'Fixture atomic commit failure' } });
+        const sedeId = nextRowId();
+        tables.sedes.push({ id: sedeId, ...clone(args.p_sede) });
+        state.writes.push({ table: 'sedes', mode: 'insert' });
+        if (pending.organizacion_id) {
+          tables.organizacion_sedes.push({ organizacion_id: pending.organizacion_id, sede_id: sedeId });
+          state.writes.push({ table: 'organizacion_sedes', mode: 'insert' });
+        }
+        const email = String(pending.licenciatario_email).trim().toLowerCase();
+        if (!(pending.organizacion_id && email === String(pending.created_by || '').trim().toLowerCase())) {
+          const role = tables.user_roles.find(row => String(row.email || '').trim().toLowerCase() === email);
+          const assigned = { email, role: 'admin_club', alcance: 'sede', nombre: pending.licenciatario_nombre || null,
+            sede_id: sedeId, pais: pending.licenciatario_pais || pending.pais, ciudad: null, provincia: null, torneos_oficiales_habilitados: false };
+          if (role) Object.assign(role, assigned); else tables.user_roles.push({ id: nextRowId(), ...assigned });
+          state.writes.push({ table: 'user_roles', mode: role ? 'update' : 'insert' });
+        }
+        pending.estado = 'aprobada';
+        state.writes.push({ table: 'sedes_pendientes', mode: 'update' });
+        return Promise.resolve({ data: { ok: true, sede_id: sedeId }, error: null });
+      }
       assert.equal(name, 'completar_invitacion_club_atomica');
       const inv = tables.invitaciones_admin.find((row) => row.token === args.p_token);
       if (!inv) return Promise.resolve({ data: { ok: false, reason: 'not_found' }, error: null });
@@ -767,7 +792,7 @@ test('repro/geo: error al completar la invitación no devuelve 2xx ni oculta el 
   assert.ok(state.tables.user_roles.some((row) => row.email === GEO_EMAIL));
 });
 
-test('repro/aprobar: error al marcar aprobada no devuelve 2xx y reporta la sede ya creada', async t => {
+test('repro/aprobar: error al marcar aprobada no devuelve 2xx y revierte sede/vínculo', async t => {
   const { state, aprobar } = await start(t, {
     authUser: SUPER_USER,
     pendientes: [pendingRow({ organizacion_id: 'org-fixture' })],
@@ -776,12 +801,12 @@ test('repro/aprobar: error al marcar aprobada no devuelve 2xx y reporta la sede 
   const result = await aprobar();
   assert.notEqual(result.status, 200);
   assert.equal(result.status, 500, JSON.stringify(result.body));
-  assert.equal(result.body.code, 'SEDE_PENDING_UPDATE_FAILED');
-  assert.equal(result.body.sede_created, true);
+  assert.equal(result.body.code, 'SEDE_APPROVAL_ATOMIC_FAILED');
+  assert.equal(result.body.sede_created, undefined);
   assertNoFailureLeak(result.body);
   assert.equal(state.tables.sedes_pendientes[0].estado, 'pendiente');
-  assert.equal(state.tables.sedes.length, 1);
-  assert.equal(state.tables.organizacion_sedes.length, 1);
+  assert.equal(state.tables.sedes.length, 0);
+  assert.equal(state.tables.organizacion_sedes.length, 0);
 });
 
 // ---------------------------------------------------------------------------
