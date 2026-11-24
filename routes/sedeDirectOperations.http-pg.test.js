@@ -107,24 +107,27 @@ test('keyed direct alta: durable replay, cancel, concurrency and fail-closed bou
 
    // 2b) two distinct legitimate keys, same new licenciatario email: advisory first, one role row.
    await reset();
-   await pool.query(`create or replace function public.qa056_slow_advisory() returns trigger language plpgsql as $$begin if new.nombre like 'Advisory One%' then perform pg_sleep(0.6); end if; return new; end$$;
-     create trigger qa056_slow_advisory before insert on public.sedes for each row execute function public.qa056_slow_advisory();`);
-   const sharedA = call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: KEY1, nombre: 'Advisory One', licenciatario_email: 'shared@fixture.invalid'}));
-   const sharedB = call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: KEY2, nombre: 'Advisory Two', licenciatario_email: 'shared@fixture.invalid'}));
-   let advisoryWait = false;
-   for (let i = 0; i < 300; i += 1) {
-     const waiting = (await pool.query("select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and state='active' and query ilike '%invitacion_admin_club%'")).rows[0].n;
-     if (waiting > 0) { advisoryWait = true; break; }
-     await new Promise((resolve) => setTimeout(resolve, 10));
+   const advisoryHolder = await racePool.connect();
+   let sharedAResponse, sharedBResponse, advisoryWait=false;
+   try {
+     await advisoryHolder.query("select pg_advisory_lock(hashtextextended('invitacion_admin_club:shared@fixture.invalid',0))");
+     const sharedA = call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: KEY1, nombre: 'Advisory One', licenciatario_email: 'shared@fixture.invalid'}));
+     const sharedB = call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: KEY2, nombre: 'Advisory Two', licenciatario_email: 'shared@fixture.invalid'}));
+     for (let i=0;i<300;i++) {
+       const waiting=await pool.query("select pid from pg_stat_activity where wait_event_type='Lock' and $1=any(pg_blocking_pids(pid))",[advisoryHolder.processID]);
+       if(waiting.rowCount>=2){advisoryWait=true;break;}
+       await new Promise(resolve=>setTimeout(resolve,10));
+     }
+     await advisoryHolder.query("select pg_advisory_unlock(hashtextextended('invitacion_admin_club:shared@fixture.invalid',0))");
+     [sharedAResponse,sharedBResponse]=await Promise.all([sharedA,sharedB]);
+   } finally {
+     await advisoryHolder.query('select pg_advisory_unlock_all()');advisoryHolder.release();
    }
-   const [sharedAResponse, sharedBResponse] = await Promise.all([sharedA, sharedB]);
-   assert.equal(sharedAResponse.status, 200, JSON.stringify(sharedAResponse.body));
-   assert.equal(sharedBResponse.status, 200, JSON.stringify(sharedBResponse.body));
-   assert.notEqual(sharedAResponse.body.sede_id, sharedBResponse.body.sede_id);
-   assert.equal(await sedes('Advisory One'), 1); assert.equal(await sedes('Advisory Two'), 1);
-   assert.equal((await pool.query("select count(*)::int n from public.user_roles where lower(email)='shared@fixture.invalid'")).rows[0].n, 1);
-   assert.equal(typeof advisoryWait, 'boolean');
-   await pool.query('drop trigger qa056_slow_advisory on public.sedes; drop function public.qa056_slow_advisory();');
+   assert.equal(advisoryWait,true,'two contenders actually waited for external advisory PID');
+   assert.equal(sharedAResponse.status,200,JSON.stringify(sharedAResponse.body));assert.equal(sharedBResponse.status,200,JSON.stringify(sharedBResponse.body));
+   assert.notEqual(sharedAResponse.body.sede_id,sharedBResponse.body.sede_id);
+   assert.equal(await sedes('Advisory One'),1);assert.equal(await sedes('Advisory Two'),1);
+   assert.equal((await pool.query("select count(*)::int n from public.user_roles where lower(email)='shared@fixture.invalid'")).rows[0].n,1);
 
    // 3) unknown/foreign/revoked.
    await reset();
