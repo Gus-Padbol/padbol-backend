@@ -389,6 +389,7 @@ app.use(cors({
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   credentials: true,
+  exposedHeaders: ['X-Live-Board', 'X-Live-Role', 'X-Live-Client', 'X-Live-Generation', 'X-Frame-At'],
 }));
 applySecurityHeaders(app);
 app.use(WHATSAPP_CLOUD_WEBHOOK_PATH, express.raw({ type: 'application/json', limit: '1mb' }), (req, _res, next) => {
