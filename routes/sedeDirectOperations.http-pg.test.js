@@ -103,6 +103,27 @@ test('keyed direct alta: durable replay, cancel, concurrency and fail-closed bou
    assert.equal(distinct.status, 200); assert.notEqual(distinct.body.sede_id, first.body.sede_id);
    assert.equal(await sedes('Synthetic Direct'), 1); assert.equal(await sedes('Second Direct'), 1);
 
+   // 2b) two distinct legitimate keys, same new licenciatario email: advisory first, one role row.
+   await reset();
+   await pool.query(`create or replace function public.qa056_slow_advisory() returns trigger language plpgsql as $$begin if new.nombre like 'Advisory One%' then perform pg_sleep(0.6); end if; return new; end$$;
+     create trigger qa056_slow_advisory before insert on public.sedes for each row execute function public.qa056_slow_advisory();`);
+   const sharedA = call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: KEY1, nombre: 'Advisory One', licenciatario_email: 'shared@fixture.invalid'}));
+   const sharedB = call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: KEY2, nombre: 'Advisory Two', licenciatario_email: 'shared@fixture.invalid'}));
+   let advisoryWait = false;
+   for (let i = 0; i < 300; i += 1) {
+     const waiting = (await pool.query("select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and state='active' and query ilike '%invitacion_admin_club%'")).rows[0].n;
+     if (waiting > 0) { advisoryWait = true; break; }
+     await new Promise((resolve) => setTimeout(resolve, 10));
+   }
+   const [sharedAResponse, sharedBResponse] = await Promise.all([sharedA, sharedB]);
+   assert.equal(sharedAResponse.status, 200, JSON.stringify(sharedAResponse.body));
+   assert.equal(sharedBResponse.status, 200, JSON.stringify(sharedBResponse.body));
+   assert.notEqual(sharedAResponse.body.sede_id, sharedBResponse.body.sede_id);
+   assert.equal(await sedes('Advisory One'), 1); assert.equal(await sedes('Advisory Two'), 1);
+   assert.equal((await pool.query("select count(*)::int n from public.user_roles where lower(email)='shared@fixture.invalid'")).rows[0].n, 1);
+   assert.equal(advisoryWait, true, 'observed real advisory lock wait');
+   await pool.query('drop trigger qa056_slow_advisory on public.sedes; drop function public.qa056_slow_advisory();');
+
    // 3) unknown/foreign/revoked.
    await reset();
    const createdA = await call(base, 'POST', '/api/admin/sedes-directa', 'A', body());
@@ -113,6 +134,10 @@ test('keyed direct alta: durable replay, cancel, concurrency and fail-closed bou
    assert.equal((await call(base, 'GET', `/api/admin/sedes-directa/operaciones/${KEY1}`, 'A')).status, 403);
    assert.equal((await call(base, 'POST', '/api/admin/sedes-directa/operaciones/' + KEY1 + '/cancelar', 'A')).status, 403);
    await pool.query("update public.user_roles set role='super_admin', alcance='global' where user_id=$1", [A]);
+   await pool.query("insert into public.user_roles(user_id,email,role,alcance) values($1,'ambiguous@fixture.invalid','admin_club','sede')", [A]);
+   assert.equal((await call(base, 'GET', `/api/admin/sedes-directa/operaciones/${KEY1}`, 'A')).status, 403);
+   assert.equal((await call(base, 'POST', '/api/admin/sedes-directa/operaciones/' + KEY1 + '/cancelar', 'A')).status, 403);
+   await pool.query("delete from public.user_roles where user_id=$1 and role='admin_club'", [A]);
 
    // 4) actor=licenciatario conflict and ambiguous role rows, before Auth.
    await reset();
@@ -135,6 +160,17 @@ test('keyed direct alta: durable replay, cancel, concurrency and fail-closed bou
    assert.equal(await sedes('Cancel Held'), 0);
    const cancelledStatus = await call(base, 'GET', `/api/admin/sedes-directa/operaciones/${KEY2}`, 'A');
    assert.equal(cancelledStatus.body.state, 'cancelled'); assert.equal(cancelledStatus.body.receipt, null);
+
+   // 5b) unknown cancel before prepare creates durable tombstone; late POST never Auth/creates.
+   await reset();
+   const unknownKey = '99999999-9999-4999-8999-999999999999';
+   const tomb = await call(base, 'POST', `/api/admin/sedes-directa/operaciones/${unknownKey}/cancelar`, 'A');
+   assert.equal(tomb.status, 200); assert.equal(tomb.body.state, 'cancelled');
+   const tombStatus = await call(base, 'GET', `/api/admin/sedes-directa/operaciones/${unknownKey}`, 'A');
+   assert.equal(tombStatus.status, 200); assert.equal(tombStatus.body.state, 'cancelled'); assert.equal(tombStatus.body.payload_digest, null); assert.equal(tombStatus.body.receipt, null);
+   const lateAfterTomb = await call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: unknownKey, nombre: 'Tombstone Late'}));
+   assert.equal(lateAfterTomb.status, 409); assert.equal(lateAfterTomb.body.code, 'DIRECT_OPERATION_CANCELLED'); assert.equal(authCalls, 0);
+   assert.equal(await sedes('Tombstone Late'), 0);
 
    // 6) role revoked while Auth awaits: final complete 403, no business writes.
    await reset();
@@ -184,13 +220,15 @@ test('keyed direct alta: durable replay, cancel, concurrency and fail-closed bou
 
    // 9) late DB failure rolls back seat/link/role; prepared row survives and retry commits once.
    await reset();
-   await pool.query(`create or replace function public.qa056_late_fail() returns trigger language plpgsql as $$begin raise exception 'QA056_LATE_FAILURE'; end$$;
-     create trigger qa056_late_fail before insert on public.sedes for each row execute function public.qa056_late_fail();`);
+   await pool.query(`create or replace function public.qa056_late_role_fail() returns trigger language plpgsql as $$begin raise exception 'QA056_LATE_ROLE_FAILURE'; end$$;
+     create trigger qa056_late_role_fail after insert or update on public.user_roles for each row execute function public.qa056_late_role_fail();`);
    const failed = await call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: KEY4, nombre: 'Late Failed'}));
-   assert.equal(failed.status, 500); assert.equal(await sedes('Late Failed'), 0);
+   assert.equal(failed.status, 500, JSON.stringify(failed.body)); assert.equal(await sedes('Late Failed'), 0);
    const held = await pool.query("select state from public.sede_direct_operations where actor_id=$1 and operation_key=$2", [A, KEY4]);
    assert.equal(held.rows[0].state, 'prepared');
-   await pool.query('drop trigger qa056_late_fail on public.sedes; drop function public.qa056_late_fail();');
+   assert.equal((await pool.query("select count(*)::int n from public.user_roles where lower(email)='owner@fixture.invalid'")).rows[0].n, 0);
+   assert.equal((await pool.query("select count(*)::int n from public.organizacion_sedes")).rows[0].n, 0);
+   await pool.query('drop trigger qa056_late_role_fail on public.user_roles; drop function public.qa056_late_role_fail();');
    const retried = await call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: KEY4, nombre: 'Late Failed'}));
    assert.equal(retried.status, 200); assert.equal(retried.body.replayed, false);
    assert.equal(await sedes('Late Failed'), 1);

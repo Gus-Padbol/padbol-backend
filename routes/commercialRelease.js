@@ -2010,7 +2010,6 @@ app.get('/api/admin/sedes-directa/operaciones/:operation_key', async (req, res) 
     if (!operationKey) return res.status(400).json({ error: 'operation_key inválido', code: 'DIRECT_OPERATION_KEY_INVALID' });
     const user = await authUserFromBearer(req);
     if (!user?.id) return res.status(401).json({ error: 'No autorizado' });
-    await requireDirectSuperAdmin(pgPool, user.id);
     const row = await readDirectOperation(pgPool, { actorId: user.id, operationKey });
     if (!row) return res.status(404).json({ error: 'Operación no encontrada', code: 'DIRECT_OPERATION_NOT_FOUND' });
     return res.json({ operation_key: operationKey, state: row.state, payload_digest: row.payload_digest, receipt: row.receipt || null });
