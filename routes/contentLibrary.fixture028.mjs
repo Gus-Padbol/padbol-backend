@@ -12,6 +12,9 @@ const ROOT = path.join(__dirname, '..');
 const WS_SQL = path.join(ROOT, 'sql/migrations/20261026010000_content_workspace.sql');
 const LIB_SQL = path.join(ROOT, 'sql/candidates/20261124_content_library_catalog.sql');
 const PG_PORT = 55485;
+// Disposable local cluster only: env -i may omit USER, so pin a stable
+// synthetic local superuser for initdb and the Unix-socket pool.
+const PG_USER = 'postgres';
 const ACTOR = '11111111-1111-4111-8111-111111111111';
 const CLUB_A = '22222222-2222-4222-8222-222222222222';
 const CLUB_B = '33333333-3333-4333-8333-333333333333';
@@ -121,11 +124,11 @@ export async function startContentLibraryFixture() {
     f.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biblioteca-fixture028-'));
     f.dataDir = path.join(f.tempDir, 'data'); f.sockDir = path.join(f.tempDir, 'sock'); fs.mkdirSync(f.sockDir);
     const env = { ...process.env, LC_ALL: 'C', PATH: `/opt/homebrew/bin:${process.env.PATH}` };
-    execFileSync('initdb', ['-D', f.dataDir, '-A', 'trust', '-U', process.env.USER, '--no-locale', '-E', 'UTF8'], { stdio: 'ignore', env });
+    execFileSync('initdb', ['-D', f.dataDir, '-A', 'trust', '-U', PG_USER, '--no-locale', '-E', 'UTF8'], { stdio: 'ignore', env });
     execFileSync('pg_ctl', ['-D', f.dataDir, '-l', path.join(f.tempDir, 'pg.log'), '-o', `-F -h '' -k ${f.sockDir} -p ${PG_PORT}`, '-w', 'start'], { stdio: 'ignore', env });
     f.clusterRunning = true;
     f.clusterPid = Number(fs.readFileSync(path.join(f.dataDir, 'postmaster.pid'), 'utf8').split('\n')[0]);
-    f.pool = new pg.Pool({ host: f.sockDir, port: PG_PORT, user: process.env.USER, database: 'postgres', max: 6 });
+    f.pool = new pg.Pool({ host: f.sockDir, port: PG_PORT, user: PG_USER, database: 'postgres', max: 6 });
     await f.pool.query(DDL);
     await f.pool.query(fs.readFileSync(WS_SQL, 'utf8'));
     await f.pool.query(fs.readFileSync(LIB_SQL, 'utf8'));
