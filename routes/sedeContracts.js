@@ -2,6 +2,8 @@ import multer from 'multer';
 import { strictSuperAdminRole } from '../lib/fipaDocumentLibrary.js';
 import {
   CONTRACT_FILE_MAX_BYTES,
+  downloadSedeContract,
+  parseContractUUID,
   contractError,
   normalizePrivateStorageConfig,
   parseSedeId,
@@ -80,6 +82,23 @@ export function mountSedeContractsRoutes(app, {
   if (typeof strictRole !== 'function') throw new Error('strictRole requerido');
   // Falla al montar si alguien intenta reutilizar un bucket/columna ajenos.
   const storageConfig = normalizePrivateStorageConfig(privateStorage);
+
+  app.get('/api/sedes/:id/contratos/:contractId/archivo', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Content-Type-Options', 'nosniff');
+    try {
+      const user = await authUserFromBearer(req);
+      if (!user?.id) throw contractError(401, 'authentication_required', 'No autorizado');
+      if (!await strictRole(supabaseAdmin, user.id)) throw contractError(403, 'forbidden', 'Tu cuenta no tiene acceso al contrato.');
+      const sedeId = parseSedeId(req.params.id);
+      const contratoUUID = parseContractUUID(req.params.contractId, { required: true });
+      const file = await downloadSedeContract({ pgPool, privateStorage: storageConfig, actorId: user.id, sedeId, contratoUUID,
+        revalidateActor: async () => (await authUserFromBearer(req))?.id });
+      res.set('Content-Type', file.mime);
+      res.set('Content-Disposition', `attachment; filename="contrato-${contratoUUID}.${file.ext}"`);
+      return res.status(200).send(file.buffer);
+    } catch (error) { return sendContractError(res, error); }
+  });
 
   app.post('/api/sedes/:id/contrato', async (req, res) => {
     try {
