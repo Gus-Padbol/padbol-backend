@@ -313,6 +313,7 @@ import {
 import { revertirPadcoinsParticipacionPorReserva } from './src/padcoins/matchParticipationPadcoinsReversalService.js';
 import { isReservaNoShow } from './src/padcoins/padcoinsReservasService.js';
 import {createScoreboardReadRateLimit,createScoreboardVerifiedReadResolver} from './lib/scoreboardVerifiedReadRateLimit.js';
+import { createScoreboardLiveRouter } from './routes/scoreboardLive.js';
 import { mountScoreboardRoutes, initScoreboardSocket, createNationsPublicScoreboardPublisher } from './routes/scoreboard.js';
 import { generarScoreboardsForTorneo } from './src/scoreboard/scoreboardTorneoService.js';
 import { registerNationsScoreboardGenerationRoute } from './routes/nationsScoreboardGeneration.js';
@@ -1370,6 +1371,7 @@ const stopNationsGamesRecovery = startGamesFinalizationRecovery({pool:pgPool,db:
   if(['blocked','pending'].includes(result.status))console.warn('[nations-games-recovery]',{status:result.status,reason:result.reason,scoreboardId:result.scoreboardId});
 }});
 httpServer.once('close',stopNationsGamesRecovery);
+app.use('/api/scoreboard/partidos/:id/live', createScoreboardLiveRouter({pgPool,getAuthenticatedUser}));
 mountScoreboardRoutes(app, {
   supabaseAdmin,
   nationsGamesEnabled,
