@@ -80,9 +80,9 @@ AS $function$
 declare r public.ng_inscripciones; s public.ng_sesiones; used integer; old_position integer; canonical_id bigint;
 begin
   select * into s from public.ng_sesiones where id=p_session_id for update;
+  if not found then raise exception using errcode='P0002', message='NG_SESSION_NOT_FOUND'; end if;
   select canonical_sede_id into canonical_id from public.ng_solicitudes_sede where id=s.sede_id for share;
   if not found or canonical_id is null then raise exception 'NG_VENUE_UNLINKED'; end if;
-  if not found then raise exception using errcode='P0002', message='NG_SESSION_NOT_FOUND'; end if;
   select count(*) into used from public.ng_inscripciones where sesion_id=s.id and estado='confirmada';
   if s.cupo <= used then return null; end if;
   select * into r from public.ng_inscripciones where sesion_id=s.id and estado='en_espera' order by posicion_espera nulls last, created_at for update skip locked limit 1;
