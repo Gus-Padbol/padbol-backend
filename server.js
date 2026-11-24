@@ -78,6 +78,7 @@ import { mountWebPushRoutes } from './routes/webPush.js';
 import { createWebPushService, createVapidSender } from './lib/webPushNotifications.js';
 import { createAgendaBootstrap, AGENDA_FLAG } from './lib/crmAgendaBootstrap.js';
 import { createProfilePhotoGate } from './lib/profilePhotoGate.js';
+import { createContentDesignsBodyGate } from './lib/contentDesignsBodyGate.js';
 import { normalizeHandle } from './lib/publicAliasNamespace.js';
 import { isHandleTaken } from './lib/publicAliasNamespace.js';
 import { decodeProfilePhoto } from './lib/profilePhotoPayload.js';
@@ -402,6 +403,9 @@ app.use(createProfilePhotoGate({
   ipLimit: profilePhotoIpRateLimit,
   userLimit: profilePhotoUploadRateLimit,
 }));
+// Mis diseños: SOLO POST/PUT bajo /api/admin/content/designs. Parser 4 MB antes
+// del parser global de 100 KB; el resto de las rutas conserva el default.
+app.use(createContentDesignsBodyGate());
 app.use(express.json({
   verify: (req, _res, buf) => {
     if (req.originalUrl === '/api/webhooks/stripe' || req.url === '/api/webhooks/stripe' || req.path === CRM_EMAIL_PROVIDER_PATH) {
