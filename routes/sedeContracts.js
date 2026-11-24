@@ -13,16 +13,22 @@ import {
 // Montado en server.js recién después del freeze 052, junto a
 // mountSedesProfileRoutes y antes del fallback 404. Referencia del mount:
 //
-//   import { mountSedeContractsRoutes } from './routes/sedeContracts.js';
+//   import { createSedeContractPrivateStorage } from './lib/sedeContractPrivateStorage.js';
+//   const sedeContractPrivateStorage = createSedeContractPrivateStorage({
+//     supabaseAdmin,
+//     enabled: process.env.SEDE_CONTRATOS_PRIVATE_STORAGE_ENABLED === 'true',
+//   });
 //   mountSedeContractsRoutes(app, {
 //     supabaseAdmin,
+//     pgPool,
 //     authUserFromBearer,
-//     // Habilitar sólo después de aplicar el candidato SQL autorizado:
-//     // privateStorage: { bucket: 'contratos-sedes-privados', column: 'storage_path' },
+//     // null con el flag OFF (default): el archivo privado falla cerrado.
+//     privateStorage: sedeContractPrivateStorage,
 //   });
 //
-// Sin privateStorage el metadata-only funciona con las 7 columnas reales; un
-// archivo privado falla cerrado con 503 antes de escribir metadata.
+// El metadata-only funciona con las 7 columnas reales. La autorización y la
+// escritura son una única transacción corta con el rol persistido bajo FOR
+// SHARE; el upload de storage ocurre fuera de esa transacción.
 
 const contractUpload = multer({
   storage: multer.memoryStorage(),
@@ -63,6 +69,7 @@ function sendContractError(res, error) {
 
 export function mountSedeContractsRoutes(app, {
   supabaseAdmin,
+  pgPool,
   authUserFromBearer,
   privateStorage = null,
   strictRole = strictSuperAdminRole,
@@ -82,6 +89,13 @@ export function mountSedeContractsRoutes(app, {
       }
       if (!await strictRole(supabaseAdmin, user.id)) {
         return res.status(403).json({ ok: false, error: 'Solo super admin puede guardar contratos de sede', code: 'forbidden' });
+      }
+      if (!pgPool) {
+        return res.status(503).json({
+          ok: false,
+          error: 'La base transaccional del contrato no está disponible.',
+          code: 'contrato_db_unavailable',
+        });
       }
 
       try {
@@ -107,19 +121,20 @@ export function mountSedeContractsRoutes(app, {
         return res.status(404).json({ ok: false, error: 'Sede no encontrada', code: 'sede_no_encontrada' });
       }
 
+      // Verifica sólo que la sesión siga siendo el mismo actor; el rol vigente
+      // lo decide la transacción con FOR SHARE, incluso en replay.
       const revalidateActor = async () => {
         const current = await authUserFromBearer(req);
         if (!current?.id || current.id !== user.id) {
           throw contractError(401, 'authentication_required', 'La sesión cambió. Volvé a abrir el alta con tu cuenta actual.');
         }
-        if (!await strictRole(supabaseAdmin, current.id)) {
-          throw contractError(403, 'forbidden', 'El rol actual ya no permite guardar contratos.');
-        }
+        return current.id;
       };
 
       const result = await saveSedeContract({
-        supabaseAdmin,
+        pgPool,
         privateStorage: storageConfig,
+        actorId: user.id,
         sedeId,
         metadata,
         file,

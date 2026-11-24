@@ -138,6 +138,7 @@ import { createClasesRouter } from './routes/clases.js';
 import { registerModuloClasesRoutes } from './lib/moduloClases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
 import { mountSedeContractsRoutes } from './routes/sedeContracts.js';
+import { createSedeContractPrivateStorage } from './lib/sedeContractPrivateStorage.js';
 import { mountSurgeRoutes } from './routes/surge.js';
 import { mountCanchasRoutes } from './routes/canchas.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
@@ -1231,11 +1232,18 @@ mountSedesProfileRoutes(app, {
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
 });
+// Archivo privado de contratos: adaptador concreto con el SDK existente, pero
+// apagado por defecto. Sin SEDE_CONTRATOS_PRIVATE_STORAGE_ENABLED='true' el
+// mount recibe null y el archivo falla cerrado; el metadata-only sigue activo.
+const sedeContractPrivateStorage = createSedeContractPrivateStorage({
+  supabaseAdmin,
+  enabled: process.env.SEDE_CONTRATOS_PRIVATE_STORAGE_ENABLED === 'true',
+});
 mountSedeContractsRoutes(app, {
   supabaseAdmin,
+  pgPool,
   authUserFromBearer,
-  // El archivo privado queda fail-closed hasta aplicar el candidato SQL 053;
-  // luego habilitar: privateStorage: { bucket: 'contratos-sedes-privados', column: 'storage_path' }.
+  privateStorage: sedeContractPrivateStorage,
 });
 mountCanchasRoutes(app, {
   supabaseAdmin,
