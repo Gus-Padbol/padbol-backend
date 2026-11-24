@@ -111,6 +111,7 @@ import { createHubRouter } from './routes/hub.js';
 import { createContentAdminRouter } from './routes/contentAdmin.js';
 import { createContentWorkspaceRouter } from './routes/contentWorkspace.js';
 import { createContentLibraryRouter } from './routes/contentLibrary.js';
+import { createContentDesignsRouter } from './routes/contentDesigns.js';
 import { createNextGenerationLedgerRouter } from './routes/nextGenerationLedger.js';
 import { createContentPublicRouter } from './routes/contentPublic.js';
 import { createMembresiasRouter, mountMembresiasSedeRoutes } from './routes/membresias.js';
@@ -2948,6 +2949,7 @@ app.use('/api/hub', createHubRouter({ supabaseAdmin }));
 console.log('Hub router registered at /api/hub (GET /api/hub/imagenes)');
 app.use('/api/admin/content/workspace', createContentWorkspaceRouter({supabaseAdmin,pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser}));
 app.use('/api/admin/content/library', createContentLibraryRouter({supabaseAdmin,pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser,legacySuperAdminEmails:LEGACY_SUPER_ADMIN_EMAILS_API}));
+app.use('/api/admin/content/designs', createContentDesignsRouter({pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser}));
 app.use('/api/admin/next-generation/cuentas', createNextGenerationLedgerRouter({pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser,legacySuperAdminEmails:LEGACY_SUPER_ADMIN_EMAILS_API}));
 app.use('/api/admin/content', createContentAdminRouter({
   supabaseAdmin,
