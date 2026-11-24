@@ -110,6 +110,7 @@ import { decidirPayloadEquipos } from './lib/torneoEquiposRead.js';
 import { createHubRouter } from './routes/hub.js';
 import { createContentAdminRouter } from './routes/contentAdmin.js';
 import { createContentWorkspaceRouter } from './routes/contentWorkspace.js';
+import { createContentLibraryRouter } from './routes/contentLibrary.js';
 import { createContentPublicRouter } from './routes/contentPublic.js';
 import { createMembresiasRouter, mountMembresiasSedeRoutes } from './routes/membresias.js';
 import {
@@ -2945,6 +2946,7 @@ mountJugadorInvitacionesEquipoRoute(app, { supabaseAdmin, getAuthenticatedUser }
 app.use('/api/hub', createHubRouter({ supabaseAdmin }));
 console.log('Hub router registered at /api/hub (GET /api/hub/imagenes)');
 app.use('/api/admin/content/workspace', createContentWorkspaceRouter({supabaseAdmin,pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser}));
+app.use('/api/admin/content/library', createContentLibraryRouter({supabaseAdmin,pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser,legacySuperAdminEmails:LEGACY_SUPER_ADMIN_EMAILS_API}));
 app.use('/api/admin/content', createContentAdminRouter({
   supabaseAdmin,
   getAuthenticatedUser,
