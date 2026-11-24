@@ -10,9 +10,8 @@ import {
   validateContractMetadata,
 } from '../lib/sedeContracts.js';
 
-// Montaje preparado para que lead lo integre en server.js recién después de que
-// 052 congele server.js (este archivo NO modifica server.js). Debe montarse
-// antes del fallback 404:
+// Montado en server.js recién después del freeze 052, junto a
+// mountSedesProfileRoutes y antes del fallback 404. Referencia del mount:
 //
 //   import { mountSedeContractsRoutes } from './routes/sedeContracts.js';
 //   mountSedeContractsRoutes(app, {

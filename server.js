@@ -137,6 +137,7 @@ import { reservaHoraInicioFromRow, reservaHoraFinFromRow, reservaMatchesSede } f
 import { createClasesRouter } from './routes/clases.js';
 import { registerModuloClasesRoutes } from './lib/moduloClases.js';
 import { mountSedesProfileRoutes } from './routes/sedesProfile.js';
+import { mountSedeContractsRoutes } from './routes/sedeContracts.js';
 import { mountSurgeRoutes } from './routes/surge.js';
 import { mountCanchasRoutes } from './routes/canchas.js';
 import { mountRankingsLeaderboardRoutes } from './routes/rankingsLeaderboard.js';
@@ -1229,6 +1230,12 @@ mountSedesProfileRoutes(app, {
   getAuthenticatedUser,
   fetchUserRoleRowForAuthUser,
   legacySuperAdminEmails: LEGACY_SUPER_ADMIN_EMAILS_API,
+});
+mountSedeContractsRoutes(app, {
+  supabaseAdmin,
+  authUserFromBearer,
+  // El archivo privado queda fail-closed hasta aplicar el candidato SQL 053;
+  // luego habilitar: privateStorage: { bucket: 'contratos-sedes-privados', column: 'storage_path' }.
 });
 mountCanchasRoutes(app, {
   supabaseAdmin,
