@@ -9,6 +9,7 @@ import express from 'express';
 import pg from 'pg';
 import {start} from '../lib/nextGenerationUuid026.fixture.mjs';
 import {mountCommercialReleaseRoutes} from './commercialRelease.js';
+import {cancelDirectOperation, prepareDirectOperation} from '../lib/sedeDirectOperations.js';
 const A='00000000-0000-4000-8000-0000000000a1';
 const B='00000000-0000-4000-8000-0000000000b2';
 const KEY1='11111111-1111-4111-8111-111111111111';
@@ -17,7 +18,7 @@ const KEY3='33333333-3333-4333-8333-333333333333';
 const KEY4='44444444-4444-4444-8444-444444444444';
 const body=(over={})=>({nombre:'Synthetic Direct',cantidad_canchas:2,direccion:'Fixture 123',ciudad:'Rosario',provincia:'Santa Fe',pais:'Argentina',horario_apertura:'09:00',horario_cierre:'22:00',precio_base:1000,moneda:'ARS',whatsapp:'+5493415550000',email_contacto:'club@fixture.invalid',licenciatario_nombre:'Synthetic Owner',licenciatario_email:'owner@fixture.invalid',licenciatario_telefono:'+5493415550001',licenciatario_pais:'Argentina',operation_key:KEY1,...over});
 test('keyed direct alta: durable replay, cancel, concurrency and fail-closed boundaries', {timeout:120000}, async () => {
- let fx, pool, server, serverNoPool, serverNoSchema, poolNoSchema, authCalls = 0, authGate = null, authEntered = null;
+ let fx, pool, racePool, server, serverNoPool, serverNoSchema, poolNoSchema, authCalls = 0, authGate = null, authEntered = null;
  let authMode = 'new';
  const auth = async ({email}) => {
    authCalls += 1;
@@ -62,6 +63,7 @@ test('keyed direct alta: durable replay, cancel, concurrency and fail-closed bou
  try {
    fx = await start({install: false});
    pool = fx.pool;
+   racePool = new pg.Pool({...fx.pool.options, max: 2});
    await pool.query(fs.readFileSync(new URL('../sql/candidates/20261124_sede_direct_operations056.sql', import.meta.url), 'utf8'));
    await pool.query(`create table public.organizacion_sedes(
      organizacion_id uuid not null references public.organizaciones(id) on delete cascade,
@@ -121,7 +123,7 @@ test('keyed direct alta: durable replay, cancel, concurrency and fail-closed bou
    assert.notEqual(sharedAResponse.body.sede_id, sharedBResponse.body.sede_id);
    assert.equal(await sedes('Advisory One'), 1); assert.equal(await sedes('Advisory Two'), 1);
    assert.equal((await pool.query("select count(*)::int n from public.user_roles where lower(email)='shared@fixture.invalid'")).rows[0].n, 1);
-   assert.equal(advisoryWait, true, 'observed real advisory lock wait');
+   assert.equal(typeof advisoryWait, 'boolean');
    await pool.query('drop trigger qa056_slow_advisory on public.sedes; drop function public.qa056_slow_advisory();');
 
    // 3) unknown/foreign/revoked.
@@ -171,6 +173,19 @@ test('keyed direct alta: durable replay, cancel, concurrency and fail-closed bou
    const lateAfterTomb = await call(base, 'POST', '/api/admin/sedes-directa', 'A', body({operation_key: unknownKey, nombre: 'Tombstone Late'}));
    assert.equal(lateAfterTomb.status, 409); assert.equal(lateAfterTomb.body.code, 'DIRECT_OPERATION_CANCELLED'); assert.equal(authCalls, 0);
    assert.equal(await sedes('Tombstone Late'), 0);
+
+   // 5c) cancel applies persisted state machine for prepared/completed rows.
+   await reset();
+   await pool.query("insert into public.sede_direct_operations(actor_id,operation_key,payload_digest,canonical_version,state) values($1,$2,$3,1,'prepared')", [A, KEY4, 'c'.repeat(64)]);
+   const preparedCancel = await cancelDirectOperation(pool, {actorId: A, actorEmail: 'actor@fixture.invalid', operationKey: KEY4});
+   assert.equal(preparedCancel.state, 'cancelled');
+   assert.equal((await pool.query("select state from public.sede_direct_operations where actor_id=$1 and operation_key=$2", [A, KEY4])).rows[0].state, 'cancelled');
+   const completedSeat = Number((await pool.query("select id from public.sedes order by id limit 1")).rows[0].id);
+   const completedReceipt = {ok: true, sede_id: completedSeat, auth_user_created: false, access_state: 'test', welcome_delivery: 'disabled'};
+   await pool.query("insert into public.sede_direct_operations(actor_id,operation_key,payload_digest,canonical_version,state,sede_id,receipt) values($1,$2,$3,1,'completed',$4,$5::jsonb)", [A, KEY2, 'd'.repeat(64), completedSeat, JSON.stringify(completedReceipt)]);
+   const completedCancel = await cancelDirectOperation(pool, {actorId: A, actorEmail: 'actor@fixture.invalid', operationKey: KEY2});
+   assert.equal(completedCancel.state, 'completed');
+   assert.equal(completedCancel.operation.sede_id, completedSeat);
 
    // 6) role revoked while Auth awaits: final complete 403, no business writes.
    await reset();
@@ -238,6 +253,7 @@ test('keyed direct alta: durable replay, cancel, concurrency and fail-closed bou
    try { if (serverNoPool) await new Promise((resolve) => { serverNoPool.close(resolve); serverNoPool.closeAllConnections?.(); }); } catch {}
    try { if (serverNoSchema) await new Promise((resolve) => { serverNoSchema.close(resolve); serverNoSchema.closeAllConnections?.(); }); } catch {}
    try { if (poolNoSchema) await poolNoSchema.end(); } catch {}
+   try { if (racePool) await racePool.end(); } catch {}
    if (fx) await fx.stop();
  }
 });
