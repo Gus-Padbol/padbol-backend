@@ -30,7 +30,7 @@ await pool.query('ALTER TABLE sedes DROP COLUMN tipo_sede CASCADE');
 const migration=fs.readFileSync(path.join(root,'sql/migrations/20261016140000_tournament_generic_participants.sql'),'utf8');
 await pool.query(migration.slice(0,migration.indexOf('CREATE OR REPLACE FUNCTION public.participante_plantel_congelado'))+'COMMIT;');
 await pool.query(prereq.registration);
-await pool.query('CREATE TABLE scoreboard_linked_suspend_candidate(booking_id bigint,scoreboard_id bigint,open_id bigint);CREATE TABLE scoreboard_partidos(id bigint,estado text,reserva_id bigint,partido_abierto_id bigint);CREATE TABLE partidos_abiertos(id bigint,reserva_id bigint)');
+await pool.query('CREATE TABLE scoreboard_linked_suspend_candidate(booking_id bigint,scoreboard_id uuid,open_id bigint);CREATE TABLE scoreboard_partidos(id uuid,estado text,reserva_id bigint,partido_abierto_id bigint);CREATE TABLE partidos_abiertos(id bigint,reserva_id bigint)');
 await pool.query(`INSERT INTO sedes(id,nombre,pais,ciudad,moneda,timezone) VALUES(7,'Fixture venue','AR','Fixture city','ARS','America/Argentina/Buenos_Aires'),(8,'Other venue','AR','Fixture city','ARS','America/Argentina/Buenos_Aires');
 INSERT INTO canchas VALUES(11,7,1),(12,8,1),(13,7,2),(14,7,3);
 INSERT INTO profesores VALUES(1,true,true,'Synthetic','Instructor',7,ARRAY['padbol'],'aprobado');

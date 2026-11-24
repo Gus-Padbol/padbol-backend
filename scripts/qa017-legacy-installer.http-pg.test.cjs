@@ -39,6 +39,9 @@ test('legacy fixture exact QA017 install preserves rows, own GET/cancel/retry, o
  const blocked=await call(90,'POST','/api/admin/clases/2/ocurrencias',slot);assert.equal(blocked.status,409);assert.equal(blocked.body.code,'CLASE_HORARIO_LEGACY_REQUIERE_REVISION');assert.match(blocked.body.error,/inscripciones anteriores/);
  const noQr=await call(2,'POST',`/api/clases/inscripcion/${legacy.id}/acceso`,{});assert.equal(noQr.status,409);assert.equal(noQr.body.qr_code,undefined);
  await assert.rejects(p.query('UPDATE clases SET duracion_minutos=90 WHERE id=2'),/CLASE_LEGACY_FOOTPRINT_BLOQUEADO/);
+ const classBefore=(await rows(p,'clases')).find(c=>c.id===2);
+ const patch=await call(90,'PATCH','/api/admin/clases/2',{duracion_minutos:90});assert.equal(patch.status,409);assert.equal(patch.body.code,'CLASE_LEGACY_FOOTPRINT_BLOQUEADO');assert.match(patch.body.error,/inscripciones anteriores/);assert.deepEqual((await rows(p,'clases')).find(c=>c.id===2),classBefore);assert.equal(classBefore.duracion_minutos,60);
+ console.log('LEGACY_FOOTPRINT_HTTP_409_READABLE_AND_CLASS_UNCHANGED');
  assert.equal((await call(90,'POST','/api/admin/clases/1/ocurrencias',slot)).status,201);
  const a=await call(1,'POST','/api/clases/inscribir',{clase_id:1,...slot});assert.equal(a.status,201);
  const q=await call(1,'POST',`/api/clases/inscripcion/${a.body.id}/acceso`,{});assert.equal(q.status,200);
@@ -64,3 +67,22 @@ test('late failure after eleven bodies rolls back all new objects and original r
 });
 
 test('missing unchanged overlap dependency aborts before bodies and preserves baseline',{timeout:30000},async()=>{await assert.rejects(start({missingGuardDependency:true}),/QA017_OVERLAP_GUARD_MISSING/);});
+
+test('exact guard recognizes UUID linked scoreboard only in suspended state',{timeout:30000},async()=>{
+ let f;try{
+  f=await start();const p=f.pool,scoreboard='10000000-0000-4000-8000-000000000017';
+  const date=(await p.query('SELECT ($1::date+2)::text d',[f.context.fecha])).rows[0].d;
+  const insert="INSERT INTO reservas(sede,sede_id,fecha,hora,hora_inicio,cancha,cancha_id,nombre,email,telefono,whatsapp,nivel,precio,estado,duracion_minutos,user_id,tipo) VALUES('Fixture venue',7,$1,'18:00','18:00',1,11,'Synthetic guard','guard@example.invalid','+541155550001','+541155550001','Test',0,$2,60,$3,'cancha') RETURNING id";
+  const booking=(await p.query(insert,[date,'suspendida',f.user(1).id])).rows[0].id;
+  await assert.rejects(p.query(insert,[date,'confirmada',f.user(2).id]),e=>e.code==='23P01');
+  await p.query("INSERT INTO scoreboard_partidos(id,estado,reserva_id) VALUES($1::uuid,'activo',$2)",[scoreboard,booking]);
+  await p.query('INSERT INTO scoreboard_linked_suspend_candidate(booking_id,scoreboard_id) VALUES($1,$2::uuid)',[booking,scoreboard]);
+  const types=(await p.query("SELECT pg_typeof(s.id)::text scoreboard_type,pg_typeof(l.scoreboard_id)::text link_type FROM scoreboard_partidos s JOIN scoreboard_linked_suspend_candidate l ON l.scoreboard_id=s.id")).rows[0];
+  assert.deepEqual(types,{scoreboard_type:'uuid',link_type:'uuid'});
+  await assert.rejects(p.query(insert,[date,'confirmada',f.user(2).id]),e=>e.code==='23P01');
+  await p.query("UPDATE scoreboard_partidos SET estado='suspendido' WHERE id=$1::uuid",[scoreboard]);
+  const allowed=await p.query(insert,[date,'confirmada',f.user(2).id]);assert.ok(allowed.rows[0].id);
+  assert.equal((await p.query('SELECT estado FROM reservas WHERE id=$1',[booking])).rows[0].estado,'suspendida');
+  console.log('UUID_GUARD_LINK_STATE_REQUIRED_AND_ORIGINAL_BOOKING_PRESERVED');
+ }finally{await f?.stop();}
+});
