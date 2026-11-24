@@ -79,6 +79,7 @@ import { createWebPushService, createVapidSender } from './lib/webPushNotificati
 import { createAgendaBootstrap, AGENDA_FLAG } from './lib/crmAgendaBootstrap.js';
 import { createProfilePhotoGate } from './lib/profilePhotoGate.js';
 import { createContentDesignsBodyGate } from './lib/contentDesignsBodyGate.js';
+import {createClubCustomerImportBodyGate,mountClubCustomerImport} from './lib/clubCustomerImportIntegration.js';
 import { normalizeHandle } from './lib/publicAliasNamespace.js';
 import { isHandleTaken } from './lib/publicAliasNamespace.js';
 import { decodeProfilePhoto } from './lib/profilePhotoPayload.js';
@@ -408,6 +409,7 @@ app.use(createProfilePhotoGate({
 }));
 // Mis diseños: SOLO POST/PUT bajo /api/admin/content/designs. Parser 4 MB antes
 // del parser global de 100 KB; el resto de las rutas conserva el default.
+app.use(createClubCustomerImportBodyGate());
 app.use(createContentDesignsBodyGate());
 app.use(express.json({
   verify: (req, _res, buf) => {
@@ -417,6 +419,7 @@ app.use(express.json({
   },
 }));
 
+mountClubCustomerImport(app,{pool:pgPool,getAuthenticatedUser,enabled:process.env.CLUB_CUSTOMER_IMPORT_ENABLED==='true'});
 app.use(createScoreboardReadRateLimit({resolve:createScoreboardVerifiedReadResolver({getPool:()=>pgPool,getAuthenticatedUser,fetchUserRoleRowForAuthUser})}));
 // Legacy compatibility URLs must be registered before the generic
 // `/api/torneos/:id` route, otherwise Express treats `resumen-stats` as an id.
