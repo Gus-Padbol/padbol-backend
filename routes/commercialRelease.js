@@ -19,6 +19,11 @@ import twilio from 'twilio';
 import { strictSuperAdminRole } from '../lib/fipaDocumentLibrary.js';
 import { registerAdminOrganizationsRoutes } from '../lib/adminOrganizations.js';
 import { registerSedeIncentiveRoutes } from '../lib/sedeIncentivesV4.js';
+import {
+  commitDirectSeat, cancelDirectOperation, directOperationDigest, isDirectDbUnavailable,
+  normalizeOperationKey, prepareDirectOperation, preflightDirectRoleTarget, readDirectOperation,
+  requireDirectSuperAdmin,
+} from '../lib/sedeDirectOperations.js';
 
 // Ported from the validated local release. Mounted into the existing server; no second runtime.
 export function mountCommercialReleaseRoutes(app, { supabaseAdmin, runtime, authUserFromBearer, assertSuperAdminReq, adminListScopeFromRequest, sedesPermitidasPorScope, pgPool = null, sedeApprovalRecoveryEnabled = false }) {
@@ -1874,23 +1879,8 @@ app.post('/api/admin/sedes-pendientes', async (req, res) => {
   }
 });
 
-app.post('/api/admin/sedes-directa', async (req, res) => {
-  try {
-    const user = await authUserFromBearer(req);
-    if (!user?.id || !user?.email) return res.status(401).json({ error: 'No autorizado' });
-    if (!await strictSuperAdminRole(supabase, user.id)) {
-      return res.status(403).json({ error: 'Solo super admin puede crear sede directa' });
-    }
-    const b = req.body || {};
-    const nombre = String(b.nombre || '').trim();
-    if (!nombre) return res.status(400).json({ error: 'Nombre del club obligatorio' });
-    const licEmail = normalizarEmailLicenciatario(b.licenciatario_email);
-    if (!licEmail) return res.status(400).json({ error: 'Email del licenciatario obligatorio' });
-    if (!emailLicenciatarioPlausible(licEmail)) {
-      return res.status(400).json({ error: 'Email del licenciatario inválido' });
-    }
-
-    const sedePayload = {
+function buildDirectSedePayload(b, nombre) {
+  return {
       nombre,
       direccion: b.direccion || null,
       ciudad: b.ciudad || null,
@@ -1920,7 +1910,154 @@ app.post('/api/admin/sedes-directa', async (req, res) => {
       licencia_activa: true,
       franjas_horarias: [],
       fotos_destacadas: [],
-    };
+  };
+}
+
+function directFailure(res, error) {
+  if (isDirectDbUnavailable(error)) {
+    return res.status(503).json({ error: 'La operación durable no está disponible.', code: 'DIRECT_DB_UNAVAILABLE', retry: true });
+  }
+  const status = Number(error?.status || 0);
+  if (status >= 400 && status < 600) {
+    return res.status(status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
+  console.error('❌ Alta directa durable:', error?.code || error?.name || 'error');
+  return res.status(500).json({ error: 'No se pudo completar el alta directa.', code: 'DIRECT_OPERATION_FAILED', retry: false });
+}
+
+async function handleKeyedDirectSede(req, res, operationKey) {
+  try {
+    const user = await authUserFromBearer(req);
+    if (!user?.id || !user?.email) return res.status(401).json({ error: 'No autorizado' });
+    const b = req.body || {};
+    const nombre = String(b.nombre || '').trim();
+    if (!nombre) return res.status(400).json({ error: 'Nombre del club obligatorio' });
+    const licEmail = normalizarEmailLicenciatario(b.licenciatario_email);
+    if (!licEmail) return res.status(400).json({ error: 'Email del licenciatario obligatorio' });
+    if (!emailLicenciatarioPlausible(licEmail)) return res.status(400).json({ error: 'Email del licenciatario inválido' });
+    const sedePayload = buildDirectSedePayload(b, nombre);
+    const sedeInsert = buildSedeReleaseInsert(sedePayload);
+    const assignment = validarAsignacionRolLicencia(b);
+    const organizacionId = b.organizacion_id ? String(b.organizacion_id).trim().toLowerCase() : null;
+    const notify = b.licenciatario_telefono || b.whatsapp || null;
+    const payloadDigest = directOperationDigest({ sede: sedeInsert, licEmail,
+      licNombre: String(b.licenciatario_nombre || '').trim() || null, assignment, organizacionId, notify });
+
+    let prepared;
+    try {
+      prepared = await prepareDirectOperation(pgPool, { actorId: user.id, actorEmail: user.email, operationKey, payloadDigest });
+    } catch (error) { return directFailure(res, error); }
+    if (prepared.state === 'completed') {
+      return res.json({ ...prepared.operation.receipt, operation_key: operationKey, state: 'completed', replayed: true });
+    }
+    try {
+      await preflightDirectRoleTarget(pgPool, { actorId: user.id, actorEmail: user.email, licEmail });
+    } catch (error) { return directFailure(res, error); }
+
+    let authProvision;
+    try {
+      authProvision = await ensureLicenciatarioAuthUserAndWelcomeEmail(licEmail, {
+        nombre: String(b.licenciatario_nombre || '').trim() || null,
+        pais: String(b.pais || '').trim() || null,
+        ciudad: String(b.ciudad || '').trim() || null,
+      });
+    } catch (authErr) {
+      console.warn('⚠️ Alta directa durable: provisión auth no disponible:', authErr?.code || authErr?.status || 'provision_failed');
+      return rechazarAccesoNoDisponible(res);
+    }
+
+    let committed;
+    try {
+      committed = await commitDirectSeat(pgPool, {
+        actorId: user.id, actorEmail: user.email, operationKey, payloadDigest, sedeInsert, licEmail,
+        licNombre: String(b.licenciatario_nombre || '').trim() || null, assignment, organizacionId,
+        authReceipt: { auth_user_created: Boolean(authProvision?.created),
+          access_state: authProvision?.access_state ?? null, welcome_delivery: authProvision?.welcome_delivery ?? null },
+      });
+    } catch (error) { return directFailure(res, error); }
+    if (committed.replayed) {
+      return res.json({ ...committed.receipt, operation_key: operationKey, state: 'completed', replayed: true });
+    }
+
+    let welcomeDelivery = committed.receipt.welcome_delivery ?? null;
+    const waLic = b.licenciatario_telefono || b.whatsapp;
+    if (waLic) {
+      const msg =
+        `🎉 Bienvenido a PADBOL Match. Tu sede "${nombre}" está activa.\n` +
+        `Ingresa al panel: padbolmatch.com/admin\n` +
+        `${authProvision?.created
+          ? (authProvision.access_state === 'recovery_email_requested'
+              ? 'Tu cuenta está creada. Pedimos el email de recuperación; si no llega, recuperá el acceso desde el inicio de sesión.'
+              : 'Tu cuenta está creada. Para configurar tu acceso, usá la recuperación desde el inicio de sesión.')
+          : 'Ingresa con tu cuenta. Si no puedes entrar, recupera el acceso desde el inicio de sesión.'}`;
+      try { await sendTwilioWhatsAppBodyToRaw(waLic, msg); }
+      catch (notifyErr) {
+        welcomeDelivery = 'not_verified_seat_completed';
+        console.warn('⚠️ Alta directa durable: aviso post-commit no verificado:', notifyErr?.code || 'notify_failed');
+      }
+    }
+    return res.json({ ...committed.receipt, welcome_delivery: welcomeDelivery,
+      operation_key: operationKey, state: 'completed', replayed: false });
+  } catch (error) {
+    return directFailure(res, error);
+  }
+}
+
+app.get('/api/admin/sedes-directa/operaciones/:operation_key', async (req, res) => {
+  try {
+    if (!pgPool) return res.status(503).json({ error: 'La operación durable no está disponible.', code: 'DIRECT_DB_UNAVAILABLE', retry: true });
+    const operationKey = normalizeOperationKey(req.params.operation_key);
+    if (!operationKey) return res.status(400).json({ error: 'operation_key inválido', code: 'DIRECT_OPERATION_KEY_INVALID' });
+    const user = await authUserFromBearer(req);
+    if (!user?.id) return res.status(401).json({ error: 'No autorizado' });
+    await requireDirectSuperAdmin(pgPool, user.id);
+    const row = await readDirectOperation(pgPool, { actorId: user.id, operationKey });
+    if (!row) return res.status(404).json({ error: 'Operación no encontrada', code: 'DIRECT_OPERATION_NOT_FOUND' });
+    return res.json({ operation_key: operationKey, state: row.state, payload_digest: row.payload_digest, receipt: row.receipt || null });
+  } catch (error) { return directFailure(res, error); }
+});
+
+app.post('/api/admin/sedes-directa/operaciones/:operation_key/cancelar', async (req, res) => {
+  try {
+    if (!pgPool) return res.status(503).json({ error: 'La operación durable no está disponible.', code: 'DIRECT_DB_UNAVAILABLE', retry: true });
+    const operationKey = normalizeOperationKey(req.params.operation_key);
+    if (!operationKey) return res.status(400).json({ error: 'operation_key inválido', code: 'DIRECT_OPERATION_KEY_INVALID' });
+    const user = await authUserFromBearer(req);
+    if (!user?.id) return res.status(401).json({ error: 'No autorizado' });
+    const cancelled = await cancelDirectOperation(pgPool, { actorId: user.id, actorEmail: user.email, operationKey });
+    if (!cancelled) return res.status(404).json({ error: 'Operación no encontrada', code: 'DIRECT_OPERATION_NOT_FOUND' });
+    if (cancelled.state === 'completed') {
+      return res.json({ ok: true, operation_key: operationKey, state: 'completed', replayed: true,
+        sede_id: cancelled.operation.sede_id, receipt: cancelled.operation.receipt });
+    }
+    return res.json({ ok: true, operation_key: operationKey, state: 'cancelled', replayed: Boolean(cancelled.replayed) });
+  } catch (error) { return directFailure(res, error); }
+});
+
+app.post('/api/admin/sedes-directa', async (req, res) => {
+  try {
+    const rawOperationKey = req.body?.operation_key;
+    if (rawOperationKey !== undefined && rawOperationKey !== null && String(rawOperationKey).trim() !== '') {
+      const operationKey = normalizeOperationKey(rawOperationKey);
+      if (!operationKey) return res.status(400).json({ error: 'operation_key inválido', code: 'DIRECT_OPERATION_KEY_INVALID' });
+      if (!pgPool) return res.status(503).json({ error: 'La operación durable no está disponible.', code: 'DIRECT_DB_UNAVAILABLE', retry: true });
+      return await handleKeyedDirectSede(req, res, operationKey);
+    }
+    const user = await authUserFromBearer(req);
+    if (!user?.id || !user?.email) return res.status(401).json({ error: 'No autorizado' });
+    if (!await strictSuperAdminRole(supabase, user.id)) {
+      return res.status(403).json({ error: 'Solo super admin puede crear sede directa' });
+    }
+    const b = req.body || {};
+    const nombre = String(b.nombre || '').trim();
+    if (!nombre) return res.status(400).json({ error: 'Nombre del club obligatorio' });
+    const licEmail = normalizarEmailLicenciatario(b.licenciatario_email);
+    if (!licEmail) return res.status(400).json({ error: 'Email del licenciatario obligatorio' });
+    if (!emailLicenciatarioPlausible(licEmail)) {
+      return res.status(400).json({ error: 'Email del licenciatario inválido' });
+    }
+
+    const sedePayload = buildDirectSedePayload(b, nombre);
     // Deterministic checks that must never reach Auth: seat contract, email and
     // role geography are validated before provisioning or persisting anything.
     const sedeInsert = buildSedeReleaseInsert(sedePayload);
