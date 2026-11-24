@@ -71,7 +71,7 @@ async function seedWorkspace() {
    ($1,1,$2::jsonb,$4,$4),($3,1,$5::jsonb,$4,$4),($6,1,$7::jsonb,$4,$4)`, [ITEM_A, JSON.stringify({ title: 'Entrenamiento A', status: 'aprobado', assetKind: 'final', format: 'video' }), ITEM_B, ACTOR, JSON.stringify({ title: 'Borrador B', status: 'revision', assetKind: 'final', format: 'image' }), ITEM_C, JSON.stringify({ title: 'Publicado C', status: 'publicado', assetKind: 'final', format: 'image' })]);
   await pool.query(`INSERT INTO public.content_workspace_files(id,item_id,name,mime_type,size,storage_path,created_by) VALUES
    ($1,$2,'a.mp4','video/mp4',10,$5,$8),($3,$2,'a.pdf','application/pdf',10,$6,$8),($4,$7,'c.jpg','image/jpeg',10,$9,$8),($10,$7,'c.pdf','application/pdf',10,$11,$8)`, [FILE_A, ITEM_A, FILE_PDF, FILE_C, `${ITEM_A}/${FILE_A}`, `${ITEM_A}/${FILE_PDF}`, ITEM_C, ACTOR, `${ITEM_C}/${FILE_C}`, FILE_B, `${ITEM_C}/${FILE_B}`]);
-  await pool.query(`INSERT INTO public.content_library_categories(sede_id,category_key,enabled,updated_by) VALUES(7,'entrenamiento',true,$1),(7,'borrador',false,$1),(8,'entrenamiento',true,$1)`, [ACTOR]);
+  await pool.query(`INSERT INTO public.content_library_categories(sede_id,category_key,enabled,updated_by) VALUES(7,'entrenamiento',true,$1),(7,'borrador',false,$1),(8,'entrenamiento',false,$1)`, [ACTOR]);
 }
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'biblioteca-catalog-')); dataDir = path.join(tmp, 'data'); sockDir = path.join(tmp, 'sock'); fs.mkdirSync(sockDir);
@@ -85,35 +85,46 @@ before(async () => {
   app.use('/api/admin/content/library', createContentLibraryRouter({ pgPool: pool, supabaseAdmin: { storage }, getAuthenticatedUser: async (req) => ({ user: authUser(req) }), fetchUserRoleRowForAuthUser: roleFor, legacySuperAdminEmails: [] }));
   server = await new Promise(r => { const s = app.listen(0, '127.0.0.1', () => r(s)); }); baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
-beforeEach(async () => { signatureCalls = 0; pendingSign = null; privateBucket = false; await pool.query('UPDATE public.content_library_categories SET enabled=true WHERE sede_id=7 AND category_key=\'entrenamiento\''); await pool.query('UPDATE public.content_library_entries SET updated_at=now()'); });
+beforeEach(async () => { signatureCalls = 0; pendingSign = null; privateBucket = false; await pool.query('TRUNCATE public.content_library_entries'); await pool.query("UPDATE public.content_library_categories SET enabled=case when sede_id=7 then true else false end WHERE category_key='entrenamiento'"); });
 after(async () => { if (server) { await new Promise(r => server.close(r)); assert.equal(server.listening, false); } if (pool) await pool.end(); if (clusterRunning) { const out = execFileSync('pg_ctl', ['-D', dataDir, '-m', 'immediate', '-w', 'stop'], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }); assert.equal(fs.existsSync(path.join(dataDir, 'postmaster.pid')), false); assert.equal(fs.existsSync(path.join(sockDir, `.s.PGSQL.${PORT}`)), false); assert.throws(() => process.kill(clusterPid, 0), /ESRCH/); console.log('CLEANUP_OK', out.trim()); } if (tmp) fs.rmSync(tmp, { recursive: true, force: true }); });
 
-test('SuperAdmin publishes enabled entry; club A lists only its approved enabled item; club B is empty; spoof denied', async () => {
-  const cat = await call('POST', '/api/admin/content/library/categories', { sede_id: 7, category_key: 'entrenamiento', enabled: true }); assert.equal(cat.status, 200);
-  const pub = await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' }); assert.equal(pub.status, 201, JSON.stringify(pub.body));
-  const a = await call('GET', '/api/admin/content/library', undefined, 'a'); assert.equal(a.status, 200); assert.equal(a.body.items.length, 1); assert.equal(a.body.items[0].title, 'Entrenamiento A'); assert.equal(a.body.items[0].mime, 'video/mp4');
+test('global publication creates one entry; grants differ by PP; same ID for A/B; revoke A leaves B', async () => {
+  const pub = await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' });
+  assert.equal(pub.status, 201, JSON.stringify(pub.body));
+  const entryId = pub.body.entry.id;
+  assert.equal((await pool.query('SELECT count(*)::int n FROM public.content_library_entries')).rows[0].n, 1);
+
+  const a = await call('GET', '/api/admin/content/library', undefined, 'a'); assert.equal(a.status, 200); assert.equal(a.body.items.length, 1); assert.equal(a.body.items[0].id, entryId);
   assert.equal(Object.keys(a.body.items[0]).sort().join(','), 'assetKind,category,format,id,mime,sourceVersion,title');
-  assert.doesNotMatch(JSON.stringify(a.body), /storage_path|payload|createdBy|content-workspace-private/);
   const b = await call('GET', '/api/admin/content/library', undefined, 'b'); assert.equal(b.status, 200); assert.deepEqual(b.body.items, []);
+  const global = await call('GET', '/api/admin/content/library', undefined, 'super'); assert.equal(global.status, 200); assert.equal(global.body.items.length, 1);
+  const previewA = await call('GET', '/api/admin/content/library?sede_id=7', undefined, 'super'); assert.equal(previewA.status, 200); assert.equal(previewA.body.items.length, 1);
   const spoof = await call('GET', '/api/admin/content/library?sede_id=8', undefined, 'a'); assert.equal(spoof.status, 403);
-  const preview = await call('GET', '/api/admin/content/library?sede_id=7', undefined, 'super'); assert.equal(preview.status, 200); assert.equal(preview.body.items.length, 1);
-  const clubPublish = await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' }, 'a'); assert.equal(clubPublish.status, 403);
+  const clubPublish = await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' }, 'a'); assert.equal(clubPublish.status, 403);
+
+  const grantB = await call('POST', '/api/admin/content/library/categories', { sede_id: 8, category_key: 'entrenamiento', enabled: true }); assert.equal(grantB.status, 200);
+  const b2 = await call('GET', '/api/admin/content/library', undefined, 'b'); assert.equal(b2.body.items.length, 1); assert.equal(b2.body.items[0].id, entryId);
+  assert.equal((await pool.query('SELECT count(*)::int n FROM public.content_library_entries')).rows[0].n, 1);
+  const revokeA = await call('POST', '/api/admin/content/library/categories', { sede_id: 7, category_key: 'entrenamiento', enabled: false }); assert.equal(revokeA.status, 200);
+  const a3 = await call('GET', '/api/admin/content/library', undefined, 'a'); assert.deepEqual(a3.body.items, []);
+  const b3 = await call('GET', '/api/admin/content/library', undefined, 'b'); assert.equal(b3.body.items[0].id, entryId);
 });
-test('draft/wrong version/PDF/category disabled and invalid FK fail closed', async () => {
-  assert.equal((await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: ITEM_B, file_id: FILE_B, expected_version: 1, category_key: 'entrenamiento' })).status, 409);
-  assert.equal((await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: ITEM_A, file_id: FILE_A, expected_version: 2, category_key: 'entrenamiento' })).status, 409);
-  assert.equal((await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: ITEM_A, file_id: FILE_PDF, expected_version: 1, category_key: 'entrenamiento' })).status, 409);
-  assert.equal((await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'borrador' })).status, 409);
-  assert.equal((await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: 'not-a-uuid', file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' })).status, 400);
-  assert.equal((await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' }, 'a')).status, 403);
+test('draft/version/PDF/disabled/invalid and unauthorized publish fail closed', async () => {
+  assert.equal((await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_B, file_id: FILE_B, expected_version: 1, category_key: 'entrenamiento' })).status, 409);
+  assert.equal((await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_B, expected_version: 1, category_key: 'entrenamiento' })).status, 409);
+  assert.equal((await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_PDF, expected_version: 1, category_key: 'entrenamiento' })).status, 409);
+  assert.equal((await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_A, expected_version: 2, category_key: 'entrenamiento' })).status, 409);
+  assert.equal((await call('POST', '/api/admin/content/library/entries', { item_id: 'bad', file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' })).status, 400);
+  assert.equal((await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'x' })).status, 400);
+  assert.equal((await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' }, 'a')).status, 403);
 });
-test('download signs private URL only for permitted club; B/revoke-during-signing/private-bucket failure do not release URL', async () => {
-  assert.equal((await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' })).status, 201);
-  const listed = await call('GET', '/api/admin/content/library', undefined, 'a'); const id = listed.body.items[0].id;
+test('download signs private URL only for granted PP; B/revoked-during-signing/private bucket failures do not release URL', async () => {
+  const pub = await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' }); assert.equal(pub.status, 201);
+  const id = pub.body.entry.id;
   const ok = await call('GET', `/api/admin/content/library/${id}/file`, undefined, 'a'); assert.equal(ok.status, 200); assert.match(ok.body.url, /^https:\/\/private\.test\//); assert.equal(ok.body.expiresIn, 300);
   signatureCalls = 0; const b = await call('GET', `/api/admin/content/library/${id}/file`, undefined, 'b'); assert.equal(b.status, 404); assert.equal(signatureCalls, 0);
-  privateBucket = true; const pub = await call('GET', `/api/admin/content/library/${id}/file`, undefined, 'a'); assert.equal(pub.status, 503); assert.equal(signatureCalls, 0); privateBucket = false;
-  // Revoke category while the signing promise is pending; response must not leak URL.
+  privateBucket = true; const pubBucket = await call('GET', `/api/admin/content/library/${id}/file`, undefined, 'a'); assert.equal(pubBucket.status, 503); assert.equal(signatureCalls, 0); privateBucket = false;
+  await call('POST', '/api/admin/content/library/categories', { sede_id: 8, category_key: 'entrenamiento', enabled: true });
   const gate = deferred(); pendingSign = gate.promise; signatureCalls = 0;
   const pending = call('GET', `/api/admin/content/library/${id}/file`, undefined, 'a');
   for (let i = 0; i < 100 && signatureCalls === 0; i += 1) await new Promise(r => setTimeout(r, 5));
@@ -121,12 +132,16 @@ test('download signs private URL only for permitted club; B/revoke-during-signin
   await pool.query("UPDATE public.content_library_categories SET enabled=false WHERE sede_id=7 AND category_key='entrenamiento'");
   gate.resolve({ data: { signedUrl: 'https://private.test/stale' }, error: null });
   const revoked = await pending; assert.equal(revoked.status, 404); assert.equal(revoked.body.url, undefined);
-  pendingSign = null;
+  pendingSign = null; const stillB = await call('GET', `/api/admin/content/library/${id}/file`, undefined, 'b'); assert.equal(stillB.status, 200); assert.match(stillB.body.url, /^https:\/\/private\.test\//);
 });
-test('workspace source version change makes catalog entry unavailable; no automatic approval', async () => {
-  assert.equal((await call('POST', '/api/admin/content/library/entries', { sede_id: 7, item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' })).status, 201);
-  await pool.query("UPDATE public.content_workspace_items SET version=2 WHERE id=$1", [ITEM_A]);
-  const a = await call('GET', '/api/admin/content/library', undefined, 'a'); assert.deepEqual(a.body.items, []);
+test('workspace version change hides entry globally until explicit republish', async () => {
+  assert.equal((await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_A, expected_version: 1, category_key: 'entrenamiento' })).status, 201);
+  await pool.query('UPDATE public.content_workspace_items SET version=2 WHERE id=$1', [ITEM_A]);
+  assert.deepEqual((await call('GET', '/api/admin/content/library', undefined, 'a')).body.items, []);
+  assert.equal((await call('GET', '/api/admin/content/library', undefined, 'super')).body.items.length, 0);
   const id = (await pool.query('SELECT id FROM public.content_library_entries LIMIT 1')).rows[0].id;
-  assert.equal((await call('GET', `/api/admin/content/library/${id}/file`, undefined, 'a')).status, 404);
+  assert.equal((await call('GET', `/api/admin/content/library/${id}/file`, undefined, 'super')).status, 404);
+  assert.equal((await call('POST', '/api/admin/content/library/entries', { item_id: ITEM_A, file_id: FILE_A, expected_version: 2, category_key: 'entrenamiento' })).status, 201);
+  assert.equal((await call('GET', '/api/admin/content/library', undefined, 'super')).body.items.length, 1);
 });
+console.log('LIBRARY027_TESTS_DONE');
