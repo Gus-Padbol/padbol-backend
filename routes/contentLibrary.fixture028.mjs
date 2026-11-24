@@ -24,6 +24,9 @@ const FILE_A = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const FILE_B = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const FILE_C = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 const FILE_PDF = '99999999-9999-4999-8999-999999999999';
+const ITEM_IMAGE = 'abababab-abab-4bab-8bab-abababababab';
+const FILE_IMAGE = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
 
 const DDL = `
 CREATE TABLE public.sedes(id bigint PRIMARY KEY,nombre text);
@@ -44,7 +47,7 @@ END $r$;`;
 const TOKENS = Object.freeze({ super: 'super', a: 'a', b: 'b', editor: 'editor', coordinator: 'coordinator' });
 const KNOWN = Object.freeze({ actorId: ACTOR, clubAId: CLUB_A, clubBId: CLUB_B, editorId: EDITOR, coordinatorId: COORDINATOR,
   sedeA: 7, sedeB: 8, itemA: ITEM_A, itemB: ITEM_B, itemC: ITEM_C, fileA: FILE_A, fileB: FILE_B, fileC: FILE_C, filePdf: FILE_PDF,
-  itemVersion: 1, category: 'entrenamiento', tokens: TOKENS });
+  itemVersion: 1, category: 'entrenamiento', itemImage: ITEM_IMAGE, fileImage: FILE_IMAGE, pngBytes: PNG, tokens: TOKENS });
 
 function userFor(req) {
   const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
@@ -69,9 +72,16 @@ function storageBoundary() {
     privateBucket: false,
     signatureCalls: 0,
     pendingSign: null,
+    downloadCalls: 0,
+    downloadBlob: new Blob([PNG], { type: 'image/png' }),
+    downloadError: null,
+    pendingDownload: null,
     async getBucket(name) { return name === 'content-workspace-private' ? { data: { id: name, public: storage.privateBucket }, error: null } : { data: null, error: { message: 'not found' } }; },
     from() {
-      return { createSignedUrl: (storagePath, ttl) => { storage.signatureCalls += 1; if (storage.pendingSign) return storage.pendingSign; return Promise.resolve({ data: { signedUrl: `https://private.test/${encodeURIComponent(storagePath)}?ttl=${ttl}` }, error: null }); } };
+      return {
+        createSignedUrl: (storagePath, ttl) => { storage.signatureCalls += 1; if (storage.pendingSign) return storage.pendingSign; return Promise.resolve({ data: { signedUrl: `https://private.test/${encodeURIComponent(storagePath)}?ttl=${ttl}` }, error: null }); },
+        download: async () => { storage.downloadCalls += 1; if (storage.downloadError) return { data: null, error: storage.downloadError }; if (storage.pendingDownload) await storage.pendingDownload; return { data: storage.downloadBlob, error: null }; },
+      };
     },
   };
   return storage;
@@ -81,6 +91,8 @@ async function seedWorkspace(pool) {
    ($1,1,$2::jsonb,$4,$4),($3,1,$5::jsonb,$4,$4),($6,1,$7::jsonb,$4,$4)`, [ITEM_A, JSON.stringify({ title: 'Entrenamiento A', status: 'aprobado', assetKind: 'final', format: 'video' }), ITEM_B, ACTOR, JSON.stringify({ title: 'Borrador B', status: 'revision', assetKind: 'final', format: 'image' }), ITEM_C, JSON.stringify({ title: 'Publicado C', status: 'publicado', assetKind: 'final', format: 'image' })]);
   await pool.query(`INSERT INTO public.content_workspace_files(id,item_id,name,mime_type,size,storage_path,created_by) VALUES
    ($1,$2,'a.mp4','video/mp4',10,$5,$8),($3,$2,'a.pdf','application/pdf',10,$6,$8),($4,$7,'c.jpg','image/jpeg',10,$9,$8),($10,$7,'c.pdf','application/pdf',10,$11,$8)`, [FILE_A, ITEM_A, FILE_PDF, FILE_C, `${ITEM_A}/${FILE_A}`, `${ITEM_A}/${FILE_PDF}`, ITEM_C, ACTOR, `${ITEM_C}/${FILE_C}`, FILE_B, `${ITEM_C}/${FILE_B}`]);
+  await pool.query(`INSERT INTO public.content_workspace_items(id,version,payload,created_by,updated_by) VALUES($1,1,$2::jsonb,$3,$3)`, [ITEM_IMAGE, JSON.stringify({ title: 'Imagen aprobada', status: 'publicado', assetKind: 'final', format: 'image' }), ACTOR]);
+  await pool.query(`INSERT INTO public.content_workspace_files(id,item_id,name,mime_type,size,storage_path,created_by) VALUES($1,$2,'tiny.png','image/png',$3,$4,$5)`, [FILE_IMAGE, ITEM_IMAGE, PNG.length, `${ITEM_IMAGE}/${FILE_IMAGE}`, ACTOR]);
   await pool.query(`INSERT INTO public.content_library_categories(sede_id,category_key,enabled,updated_by) VALUES
    (7,'entrenamiento',true,$1),(7,'borrador',false,$1),(8,'entrenamiento',false,$1)`, [ACTOR]);
 }
@@ -119,10 +131,15 @@ export async function startContentLibraryFixture() {
     await f.pool.query(fs.readFileSync(LIB_SQL, 'utf8'));
     await seedWorkspace(f.pool);
     const app = express(); app.use(express.json());
+    const freshRoleFor = async (user) => {
+      if (!user) return null;
+      const { rows } = await f.pool.query('select role,sede_id from public.user_roles where user_id=$1 limit 1', [user.id]);
+      return rows[0] ? { role: rows[0].role, sede_id: rows[0].sede_id } : null;
+    };
     app.use('/api/admin/content/library', createContentLibraryRouter({
       pgPool: f.pool, supabaseAdmin: { storage: f.storage },
       getAuthenticatedUser: async (req) => ({ user: userFor(req) }),
-      fetchUserRoleRowForAuthUser: roleFor, legacySuperAdminEmails: [],
+      fetchUserRoleRowForAuthUser: freshRoleFor, legacySuperAdminEmails: [],
     }));
     f.server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
     f.baseUrl = `http://127.0.0.1:${f.server.address().port}`;

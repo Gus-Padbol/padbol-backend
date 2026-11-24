@@ -1,9 +1,12 @@
 import express from 'express';
+import crypto from 'node:crypto';
 import { requireAdminUser, requireSuperAdminUser, resolveAuthRoleForUser } from '../lib/authAccess.js';
 
 const BUCKET = 'content-workspace-private';
 const CATEGORY = /^[a-z0-9][a-z0-9_-]{1,63}$/;
 const MIME = /^(image\/(png|jpeg|webp|gif)|video\/(mp4|webm|quicktime))$/;
+const IMAGE_MIME = /^image\/(png|jpeg|webp|gif)$/;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SEDE = (v) => {
   const s = String(v ?? '').trim();
@@ -11,6 +14,15 @@ const SEDE = (v) => {
 };
 const fail = (res, status, message) => res.status(status).json({ error: message });
 
+function imageSignatureMatches(buffer, mime) {
+  if (!buffer || buffer.length < 4 || !IMAGE_MIME.test(mime)) return false;
+  if (mime === 'image/png') return buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (mime === 'image/jpeg') return buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255;
+  if (mime === 'image/gif') return /^GIF8[79]a$/.test(buffer.subarray(0, 6).toString('ascii'));
+  if (mime === 'image/webp') return buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+  return false;
+}
+const imageEnabled = () => process.env.CONTENT_PRIVATE_DESIGNS_ENABLED === 'true';
 export function createContentLibraryRouter(deps) {
   const router = express.Router();
   const query = (text, params = []) => deps.pgPool.query(text, params);
@@ -46,7 +58,7 @@ export function createContentLibraryRouter(deps) {
     }
     const { rows } = await query(`select e.id,e.category_key,e.item_id,e.file_id,e.source_version,e.enabled,
       i.payload->>'title' title,i.payload->>'format' format,i.payload->>'assetKind' asset_kind,
-      f.mime_type,f.storage_path
+      f.mime_type,f.size,f.storage_path
       from public.content_library_entries e${grant}
       join public.content_workspace_items i on i.id=e.item_id and i.version=e.source_version
       join public.content_workspace_files f on f.id=e.file_id and f.item_id=i.id
@@ -129,6 +141,46 @@ export function createContentLibraryRouter(deps) {
       if (!fresh) return fail(res, 404, 'La pieza ya no está disponible');
       return res.json({ url: signed.data.signedUrl, expiresIn: 300 });
     } catch { return fail(res, 503, 'No se pudo abrir el archivo'); }
+  });
+  router.get('/:entryId/image', async (req, res) => {
+    if (!imageEnabled()) return fail(res, 503, 'El editor de imágenes privadas está deshabilitado');
+    try {
+      const auth = await admin(req, res); if (!auth) return;
+      const s = scope(req, auth.role); if (s.status) return fail(res, s.status, s.status === 400 ? 'Sede inválida' : 'No tenés permiso para esta sede');
+      if (!ID.test(req.params.entryId)) return fail(res, 404, 'Pieza inexistente');
+      const sourceVersion = Number(req.query.source_version);
+      if (!Number.isSafeInteger(sourceVersion) || sourceVersion < 1) return fail(res, 400, 'source_version es obligatorio');
+      const entry = await visibleEntry(req.params.entryId, s.sedeId);
+      if (!entry) return fail(res, 404, 'Pieza no disponible');
+      if (Number(entry.source_version) !== sourceVersion) return fail(res, 409, 'La versión de la pieza cambió');
+      if (!IMAGE_MIME.test(String(entry.mime_type || ''))) return fail(res, 415, 'El archivo no es una imagen admitida');
+      if (Number(entry.size) > MAX_IMAGE_BYTES) return fail(res, 413, 'La imagen supera 8 MiB');
+      let bucket;
+      try { bucket = await deps.supabaseAdmin.storage.getBucket(BUCKET); } catch { return fail(res, 503, 'No se pudo verificar el almacenamiento'); }
+      if (bucket?.error || !bucket?.data || bucket.data.public !== false) return fail(res, 503, 'El almacenamiento privado no está disponible');
+      let downloaded;
+      try { downloaded = await deps.supabaseAdmin.storage.from(BUCKET).download(entry.storage_path); } catch { return fail(res, 503, 'No se pudo leer la imagen'); }
+      if (downloaded?.error || !downloaded?.data) return fail(res, 503, 'No se pudo leer la imagen');
+      const blob = downloaded.data;
+      if (Number(blob.size) > MAX_IMAGE_BYTES) return fail(res, 413, 'La imagen supera 8 MiB');
+      const bytes = Buffer.from(await blob.arrayBuffer());
+      if (bytes.length > MAX_IMAGE_BYTES) return fail(res, 413, 'La imagen supera 8 MiB');
+      if (String(blob.type || '').split(';')[0].trim().toLowerCase() !== String(entry.mime_type || '').toLowerCase() || !imageSignatureMatches(bytes, String(entry.mime_type || '').toLowerCase())) return fail(res, 415, 'La imagen no coincide con un formato seguro');
+      const freshRole = await resolveAuthRoleForUser(auth.user, authDeps);
+      if (freshRole.rol === 'admin_club') {
+        if (s.sedeId == null || Number(freshRole.sede_id) !== Number(s.sedeId)) return fail(res, 403, 'El acceso cambió durante la operación');
+      } else if (freshRole.rol !== 'super_admin') return fail(res, 403, 'El acceso cambió durante la operación');
+      const fresh = await visibleEntry(req.params.entryId, s.sedeId);
+      if (!fresh) return fail(res, 404, 'La pieza ya no está disponible');
+      if (Number(fresh.source_version) !== sourceVersion) return fail(res, 409, 'La versión de la pieza cambió');
+      res.setHeader('Content-Type', String(entry.mime_type).toLowerCase());
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Vary', 'Authorization');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Content-SHA256', crypto.createHash('sha256').update(bytes).digest('hex'));
+      res.setHeader('Content-Length', String(bytes.length));
+      return res.status(200).send(bytes);
+    } catch { return fail(res, 503, 'No se pudo leer la imagen'); }
   });
   return router;
 }
