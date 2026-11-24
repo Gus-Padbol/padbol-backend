@@ -18,6 +18,7 @@ const move = (body, token = 'super') => call('POST', '/api/admin/next-generation
 before(async () => { fx = await startLedgerFixture(); baseUrl = fx.baseUrl; pool = fx.pool; });
 beforeEach(async () => {
   await pool.query('TRUNCATE public.ng_cuenta_movimientos, public.ng_cuentas_programa');
+  await pool.query("UPDATE public.user_roles SET role='super_admin' WHERE user_id=$1", [known.actor]);
   await pool.query("UPDATE public.ng_solicitudes_sede SET estado='aprobada',canonical_sede_id=1 WHERE id=$1", [VA]);
   await pool.query("UPDATE public.ng_solicitudes_sede SET estado='aprobada',canonical_sede_id=2 WHERE id=$1", [VB]);
   process.env.NEXTGEN_MANUAL_LEDGER_ENABLED = 'true';
@@ -96,7 +97,8 @@ test('actor role SHARE lock blocks revocation during request wait', async () => 
   } finally {
     try { await blocker.query('ROLLBACK'); } catch {}
     try { if (rolePromise) await rolePromise; await role.query('COMMIT'); } catch {}
-    await blocker.end(); await role.end();
+    try { await blocker.end(); await role.end(); }
+    finally { await pool.query("UPDATE public.user_roles SET role='super_admin' WHERE user_id=$1", [known.actor]); }
   }
 });
 test('reversal once, same account and exact amount; nonnegative guard', async () => {
