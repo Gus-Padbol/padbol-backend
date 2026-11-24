@@ -1,5 +1,6 @@
 import test, { before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import pg from 'pg';
 import { startLedgerFixture, known } from './nextGenerationLedger.fixture035.mjs';
 
 let fx, baseUrl, pool;
@@ -37,16 +38,66 @@ test('success summary, exact string amounts, funds not income', async () => {
   assert.equal(typeof r.body.movements[0].amount, 'string');
   assert.ok(!('cuota_cobrada' in r.body.summary));
 });
+async function waitLedgerWaits(count) {
+  const observer = new pg.Client(pool.options); await observer.connect();
+  try {
+    for (let i = 0; i < 300; i += 1) {
+      const { rows } = await observer.query("select pid,wait_event_type,wait_event,query from pg_stat_activity where query like '%nextgen_ledger_command%' and wait_event_type='Lock'");
+      const pids = [...new Set(rows.map(r => r.pid))];
+      if (pids.length >= count) return pids;
+      await new Promise(r => setTimeout(r, 10));
+    }
+    throw new Error('did not observe two ledger PIDs waiting on PG lock');
+  } finally { await observer.end(); }
+}
 test('concurrent same operation key creates one row; different payload conflicts', async () => {
-  const [a,b] = await Promise.all([
-    move({ operation_key: 'concurrent-1', type: 'sponsor_cobrado', amount: '50.00' }),
-    move({ operation_key: 'concurrent-1', type: 'sponsor_cobrado', amount: '50.00' }),
-  ]);
-  assert.deepEqual([a.status,b.status], [200,200]);
-  assert.equal((await pool.query('SELECT count(*)::int n FROM public.ng_cuenta_movimientos')).rows[0].n, 1);
-  const conflict = await move({ operation_key: 'concurrent-1', type: 'sponsor_cobrado', amount: '51.00' });
-  assert.equal(conflict.status, 409);
-  assert.equal((await pool.query('SELECT count(*)::int n FROM public.ng_cuenta_movimientos')).rows[0].n, 1);
+  assert.equal((await move({ operation_key: 'anchor-concurrent', type: 'sponsor_cobrado', amount: '1.00' })).status, 200);
+  const blocker = new pg.Client(pool.options); await blocker.connect(); await blocker.query('BEGIN');
+  try {
+    await blocker.query("SELECT id FROM public.ng_cuentas_programa WHERE venue_request_id=$1 AND currency='USD' FOR UPDATE", [VA]);
+    const p1 = move({ operation_key: 'concurrent-1', type: 'sponsor_cobrado', amount: '50.00' });
+    const p2 = move({ operation_key: 'concurrent-1', type: 'sponsor_cobrado', amount: '50.00' });
+    const pids = await waitLedgerWaits(2); assert.equal(new Set(pids).size, 2);
+    await blocker.query('ROLLBACK');
+    const [a,b] = await Promise.all([p1,p2]);
+    assert.deepEqual([a.status,b.status], [200,200]);
+    assert.equal((await pool.query('SELECT count(*)::int n FROM public.ng_cuenta_movimientos')).rows[0].n, 2, 'anchor + one concurrent');
+    const concurrent = a.body.movements.filter(m => m.operation_key === 'concurrent-1');
+    assert.equal(concurrent.length, 1); assert.equal(concurrent[0].id, b.body.movements.find(m => m.operation_key === 'concurrent-1').id);
+    const conflict = await move({ operation_key: 'concurrent-1', type: 'sponsor_cobrado', amount: '51.00' }); assert.equal(conflict.status, 409);
+    assert.equal((await pool.query('SELECT count(*)::int n FROM public.ng_cuenta_movimientos')).rows[0].n, 2);
+  } finally { try { await blocker.query('ROLLBACK'); } catch {} await blocker.end(); }
+});
+test('actor role SHARE lock blocks revocation during request wait', async () => {
+  const blocker = new pg.Client(pool.options); await blocker.connect(); await blocker.query('BEGIN');
+  const role = new pg.Client(pool.options); let rolePromise; let postPromise;
+  try {
+    await blocker.query('SELECT id FROM public.ng_solicitudes_sede WHERE id=$1 FOR UPDATE', [VA]);
+    postPromise = move({ operation_key: 'role-race', type: 'sponsor_cobrado', amount: '10.00' });
+    const pids = await waitLedgerWaits(1); assert.ok(pids.length >= 1);
+    await role.connect(); await role.query('BEGIN');
+    rolePromise = role.query("UPDATE public.user_roles SET role='admin_club' WHERE user_id=$1", [known.actor]);
+    const observer = new pg.Client(pool.options); await observer.connect();
+    try {
+      let waited = false;
+      for (let i = 0; i < 300; i += 1) {
+        const { rows } = await observer.query("select pid from pg_stat_activity where query like '%UPDATE public.user_roles%' and wait_event_type='Lock'");
+        if (rows.length) { waited = true; break; }
+        await new Promise(r => setTimeout(r, 10));
+      }
+      assert.equal(waited, true, 'revocation waits on actor SHARE lock');
+    } finally { await observer.end(); }
+    await blocker.query('ROLLBACK');
+    const post = await postPromise; assert.equal(post.status, 200);
+    await rolePromise; await role.query('COMMIT');
+    const next = await move({ operation_key: 'role-after', type: 'sponsor_cobrado', amount: '10.00' });
+    assert.equal(next.status, 403);
+    assert.equal((await pool.query("SELECT count(*)::int n FROM public.ng_cuenta_movimientos WHERE operation_key='role-after'")).rows[0].n, 0);
+  } finally {
+    try { await blocker.query('ROLLBACK'); } catch {}
+    try { if (rolePromise) await rolePromise; await role.query('COMMIT'); } catch {}
+    await blocker.end(); await role.end();
+  }
 });
 test('reversal once, same account and exact amount; nonnegative guard', async () => {
   const sponsor = await move({ operation_key: 'sponsor-r', type: 'sponsor_cobrado', amount: '100.00' }); assert.equal(sponsor.status,200);
@@ -76,6 +127,7 @@ test('disabled, non-super, map drift and late SQL failure do not mutate', async 
   await pool.query("UPDATE public.ng_solicitudes_sede SET canonical_sede_id=3 WHERE id=$1", [VA]);
   assert.equal((await move({ operation_key: 'drift', type: 'sponsor_cobrado', amount: '1.00' })).status, 409);
   await pool.query("UPDATE public.ng_solicitudes_sede SET canonical_sede_id=1 WHERE id=$1", [VA]);
+  await pool.query("UPDATE public.user_roles SET role='super_admin' WHERE user_id=$1", [known.actor]);
   assert.equal((await move({ operation_key: 'base', type: 'sponsor_cobrado', amount: '100.00' })).status, 200);
   assert.equal((await move({ operation_key: 'spend', type: 'gasto', amount: '100.00' })).status, 200);
   const before = (await overview()).body.summary.available;

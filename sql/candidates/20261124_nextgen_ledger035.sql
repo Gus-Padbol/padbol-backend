@@ -40,7 +40,9 @@ create or replace function public.nextgen_ledger_command(
 declare req public.ng_solicitudes_sede; acct public.ng_cuentas_programa; mov public.ng_cuenta_movimientos; existing public.ng_cuenta_movimientos;
  v_currency text:=upper(trim(coalesce(p_currency,''))); v_hash text; v_income numeric; v_expense numeric; v_fund numeric; v_available numeric; v_reversed uuid;
 begin
- if p_actor is null or not exists(select 1 from public.user_roles where user_id=p_actor and role='super_admin') then raise exception 'FORBIDDEN'; end if;
+ -- Lock the qualifying persisted authorization row before NG/account work.
+ perform 1 from public.user_roles where user_id=p_actor and role='super_admin' for share;
+ if not found then raise exception 'FORBIDDEN'; end if;
  if v_currency !~ '^[A-Z]{3}$' or p_operation not in ('read','move') then raise exception 'INVALID'; end if;
  select * into req from public.ng_solicitudes_sede where id=p_venue_request_id for update;
  if not found then raise exception 'REQUEST_NOT_FOUND'; end if;
