@@ -96,6 +96,8 @@ export function mountListaEsperaGeneralRoutes(app, {
   legacySuperAdminEmails = [],
 }) {
   app.post('/api/lista-espera-general', async (req, res) => {
+    let waitlistUser = null;
+    let waitlistTuple = null;
     try {
       const { user, status, error: authError } = await getAuthenticatedUser(req);
       if (!user) {
@@ -103,6 +105,8 @@ export function mountListaEsperaGeneralRoutes(app, {
       }
 
       const { sedeId, deporte } = parseSedeDeporteFromRequest(req);
+      waitlistUser = user;
+      waitlistTuple = { sedeId, deporte };
       await assertSedeExists(supabaseAdmin, sedeId);
 
       const { data: existing, error: fetchErr } = await supabaseAdmin
@@ -144,6 +148,33 @@ export function mountListaEsperaGeneralRoutes(app, {
         entry: data,
       });
     } catch (err) {
+      // A concurrent identical POST may win the unique insert after our
+      // SELECT saw no row. Reread that exact tuple and return the established
+      // 200/already_registered contract. Never fabricate a row if the reread
+      // is absent or fails.
+      if (err?.code === '23505' && waitlistUser && waitlistTuple) {
+        try {
+          const { data: existing, error: rereadErr } = await supabaseAdmin
+            .from('lista_espera_general')
+            .select('id, sede_id, user_id, deporte, created_at')
+            .eq('sede_id', waitlistTuple.sedeId)
+            .eq('user_id', waitlistUser.id)
+            .eq('deporte', waitlistTuple.deporte)
+            .maybeSingle();
+          if (!rereadErr && existing) {
+            return res.status(200).json({
+              ok: true,
+              already_registered: true,
+              registrado: true,
+              deporte: waitlistTuple.deporte,
+              message: 'Ya estás anotado',
+              entry: existing,
+            });
+          }
+        } catch {
+          // Fall through to the original failure; no false success.
+        }
+      }
       const st = err.status || 500;
       console.error('❌ POST /api/lista-espera-general:', err.message);
       return res.status(st).json({ error: err.message || 'Error al anotarse en la lista de espera' });

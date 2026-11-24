@@ -66,16 +66,32 @@ async function updateReservaQrTokenPg(pgPool, reservaIdText, qrToken) {
 }
 
 async function updateReservaQrTokenSupabase(supabaseAdmin, parsedId, qrToken) {
+  // Treat NULL and legacy empty-string tokens with compare-and-set semantics.
+  // Never invent a successful token when the update did not persist it.
   let query = supabaseAdmin
     .from('reservas')
     .update({ qr_token: qrToken })
     .is('qr_token', null);
   query = applySupabaseReservaIdFilter(query, parsedId);
-  const { data, error } = await query.select('qr_token').maybeSingle();
-  if (error) throw error;
-  if (data?.qr_token) return data.qr_token;
+  const nullUpdate = await query.select('qr_token').maybeSingle();
+  if (nullUpdate.error) throw nullUpdate.error;
+  if (nullUpdate.data?.qr_token) return nullUpdate.data.qr_token;
 
-  return fetchReservaForQrSupabase(supabaseAdmin, parsedId).then((row) => row?.qr_token ?? qrToken);
+  let emptyQuery = supabaseAdmin
+    .from('reservas')
+    .update({ qr_token: qrToken })
+    .eq('qr_token', '');
+  emptyQuery = applySupabaseReservaIdFilter(emptyQuery, parsedId);
+  const emptyUpdate = await emptyQuery.select('qr_token').maybeSingle();
+  if (emptyUpdate.error) throw emptyUpdate.error;
+  if (emptyUpdate.data?.qr_token) return emptyUpdate.data.qr_token;
+
+  // Another writer may have won the race; return its persisted token.
+  const row = await fetchReservaForQrSupabase(supabaseAdmin, parsedId);
+  if (row?.qr_token) return row.qr_token;
+  const err = new Error('No se pudo persistir el QR de la reserva');
+  err.status = 503;
+  throw err;
 }
 
 function assertReservaEstadoPermiteQr(reserva) {
@@ -117,7 +133,14 @@ async function assertPuedeGenerarQrReserva({
   }
 
   if (rol === 'admin_club' && roleRow?.sede_id != null) {
-    if (reserva.sede_id != null && Number(reserva.sede_id) === Number(roleRow.sede_id)) {
+    if (reserva.sede_id != null) {
+      // An explicit sede_id mismatch is authoritative; a coincident legacy
+      // display name must never widen authorization.
+      if (Number(reserva.sede_id) !== Number(roleRow.sede_id)) {
+        const mismatch = new Error('No tenés permiso para generar QR de esta reserva');
+        mismatch.status = 403;
+        throw mismatch;
+      }
       return;
     }
     let sedeNombre = null;
