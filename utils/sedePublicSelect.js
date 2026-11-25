@@ -1,6 +1,5 @@
 /** Columnas públicas de sedes (sin tokens MP/Stripe ni secretos). */
 export const SEDE_PUBLIC_COLUMNS = [
-  'tipo_sede',
   'id',
   'nombre',
   'direccion',
