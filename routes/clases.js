@@ -152,7 +152,7 @@ const CLASE_SELECT = `
   activo,
   created_at,
   horas_cancelacion,
-  profesores ( id, nombre, bio, foto_url, certificaciones, aprobado, activo, certificado_estado ),
+  profesores ( id, nombre, bio, foto_url, aprobado, activo, certificado_estado ),
   sedes ( id, nombre, moneda, timezone ),
   clases_reservas ( id )
 `;
@@ -278,7 +278,7 @@ export function createClasesRouter({ supabaseAdmin, getAuthenticatedUser, now = 
           activo,
           created_at,
           horas_cancelacion,
-          profesores ( id, nombre, bio, foto_url, certificaciones, aprobado, activo, certificado_estado ),
+          profesores ( id, nombre, bio, foto_url, aprobado, activo, certificado_estado ),
           sedes ( id, nombre, moneda, timezone )
         `)
         .eq('id', claseId)
